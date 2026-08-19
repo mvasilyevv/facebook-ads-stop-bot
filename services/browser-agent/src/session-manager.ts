@@ -25,6 +25,11 @@ const RECOVERY_SETTLE_DELAY_MS = 1_000;
 // создаются и не навигируются: повторная попытка не вернёт сессию Facebook, она
 // только откроет и закроет ещё одну вкладку. Раз в этот интервал — одна проба.
 const LOGIN_REQUIRED_RETRY_COOLDOWN_MS = 5 * 60_000;
+// Проба готовности канала стучится раз в две секунды. Пока открытие вкладки
+// кабинета падает по одной и той же причине, каждая такая проба создаёт вкладку и
+// закрывает её. Первый отказ повторяем сразу — он может быть блипом; дальше
+// придерживаем, иначе отказ превращается в бесконечный цикл вкладок.
+const OPEN_FAILURE_BACKOFF_MS = [0, 15_000, 60_000];
 
 export function isAdsManagerUrl(url: string | null | undefined): boolean {
   try {
@@ -127,6 +132,7 @@ const SAFE_CABINET_TAB_ERRORS = [
   /^cabinet_not_found: (?:could not create page|navigation failed) for act=\d+$/,
   /^cabinet_not_confirmed: (?:final Ads Manager URL does not confirm|selected page does not confirm) act=\d+$/,
   /^cabinet_login_required: Vision profile is signed out \(act=\d+\)$/,
+  /^cabinet_backoff: repeated failures opening act=\d+, retry is held$/,
 ];
 
 /** Return an incident-safe OpenCabinetTabs error without raw browser details. */
@@ -292,6 +298,13 @@ export class SessionManager {
    * ту же вкладку вместо новой.
    */
   private loginRequired = new Map<string, { at: number; page: Page | null }>();
+  /**
+   * Подряд идущие отказы открытия вкладки конкретного кабинета. Ключ —
+   * профиль и кабинет: разлогин общий для профиля, а «кабинет не подтверждён»
+   * или сетевой отказ относятся к одному кабинету и не должны придерживать
+   * остальные.
+   */
+  private openFailures = new Map<string, { streak: number; until: number }>();
   async startBrowser(options: {
     visionXToken: string;
     visionApiUrl: string;
@@ -820,6 +833,21 @@ export class SessionManager {
     this.loginRequired.delete(this.loginLatchKey(session));
   }
 
+  private openFailureKey(session: BrowserSession, actId: string): string {
+    return `${this.loginLatchKey(session)}:${actId}`;
+  }
+
+  private recordOpenFailure(session: BrowserSession, actId: string): number {
+    const key = this.openFailureKey(session, actId);
+    const streak = (this.openFailures.get(key)?.streak ?? 0) + 1;
+    const backoff =
+      OPEN_FAILURE_BACKOFF_MS[
+        Math.min(streak, OPEN_FAILURE_BACKOFF_MS.length) - 1
+      ];
+    this.openFailures.set(key, { streak, until: Date.now() + backoff });
+    return backoff;
+  }
+
   /**
    * Единственный выход из неудавшейся навигации role-страницы.
    *
@@ -850,6 +878,10 @@ export class SessionManager {
     }
     if (isFacebookLoginUrl(safePageUrl(page))) {
       this.markLoginRequired(session, page);
+      console.warn(
+        `[cabinet] act=${resolvedAct} профиль разлогинен: вкладка входа оставлена, ` +
+          `пауза ${LOGIN_REQUIRED_RETRY_COOLDOWN_MS / 1000}s`,
+      );
       throw new Error(
         `cabinet_login_required: Vision profile is signed out (act=${resolvedAct})`,
       );
@@ -858,6 +890,15 @@ export class SessionManager {
     if (!isPageClosed(page)) {
       void page.close({ runBeforeUnload: false }).catch(() => undefined);
     }
+    const backoffMs = this.recordOpenFailure(session, resolvedAct);
+    const reason =
+      error instanceof Error && error.message.startsWith("cabinet_")
+        ? error.message.split(":")[0]
+        : "navigation_failed";
+    console.warn(
+      `[cabinet] act=${resolvedAct} вкладку открыть не удалось (${reason}), ` +
+        `следующая попытка не раньше чем через ${backoffMs / 1000}s`,
+    );
     if (error instanceof Error && error.message.startsWith("cabinet_")) {
       throw error;
     }
@@ -988,6 +1029,17 @@ export class SessionManager {
       : null;
 
     if (!page) {
+      // Живой вкладки нет, значит сейчас будет создание и навигация — именно то,
+      // что превращается в цикл «открыл → закрыл», если кабинет падает подряд.
+      // Подтверждённая вкладка сюда не доходит: она возвращается без создания.
+      const heldUntil = this.openFailures.get(
+        this.openFailureKey(session, resolvedAct),
+      )?.until;
+      if (heldUntil !== undefined && Date.now() < heldUntil) {
+        throw new Error(
+          `cabinet_backoff: repeated failures opening act=${resolvedAct}, retry is held`,
+        );
+      }
       // Проба после паузы переиспользует удержанную страницу входа: если человек
       // уже вошёл в ней, там теперь живая сессия, а вкладка остаётся одна.
       page = this.takeRetainedLoginPage(session);
@@ -1058,6 +1110,7 @@ export class SessionManager {
     // Кабинет открылся — значит сессия Facebook жива: паузу снимаем сразу, не
     // дожидаясь конца интервала.
     this.clearLoginRequired(session);
+    this.openFailures.delete(this.openFailureKey(session, resolvedAct));
     ownPages.set(cabinetKey, page);
     session.status = "connected";
     rememberAdsManagerUrl(session, page);

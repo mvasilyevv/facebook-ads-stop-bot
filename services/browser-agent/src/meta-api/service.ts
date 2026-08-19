@@ -58,6 +58,12 @@ export function grpcCodeForError(err: any): number {
   if (message.includes('ownership preflight')) {
     return grpc.status.FAILED_PRECONDITION;
   }
+  if (message.includes('cabinet_backoff')) {
+    // Вкладка не открывалась: попытка придержана после подряд идущих отказов.
+    // Наружу ничего не ушло — это отказ ДО отправки, как и остальные пути,
+    // на которых вкладка кабинета не открылась.
+    return grpc.status.FAILED_PRECONDITION;
+  }
   if (message.includes('cabinet_login_required')) {
     // Профиль разлогинен: вкладка кабинета не открылась, до Meta не дошли и не
     // дойдём, пока человек не войдёт. Это отказ ДО отправки, а не потерянный

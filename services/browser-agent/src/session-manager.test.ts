@@ -1522,6 +1522,100 @@ test("после входа кабинет открывается и пауза 
   );
 });
 
+// Проба готовности канала стучится раз в две секунды. Любой повторяющийся отказ
+// открытия вкладки (не только разлогин) без удержания даёт тот же цикл
+// «создали вкладку → закрыли»: первый отказ повторяем сразу, дальше придерживаем.
+test("повторный отказ кабинета придерживает создание вкладки", async () => {
+  const manager = new SessionManager();
+  let newPageCalls = 0;
+  let closeCalls = 0;
+  const context = {
+    pages: () => [],
+    newPage: async () => {
+      newPageCalls += 1;
+      let currentUrl = "about:blank";
+      return {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async () => {
+          // Чужой кабинет в финальном URL: отказ, не связанный с входом.
+          currentUrl =
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999";
+        },
+        close: async () => {
+          closeCalls += 1;
+        },
+      };
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  // Первый отказ — блип, повторяем сразу.
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /cabinet_not_confirmed/,
+  );
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /cabinet_not_confirmed/,
+  );
+  assert.equal(newPageCalls, 2);
+  assert.equal(closeCalls, 2, "свои неудавшиеся вкладки закрываем");
+
+  // Второй отказ подряд взвёл паузу: третья попытка вкладку уже не создаёт.
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /^Error: cabinet_backoff: repeated failures opening act=111, retry is held$/,
+  );
+  assert.equal(newPageCalls, 2);
+
+  // Другой кабинет не наказан за чужие отказы.
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "222" }),
+    /cabinet_not_confirmed/,
+  );
+  assert.equal(newPageCalls, 3);
+});
+
+test("подтверждённая вкладка снимает паузу кабинета", async () => {
+  const manager = new SessionManager();
+  let confirmed = false;
+  let newPageCalls = 0;
+  const context = {
+    pages: () => [],
+    newPage: async () => {
+      newPageCalls += 1;
+      let currentUrl = "about:blank";
+      return {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          currentUrl = confirmed
+            ? url
+            : "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999";
+        },
+        close: async () => undefined,
+      };
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /cabinet_not_confirmed/,
+  );
+  confirmed = true;
+  await manager.ensureScanPage(session, { actId: "111" });
+  assert.equal(
+    (manager as any).openFailures.has("profile-1:111"),
+    false,
+    "успех обнуляет серию отказов",
+  );
+  assert.equal(newPageCalls, 2);
+});
+
 test("isFacebookLoginUrl отделяет вход от кабинета и чужих хостов", () => {
   assert.equal(
     isFacebookLoginUrl("https://www.facebook.com/login.php?next=x"),
