@@ -24,6 +24,17 @@
 - ставить метки `area:*` и `prio:*` и те же значения в поля доски; задачу,
   трогающую и бэкенд, и интерфейс, делить на две связанные карточки.
 
+### Инженерная команда
+
+Девять ролей, по одной на границу владения из `CONTEXT-MAP.md`: `eng-lead`,
+`eng-safety`, `eng-backend`, `eng-browser`, `eng-frontend`, `eng-data`,
+`eng-platform`, `eng-test`, `eng-review`. Состав и порядок взаимодействия —
+`docs/agents/engineering-team.md`, обязательные каноны —
+`docs/agents/engineering-standards.md`. Определения ролей лежат в
+`.claude/agents/eng-*.md`.
+
+Money-путь не проходит мимо `eng-safety`, приёмку выносит `eng-review`.
+
 ### Domain docs
 
 Используется multi-context layout: корневая карта `CONTEXT-MAP.md` направляет
