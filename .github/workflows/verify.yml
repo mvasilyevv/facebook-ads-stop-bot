@@ -217,9 +217,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install platform validators
-        run: sudo apt-get update && sudo apt-get install -y ripgrep shellcheck
-
+      # shellcheck берётся из образа раннера (ubuntu-24.04 — 0.9.0-1, ровно то,
+      # что ставил apt). Установки здесь нет намеренно: `apt-get update` зависит
+      # от зеркал Ubuntu и 19.08.2026 замолчал на девять минут, срубив релиз.
       - name: GitHub Actions syntax and expression gate
         run: >-
           docker run --rm

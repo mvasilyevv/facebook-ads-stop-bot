@@ -69,6 +69,33 @@ def test_shellcheck_covers_every_supported_shell_entrypoint() -> None:
     assert "xargs -0 shellcheck" in shellcheck_step
 
 
+def test_ci_installs_nothing_from_ubuntu_package_mirrors() -> None:
+    """Проверка не зависит от зеркал Ubuntu: они виснут молча и без таймаута.
+
+    19.08.2026 `apt-get update` в джобе platform замолчал на девять с половиной
+    минут: azure.archive.ubuntu.com перестал отвечать, apt ушёл на
+    archive.ubuntu.com и там застыл. Джобу срубил timeout-minutes, релиз не
+    дошёл до выкатки. Ставились ровно два пакета: shellcheck, который и так
+    входит в образ раннера той же версией, и ripgrep, которого не зовёт никто.
+
+    Инструмент берётся из образа раннера или из закреплённого по digest
+    контейнера — как это делает scripts/preflight.sh. Пакет, которого в образе
+    нет, тянется с явной версией и собственным таймаутом, а не `apt-get update`.
+    """
+    apt_call = re.compile(r"\bapt(?:-get)?\s+(?:update|install)\b|\badd-apt-repository\b")
+
+    for workflow in (VERIFY_WORKFLOW, IMAGE_WORKFLOW, RELEASE_WORKFLOW):
+        source = workflow.read_text(encoding="utf-8")
+        # Комментарии описывают инцидент и не выполняются — гард смотрит на код.
+        executable = "\n".join(
+            line for line in source.splitlines() if not line.lstrip().startswith("#")
+        )
+        assert apt_call.search(executable) is None, (
+            f"{workflow.name} ставит пакеты через apt — это зависимость от зеркал "
+            "Ubuntu, которая уже дважды вешала джобу до предела времени"
+        )
+
+
 def test_ci_full_pytest_uses_complete_test_only_secret_contract() -> None:
     test_job = _job_block(VERIFY_WORKFLOW.read_text(encoding="utf-8"), "backend")
 
