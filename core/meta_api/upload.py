@@ -52,6 +52,13 @@ _UPLOAD_TIMEOUT_SECONDS = 180.0
 VIDEO_READY_TIMEOUT_SECONDS = 120.0
 VIDEO_READY_POLL_INTERVAL_SECONDS = 4.0
 
+# Сколько подряд отказов readiness-гейта на read-only проверке (статус видео,
+# миниатюра) проглатывается, прежде чем исключение уйдёт наружу. Проверка ничего
+# не создаёт в Meta, а падение на ней оставляет уже созданные кампанию и adset'ы
+# осиротевшими, поэтому транзиентный отказ канала переживаем. Счётчик обнуляет
+# только успешное чтение: канал, который лежит целиком, роняет операцию быстро.
+READINESS_REJECTION_BUDGET = 3
+
 # Лимит размера картинки для single-shot upload. Meta документирует 8MB, но
 # с учётом base64-кодирования и proto overhead закладываем запас.
 MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
@@ -317,11 +324,15 @@ class MediaUploader:
 
         Возвращает True если дождались ready; False если истёк timeout (best-effort —
         НЕ валим залив, даём Meta шанс принять creative). Ошибки чтения статуса
-        проглатываются и поллинг продолжается (статус-GET не должен ронять залив).
+        проглатываются и поллинг продолжается (статус-GET не должен ронять залив):
+        отказ readiness-гейта — тоже, но не более READINESS_REJECTION_BUDGET подряд,
+        после чего исключение уходит наружу без изменений. Ожидание в любом случае
+        ограничено timeout.
         Бросает PermanentError только при явном status=error (видео не обработалось).
         """
         deadline = time.monotonic() + timeout
         last_status = ""
+        readiness_rejections = 0
         while True:
             video_status = ""
             try:
@@ -334,8 +345,17 @@ class MediaUploader:
                 status_obj = (resp or {}).get("status") or {}
                 video_status = str(status_obj.get("video_status", "")).lower()
                 last_status = video_status or last_status
+                readiness_rejections = 0
             except BrowserReadinessRejectedError:
-                raise
+                readiness_rejections += 1
+                if readiness_rejections >= READINESS_REJECTION_BUDGET:
+                    raise
+                logger.warning(
+                    "video %s: канал отклонил чтение статуса (%d из %d) — продолжаю поллинг",
+                    video_id,
+                    readiness_rejections,
+                    READINESS_REJECTION_BUDGET,
+                )
             except Exception as exc:  # noqa: BLE001 — статус-GET best-effort, не валит залив
                 logger.warning(
                     "video %s: ошибка чтения статуса (продолжаю поллинг): %r", video_id, exc
@@ -372,10 +392,13 @@ class MediaUploader:
         subcode 1443226 «Для вашего объявления нужна миниатюра видео». Берём
         preferred-миниатюру из GET /{video_id}/thumbnails. Поллит — миниатюры
         появляются после обработки видео. Best-effort: пустая строка если не получили
-        (creative тогда упадёт явно с понятной ошибкой).
+        (creative тогда упадёт явно с понятной ошибкой). Отказ readiness-гейта
+        проглатывается не более READINESS_REJECTION_BUDGET раз подряд и не позже
+        последней попытки, после чего уходит наружу без изменений.
         """
         last = ""
-        for _ in range(retries):
+        readiness_rejections = 0
+        for attempt in range(retries):
             try:
                 resp = await self._client.execute_graph_call(
                     method="GET",
@@ -389,8 +412,17 @@ class MediaUploader:
                     uri = str((preferred or data[0]).get("uri", ""))
                     if uri:
                         return uri
+                readiness_rejections = 0
             except BrowserReadinessRejectedError:
-                raise
+                readiness_rejections += 1
+                if readiness_rejections >= READINESS_REJECTION_BUDGET or attempt == retries - 1:
+                    raise
+                logger.warning(
+                    "видео %s: канал отклонил чтение миниатюры (%d из %d) — пробую ещё",
+                    video_id,
+                    readiness_rejections,
+                    READINESS_REJECTION_BUDGET,
+                )
             except Exception as exc:  # noqa: BLE001 — best-effort, поллим дальше
                 last = repr(exc)
                 logger.warning("get_video_thumbnail_url %s: %r", video_id, exc)

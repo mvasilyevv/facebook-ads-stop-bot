@@ -28,6 +28,7 @@ from core.meta_api.errors import (
 from core.meta_api.upload import (
     DEFAULT_VIDEO_CHUNK_SIZE,
     MAX_IMAGE_SIZE_BYTES,
+    READINESS_REJECTION_BUDGET,
     MediaUploader,
 )
 
@@ -565,6 +566,67 @@ async def test_wait_video_ready_swallows_read_errors() -> None:
     assert ok is True
 
 
+# wait_video_ready: транзиентный отказ канала на read-only проверке статуса НЕ роняет
+# залив (иначе созданные кампания и adset'ы остаются осиротевшими).
+@pytest.mark.asyncio
+async def test_wait_video_ready_survives_transient_readiness_rejections() -> None:
+    client = MagicMock()
+    rejection = BrowserReadinessRejectedError("status read rejected before dispatch")
+    client.execute_graph_call = AsyncMock(
+        side_effect=[rejection, rejection, {"status": {"video_status": "ready"}}]
+    )
+    uploader = MediaUploader(client)
+
+    ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
+
+    assert ok is True
+    assert client.execute_graph_call.await_count == 3
+
+
+# wait_video_ready: успешное чтение статуса обнуляет счётчик отказов — залив переживает
+# отказы, разнесённые по времени, пока канал отвечает между ними.
+@pytest.mark.asyncio
+async def test_wait_video_ready_resets_rejection_budget_after_successful_read() -> None:
+    client = MagicMock()
+    rejection = BrowserReadinessRejectedError("status read rejected before dispatch")
+    processing = {"status": {"video_status": "processing"}}
+    client.execute_graph_call = AsyncMock(
+        side_effect=[
+            rejection,
+            rejection,
+            processing,
+            rejection,
+            rejection,
+            {"status": {"video_status": "ready"}},
+        ]
+    )
+    uploader = MediaUploader(client)
+
+    ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
+
+    assert ok is True
+    assert client.execute_graph_call.await_count == 6
+
+
+# wait_video_ready: бюджет проглатывания исчерпан (3 отказа без единого успешного
+# чтения) → исключение уходит наружу без изменений, исход залива сегодняшний.
+@pytest.mark.asyncio
+async def test_wait_video_ready_propagates_after_rejection_budget() -> None:
+    client = MagicMock()
+    rejection = BrowserReadinessRejectedError("status read rejected before dispatch")
+    client.execute_graph_call = AsyncMock(
+        side_effect=[rejection] * READINESS_REJECTION_BUDGET
+        + [{"status": {"video_status": "ready"}}]
+    )
+    uploader = MediaUploader(client)
+
+    with pytest.raises(BrowserReadinessRejectedError) as raised:
+        await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
+
+    assert raised.value is rejection
+    assert client.execute_graph_call.await_count == READINESS_REJECTION_BUDGET
+
+
 @pytest.mark.asyncio
 async def test_wait_video_ready_does_not_swallow_readiness_rejection() -> None:
     client = MagicMock()
@@ -612,6 +674,28 @@ async def test_get_video_thumbnail_url_empty_returns_blank() -> None:
         "vid1", ad_account_id="123", retries=2, interval=0.001
     )
     assert url == ""
+
+
+# get_video_thumbnail_url: транзиентный отказ канала не роняет залив, поллинг идёт дальше.
+@pytest.mark.asyncio
+async def test_get_video_thumbnail_url_survives_transient_readiness_rejections() -> None:
+    client = MagicMock()
+    rejection = BrowserReadinessRejectedError("thumbnail read rejected before dispatch")
+    client.execute_graph_call = AsyncMock(
+        side_effect=[
+            rejection,
+            rejection,
+            {"data": [{"uri": "https://a/2.jpg", "is_preferred": True}]},
+        ]
+    )
+    uploader = MediaUploader(client)
+
+    url = await uploader.get_video_thumbnail_url(
+        "vid1", ad_account_id="123", retries=6, interval=0.001
+    )
+
+    assert url == "https://a/2.jpg"
+    assert client.execute_graph_call.await_count == 3
 
 
 @pytest.mark.asyncio
