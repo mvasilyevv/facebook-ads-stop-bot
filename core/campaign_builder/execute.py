@@ -112,8 +112,8 @@ class PartialCreateError(CampaignExecutionError):
     pre_dispatch — ДОКАЗАНО, что последний отказ случился до отправки запроса в Meta
     (браузер отклонил вызов на своей стороне). Исход от этого не меняется: созданные
     объекты никуда не делись, сверка обязательна. Признак нужен человеку и будущей
-    автоматике, чтобы отличить «сверх перечисленного создаться не могло» от «ответ
-    Meta потерян». False означает «не доказано», а НЕ «запрос точно ушёл».
+    автоматике, чтобы отличить «последний запрос до Meta не дошёл» от «ответ Meta
+    потерян». False означает «не доказано», а НЕ «запрос точно ушёл».
     """
 
     def __init__(
@@ -163,8 +163,20 @@ def _assert_all_paused_spec(spec: CampaignSpec) -> None:
 # ====================== результат ======================
 
 
+CREATED_ID_KINDS = ("campaigns", "adsets", "creatives", "ads")
+
+
 def _empty_ids() -> dict[str, list[str]]:
-    return {"campaigns": [], "adsets": [], "creatives": [], "ads": []}
+    return {kind: [] for kind in CREATED_ID_KINDS}
+
+
+def _created_accumulator(sink: dict[str, list[str]] | None) -> dict[str, list[str]]:
+    """Накопитель id: либо свой, либо переданный вызывающим (виден и после отмены)."""
+    if sink is None:
+        return _empty_ids()
+    for kind in CREATED_ID_KINDS:
+        sink.setdefault(kind, [])
+    return sink
 
 
 @dataclass
@@ -430,6 +442,7 @@ async def execute_campaign_spec(
     uploader: _Uploader,
     on_progress: ProgressCb | None = None,
     on_creative_created: CreativeCb | None = None,
+    created_sink: dict[str, list[str]] | None = None,
 ) -> ExecutionResult:
     """Заливает все кампании спеки последовательно. Money-критичный путь.
 
@@ -437,13 +450,19 @@ async def execute_campaign_spec(
     Порядок объектов: campaign → adsets → upload → creatives → ads (через spec).
     Все создаваемые объекты обязаны быть PAUSED; иной spec отклоняется до I/O.
 
+    created_sink — накопитель id вызывающего. Он наполняется по ходу залива, поэтому
+    перечень уже созданных объектов остаётся у вызывающего даже когда корутина не
+    возвращает управление через исключение-наследник Exception: отмена по абсолютному
+    дедлайну и потеря lease прилетают как BaseException, а осиротевшие объекты в
+    кабинете от этого никуда не деваются и обязаны попасть оператору.
+
     Ошибки:
     - PartialCreateError — если хоть один объект уже создан до падения (нужна чистка).
     - CampaignExecutionError — падение ДО создания любого объекта (можно ретраить,
       если transient — воркер решает по classify_execution_error на оригинале причины).
     """
     _assert_all_paused_spec(spec)
-    created = _empty_ids()
+    created = _created_accumulator(created_sink)
     state = _ProgressState(stage="creating")
 
     # Сквозная нумерация кодов между блоками: блок B продолжает с номера, на котором

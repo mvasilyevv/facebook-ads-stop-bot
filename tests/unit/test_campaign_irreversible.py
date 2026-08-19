@@ -637,3 +637,126 @@ async def test_transient_after_campaign_boundary_is_unknown_not_retried(monkeypa
     result = failed.await_args.kwargs["task_result"]
     assert result["outcome"] == "UNKNOWN"
     assert result["manual_review_required"] is True
+
+
+class _StartedControl(_UnitControl):
+    async def begin_external(self, _operation: str) -> None:
+        self.external_started = True
+
+
+async def _run_until_deadline(monkeypatch, worker, *, control, task, failed, persist):
+    """Гоняет _execute_run так, что абсолютный дедлайн срезает залив на середине."""
+
+    async def _execute(*_args, client, created_sink=None, on_progress=None, **_kwargs):
+        # Накопитель ведёт вызывающий; свой локальный dict уехал бы вместе с отменой.
+        created = created_sink if created_sink is not None else {}
+        # Первый POST переводит задачу за внешнюю границу (fenced client).
+        await client.execute_graph_call(method="POST", endpoint="/act_1/campaigns")
+        created.setdefault("campaigns", []).append("120001")
+        created.setdefault("adsets", []).extend(["120002", "120003"])
+        if on_progress is not None:
+            await on_progress({"stage": "uploading"})
+        # Пока execute ждёт готовности видео, дедлайн задачи истекает.
+        await asyncio.sleep(30)
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: SimpleNamespace())
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+    monkeypatch.setattr(worker, "finalize_run_failed", failed)
+    monkeypatch.setattr(worker, "_persist_partial_created_ids", persist)
+    monkeypatch.setattr(worker, "requeue_for_retry", AsyncMock(return_value=True))
+
+    await worker._execute_run(
+        object(),
+        task,
+        run_id="run-1",
+        config={},
+        client=AsyncMock(),
+        uploader=AsyncMock(),
+        control=control,
+    )
+
+
+# Абсолютный дедлайн отменяет корутину залива через CancelledError (BaseException), мимо
+# except Exception внутри execute. Перечень уже созданного обязан дойти до оператора:
+# UNKNOWN без единого id — это чистка кабинета вслепую.
+@pytest.mark.asyncio
+async def test_absolute_deadline_keeps_itemized_created_ids(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    task = _make_task()
+    task.deadline_at = datetime.now(UTC) + timedelta(milliseconds=50)
+    failed = AsyncMock(return_value=True)
+    persist = AsyncMock(return_value=True)
+
+    await _run_until_deadline(
+        monkeypatch,
+        worker,
+        control=_StartedControl(),
+        task=task,
+        failed=failed,
+        persist=persist,
+    )
+
+    result = failed.await_args.kwargs["task_result"]
+    assert result["outcome"] == "UNKNOWN"
+    assert result["reason"] == "absolute_deadline_exceeded"
+    assert result["created_ids"]["campaigns"] == ["120001"]
+    assert result["created_ids"]["adsets"] == ["120002", "120003"]
+    # Шаг падения — последняя стадия, о которой отчитался execute.
+    assert result["failed_step"] == "uploading"
+    assert failed.await_args.kwargs["created_meta_ids"]["adsets"] == ["120002", "120003"]
+    # Осиротевшие id ложатся и в task_queue.result — разбор очереди смотрит туда.
+    persist.assert_awaited_once()
+    assert persist.await_args.kwargs["created_ids"]["campaigns"] == ["120001"]
+
+
+# Тот же перечень нужен, когда дедлайн/отмену первым увидел контроль в БД: исход
+# UNKNOWN, но чистить оператору всё равно есть что.
+@pytest.mark.asyncio
+async def test_control_abort_after_boundary_keeps_itemized_created_ids(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    class _AbortingControl(_StartedControl):
+        async def check(self) -> None:
+            return None
+
+    async def _execute(*_args, created_sink=None, **_kwargs):
+        created = created_sink if created_sink is not None else {}
+        created.setdefault("campaigns", []).append("120001")
+        raise CreatorTaskControlAbort("cancel_requested", external_started=True)
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    failed = AsyncMock(return_value=True)
+    persist = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: SimpleNamespace())
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+    monkeypatch.setattr(worker, "finalize_run_failed", failed)
+    monkeypatch.setattr(worker, "_persist_partial_created_ids", persist)
+
+    await worker._execute_run(
+        object(),
+        _make_task(),
+        run_id="run-1",
+        config={},
+        client=AsyncMock(),
+        uploader=AsyncMock(),
+        control=_AbortingControl(),
+    )
+
+    result = failed.await_args.kwargs["task_result"]
+    assert result["outcome"] == "UNKNOWN"
+    assert result["created_ids"]["campaigns"] == ["120001"]
+    persist.assert_awaited_once()

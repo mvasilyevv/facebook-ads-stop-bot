@@ -432,17 +432,31 @@ async def _finalize_campaign_control_abort(
     *,
     run_id: str,
     exc: CreatorTaskControlAbort,
+    created_ids: dict[str, list[str]] | None = None,
+    failed_step: str | None = None,
 ) -> None:
     if exc.external_started or control.external_started:
+        # Прерывание после внешней границы не отменяет уже созданное: перечень идёт
+        # в run и в результат задачи, иначе сверять оператору нечего.
+        if created_ids is not None:
+            await _persist_partial_created_ids(
+                engine,
+                task=task,
+                created_ids=created_ids,
+                failed_step=failed_step or exc.reason,
+            )
         await finalize_run_failed(
             engine,
             run_id,
             task=task,
             error=f"campaign creation interrupted after external boundary: {exc.reason}",
+            created_meta_ids=created_ids,
             task_result=_campaign_unknown_result(
                 task,
                 run_id=run_id,
                 reason=exc.reason,
+                created_ids=created_ids,
+                failed_step=failed_step,
             ),
             progress={"stage": "failed", "outcome": "UNKNOWN", "reason": exc.reason},
         )
@@ -713,11 +727,17 @@ async def _execute_run(
         _cleanup_upload_dir(cfg.creo_root)
         return
 
+    # Последняя стадия, о которой отчитался execute. Нужна, когда исход придётся
+    # закрывать снаружи корутины (отмена по дедлайну) и шага падения не видно.
+    last_stage = "uniquifying"
+
     async def on_progress(snapshot: dict[str, Any]) -> None:
         # Прогресс execute → status + progress run. Стадии execute
         # (uniquifying/uploading/creating) маппятся 1:1 в статус run. Best-effort,
         # не роняет залив (execute ловит).
+        nonlocal last_stage
         stage = snapshot.get("stage", "creating")
+        last_stage = str(stage)
         run_status = stage if stage in ("uniquifying", "uploading", "creating") else "creating"
         applied = await set_run_status(
             engine,
@@ -757,6 +777,11 @@ async def _execute_run(
     fenced_client = _FencedGraphClient(client, control)
     fenced_uploader = _FencedUploader(uploader, control)
     timeout_seconds = seconds_until_deadline(task.deadline_at)
+    # Накопитель созданного живёт ЗДЕСЬ, а не внутри отменяемой корутины: отмена по
+    # абсолютному дедлайну и потеря lease прилетают как BaseException, и локальный
+    # перечень созданного уехал бы вместе с ней — оператор получил бы UNKNOWN без
+    # единого id и чистил бы кабинет вслепую.
+    created_so_far: dict[str, list[str]] = {}
 
     async def _execute() -> Any:
         return await execute_campaign_spec(
@@ -767,6 +792,7 @@ async def _execute_run(
             uploader=fenced_uploader,
             on_progress=on_progress,
             on_creative_created=_record,
+            created_sink=created_so_far,
         )
 
     try:
@@ -774,7 +800,15 @@ async def _execute_run(
             async with asyncio.timeout(timeout_seconds):
                 result = await run_with_task_control(control, _execute)
     except CreatorTaskControlAbort as exc:
-        await _finalize_campaign_control_abort(engine, task, control, run_id=run_id, exc=exc)
+        await _finalize_campaign_control_abort(
+            engine,
+            task,
+            control,
+            run_id=run_id,
+            exc=exc,
+            created_ids=created_so_far,
+            failed_step=last_stage,
+        )
         logger.warning(
             "campaign_create: task=%s stopped reason=%s external=%s",
             task.id,
@@ -791,18 +825,33 @@ async def _execute_run(
         return
     except asyncio.TimeoutError:
         if control.external_started:
+            # Дедлайн отменяет корутину, но созданное в кабинете от этого не исчезает.
+            # Итог остаётся UNKNOWN, а перечень созданного идёт оператору так же, как
+            # при partial: чистить вслепую нечего.
+            await _persist_partial_created_ids(
+                engine,
+                task=task,
+                created_ids=created_so_far,
+                failed_step=last_stage,
+            )
             await finalize_run_failed(
                 engine,
                 run_id,
                 task=task,
                 error="campaign creation exceeded absolute deadline after external boundary",
+                created_meta_ids=created_so_far,
                 task_result=_campaign_unknown_result(
-                    task, run_id=run_id, reason="absolute_deadline_exceeded"
+                    task,
+                    run_id=run_id,
+                    reason="absolute_deadline_exceeded",
+                    created_ids=created_so_far,
+                    failed_step=last_stage,
                 ),
                 progress={
                     "stage": "failed",
                     "outcome": "UNKNOWN",
                     "reason": "absolute_deadline_exceeded",
+                    "failed_step": last_stage,
                 },
             )
         else:

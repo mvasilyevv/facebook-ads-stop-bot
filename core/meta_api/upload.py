@@ -25,6 +25,7 @@ from typing import AsyncIterator, NoReturn
 import grpc
 
 from clients.python_grpc.v1 import meta_api_pb2
+from core.deadlines import bounded_timeout_seconds
 from core.meta_api.client import MetaApiClient, media_operation_binding
 from core.meta_api.errors import (
     AmbiguousResultError,
@@ -326,11 +327,15 @@ class MediaUploader:
         НЕ валим залив, даём Meta шанс принять creative). Ошибки чтения статуса
         проглатываются и поллинг продолжается (статус-GET не должен ронять залив):
         отказ readiness-гейта — тоже, но не более READINESS_REJECTION_BUDGET подряд,
-        после чего исключение уходит наружу без изменений. Ожидание в любом случае
-        ограничено timeout.
+        после чего исключение уходит наружу без изменений.
+
+        Ожидание ограничено не только timeout, но и остатком абсолютного дедлайна
+        задачи: флапающий канал иначе доедает поллингом весь бюджет, задача ловит
+        отмену корутины, а вместе с ней теряется перечень уже созданных объектов.
         Бросает PermanentError только при явном status=error (видео не обработалось).
         """
-        deadline = time.monotonic() + timeout
+        budget = bounded_timeout_seconds(timeout)
+        deadline = time.monotonic() + budget
         last_status = ""
         readiness_rejections = 0
         while True:
@@ -368,15 +373,16 @@ class MediaUploader:
                     f"видео {video_id} не обработалось Meta (status=error)",
                     endpoint=f"/{video_id}",
                 )
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 logger.warning(
                     "video %s не дошло до ready за %.0fs (последний статус=%s) — продолжаю залив",
                     video_id,
-                    timeout,
+                    budget,
                     last_status or "unknown",
                 )
                 return False
-            await asyncio.sleep(interval)
+            await asyncio.sleep(min(interval, remaining))
 
     async def get_video_thumbnail_url(
         self,
@@ -394,10 +400,12 @@ class MediaUploader:
         появляются после обработки видео. Best-effort: пустая строка если не получили
         (creative тогда упадёт явно с понятной ошибкой). Отказ readiness-гейта
         проглатывается не более READINESS_REJECTION_BUDGET раз подряд и не позже
-        последней попытки, после чего уходит наружу без изменений.
+        последней попытки, после чего уходит наружу без изменений. Поллинг, как и
+        ожидание готовности, ограничен остатком абсолютного дедлайна задачи.
         """
         last = ""
         readiness_rejections = 0
+        deadline = time.monotonic() + bounded_timeout_seconds(retries * interval)
         for attempt in range(retries):
             try:
                 resp = await self._client.execute_graph_call(
@@ -426,7 +434,10 @@ class MediaUploader:
             except Exception as exc:  # noqa: BLE001 — best-effort, поллим дальше
                 last = repr(exc)
                 logger.warning("get_video_thumbnail_url %s: %r", video_id, exc)
-            await asyncio.sleep(interval)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(interval, remaining))
         logger.warning("видео %s: миниатюра не получена (%s)", video_id, last or "пусто")
         return ""
 

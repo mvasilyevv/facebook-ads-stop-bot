@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,6 +22,7 @@ import grpc
 import pytest
 
 from clients.python_grpc.v1 import meta_api_pb2
+from core.deadlines import bind_absolute_deadline
 from core.meta_api.errors import (
     AmbiguousResultError,
     BrowserReadinessRejectedError,
@@ -643,6 +646,60 @@ async def test_wait_video_ready_does_not_swallow_readiness_rejection() -> None:
         )
 
     assert raised.value is rejection
+
+
+# wait_video_ready: ожидание не переживает абсолютный дедлайн задачи. Флапающий канал
+# иначе выжигает поллингом весь остаток бюджета, задача ловит отмену корутины, а вместе
+# с ней теряется перечень уже созданных в кабинете объектов.
+@pytest.mark.asyncio
+async def test_wait_video_ready_stops_at_absolute_task_deadline() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"status": {"video_status": "processing"}})
+    uploader = MediaUploader(client)
+
+    started = time.monotonic()
+    with bind_absolute_deadline(datetime.now(UTC) + timedelta(seconds=0.05)):
+        ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.01)
+    elapsed = time.monotonic() - started
+
+    assert ok is False
+    assert elapsed < 1.0
+
+
+# get_video_thumbnail_url: поллинг миниатюры ограничен тем же остатком дедлайна.
+@pytest.mark.asyncio
+async def test_get_video_thumbnail_url_stops_at_absolute_task_deadline() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"data": []})
+    uploader = MediaUploader(client)
+
+    started = time.monotonic()
+    with bind_absolute_deadline(datetime.now(UTC) + timedelta(seconds=0.05)):
+        url = await uploader.get_video_thumbnail_url(
+            "vid1", ad_account_id="123", retries=6, interval=1.0
+        )
+    elapsed = time.monotonic() - started
+
+    assert url == ""
+    assert elapsed < 1.0
+
+
+# Без дедлайна в контексте поведение прежнее: бюджет ожидания задаётся аргументом.
+@pytest.mark.asyncio
+async def test_wait_video_ready_without_deadline_uses_own_timeout() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(
+        side_effect=[
+            {"status": {"video_status": "processing"}},
+            {"status": {"video_status": "ready"}},
+        ]
+    )
+    uploader = MediaUploader(client)
+
+    ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
+
+    assert ok is True
+    assert client.execute_graph_call.await_count == 2
 
 
 # get_video_thumbnail_url: берёт preferred-миниатюру (Meta требует её в video_data).
