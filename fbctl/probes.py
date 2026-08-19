@@ -136,6 +136,13 @@ def wait_for(
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> T:
+    """Ждать выполнения условия, ничего не меняя.
+
+    `check` обязан только наблюдать состояние: его зовут каждый интервал опроса,
+    и действие внутри повторится столько же раз. Лечение выполняется отдельным
+    вызовом до ожидания. Соглашение об именах (require_* / _check_*) держит
+    tests/unit/test_fbctl_wait_predicates.py.
+    """
     deadline = monotonic() + timeout
     last_error: FbctlError | None = None
     while True:
