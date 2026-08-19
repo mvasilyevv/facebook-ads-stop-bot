@@ -68,6 +68,39 @@ def _probe(**overrides):
             "unavailable",
             "circuit_open",
         ),
+        # Проба упала внутри browser-agent: профиля и сессии в ответе нет, но
+        # контракт свой. Это отказ канала, а не подмена профиля — иначе разбор
+        # уводит к «не тот профиль» вместо «профиль разлогинен».
+        (
+            _probe(
+                healthy=False,
+                vision_profile_id="",
+                session_id="",
+                detail="error: cabinet_login_required: Vision profile is signed out (act=111)",
+            ),
+            "unavailable",
+            "login_required",
+        ),
+        (
+            _probe(
+                healthy=False,
+                vision_profile_id="",
+                session_id="",
+                detail="error: cabinet_not_confirmed: final Ads Manager URL does not confirm act=111",
+            ),
+            "unavailable",
+            "cabinet_unavailable",
+        ),
+        (
+            _probe(
+                healthy=False,
+                vision_profile_id="",
+                session_id="",
+                detail="error: cabinet_backoff: repeated failures opening act=111, retry is held",
+            ),
+            "unavailable",
+            "cabinet_open_held",
+        ),
         (_probe(), "ready", "ready"),
     ],
 )

@@ -68,6 +68,13 @@ def _safe_probe_reason(probe: dict[str, Any]) -> str:
     """Map arbitrary browser detail to a bounded non-secret diagnostic code."""
     detail = str(probe.get("detail") or "").casefold()
     for marker, code in (
+        # Разлогин проверяется первым: он объясняет и «нет вкладки», и «нет
+        # токена», а лечится единственным действием человека — входом в профиль.
+        ("cabinet_login_required", "login_required"),
+        ("login_required", "login_required"),
+        ("cabinet_backoff", "cabinet_open_held"),
+        ("cabinet_", "cabinet_unavailable"),
+        ("no_ads_manager_page", "no_ads_manager_page"),
         ("wrong_url", "wrong_url"),
         ("token_not_found", "token_not_found"),
         ("page_closed", "page_closed"),
@@ -113,6 +120,18 @@ def classify_browser_readiness(
             reason_code="browser_contract_incompatible",
             observed_contract_version=observed_contract or None,
             observed_profile_id=observed_profile,
+            observed_session_id=observed_session,
+        )
+    if observed_profile is None:
+        # Проба не дошла до сессии и профиля не назвала: это отказ, а не «профиль
+        # не тот». Прежний порядок сравнивал пустое значение с ожидаемым и писал
+        # vision_profile_mismatch на любой отказ пробы — оператор и разбор видели
+        # подмену профиля там, где браузер был просто разлогинен.
+        return BrowserReadinessObservation(
+            state="unavailable",
+            reason_code=unavailable_reason,
+            observed_contract_version=observed_contract,
+            observed_profile_id=None,
             observed_session_id=observed_session,
         )
     if not expected_profile or observed_profile != expected_profile:
