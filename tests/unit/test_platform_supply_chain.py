@@ -126,6 +126,29 @@ def test_every_external_workflow_dependency_is_immutable() -> None:
             )
 
 
+def test_production_ssh_cannot_hang_forever() -> None:
+    """SSH на прод обязан сдаваться сам.
+
+    Без ConnectTimeout и ServerAliveInterval умерший посреди сессии хост держит
+    шаг до предела джобы, а шаги вокруг деплоя работают с временными кредами
+    GHCR на production — их снятие ждать не должно.
+    """
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert release.count("'  ConnectTimeout 15'") == 2, (
+        "ConnectTimeout задан не во всех двух местах, где собирается ~/.ssh/config"
+    )
+    assert release.count("'  ServerAliveInterval 15'") == 2
+    assert release.count("'  ServerAliveCountMax 4'") == 2
+
+    for step in (
+        "Install temporary GHCR credentials on production",
+        "Remove temporary GHCR credentials",
+    ):
+        body = release.split(f"- name: {step}", maxsplit=1)[1].split("- name:", maxsplit=1)[0]
+        assert "timeout-minutes: 5" in body, f"шаг «{step}» без собственного предела времени"
+
+
 def test_ci_full_pytest_uses_complete_test_only_secret_contract() -> None:
     test_job = _job_block(VERIFY_WORKFLOW.read_text(encoding="utf-8"), "backend")
 

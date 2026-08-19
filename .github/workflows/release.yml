@@ -62,7 +62,10 @@ jobs:
             'Host *' \
             '  StrictHostKeyChecking yes' \
             '  UserKnownHostsFile ~/.ssh/known_hosts' \
-            '  IdentitiesOnly yes' > ~/.ssh/config
+            '  IdentitiesOnly yes' \
+            '  ConnectTimeout 15' \
+            '  ServerAliveInterval 15' \
+            '  ServerAliveCountMax 4' > ~/.ssh/config
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
           ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
       - name: Validate bootstrap source and existing host identity
@@ -267,10 +270,14 @@ jobs:
             'Host *' \
             '  StrictHostKeyChecking yes' \
             '  UserKnownHostsFile ~/.ssh/known_hosts' \
-            '  IdentitiesOnly yes' > ~/.ssh/config
+            '  IdentitiesOnly yes' \
+            '  ConnectTimeout 15' \
+            '  ServerAliveInterval 15' \
+            '  ServerAliveCountMax 4' > ~/.ssh/config
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
           ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
       - name: Install temporary GHCR credentials on production
+        timeout-minutes: 5
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
           GHCR_USER: ${{ github.actor }}
@@ -325,6 +332,7 @@ jobs:
             --enable-scanning
       - name: Remove temporary GHCR credentials
         if: always()
+        timeout-minutes: 5
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
           DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
