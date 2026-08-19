@@ -33,6 +33,7 @@ jobs:
     needs: verify
     if: github.event_name == 'workflow_dispatch' && inputs.bootstrap && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: production
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -109,6 +110,7 @@ jobs:
         needs.images.result == 'success'
       }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     outputs:
@@ -235,6 +237,7 @@ jobs:
         needs.docker-rehearsal.result == 'success'
       }}
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     environment: production
     permissions:
       contents: read

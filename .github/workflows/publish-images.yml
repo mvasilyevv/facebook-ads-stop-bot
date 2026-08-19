@@ -23,6 +23,7 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     outputs:
@@ -47,6 +48,7 @@ jobs:
     name: Base ${{ matrix.name }}
     needs: plan
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -125,6 +127,7 @@ jobs:
     name: App ${{ matrix.name }}
     needs: [plan, base]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -228,6 +231,7 @@ jobs:
     name: Desktop ${{ matrix.name }}
     needs: plan
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -294,6 +298,7 @@ jobs:
   manifest:
     needs: [app, desktop]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     outputs:
