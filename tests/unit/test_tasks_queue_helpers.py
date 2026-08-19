@@ -16,6 +16,7 @@ HIGH #8 из backend_test_audit_round_8: функция _calc_retry_available_at
 from __future__ import annotations
 
 import inspect
+import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -250,3 +251,152 @@ async def test_generic_claim_fails_closed_for_browser_ready_task_types(
         "worker_id": None,
         "lease_seconds": 71,
     }
+
+
+# 18.08.2026: две задачи залива закрыл подметальщик по абсолютному дедлайну, а
+# campaign_run у обеих остался queued на восемнадцать часов. Оператор видел
+# зависание вместо отказа; естественная реакция — запустить залив заново, а это
+# money-путь: два run на одну кампанию.
+@pytest.mark.asyncio
+async def test_terminal_task_closes_its_campaign_run() -> None:
+    class _Conn:
+        def __init__(self) -> None:
+            self.statements: list[tuple[str, dict]] = []
+
+        async def execute(self, statement, params=None):
+            self.statements.append((str(statement), dict(params or {})))
+            return SimpleNamespace(rowcount=1, first=lambda: None, fetchall=lambda: [])
+
+    conn = _Conn()
+    run_id = str(uuid.uuid4())
+    await task_queue._terminalize_campaign_run(
+        conn,
+        phase="failed",
+        payload={"run_id": run_id},
+        result={"reason": "absolute_deadline_exceeded"},
+    )
+
+    assert len(conn.statements) == 1
+    sql, params = conn.statements[0]
+    assert "UPDATE campaign_run" in sql
+    # Уже закрытый залив не переписываем: терминальное состояние окончательно.
+    assert "status NOT IN ('succeeded', 'failed', 'cancelled')" in sql
+    assert params["run_id"] == run_id
+    assert "Срок задачи истёк" in params["reason"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_task_without_run_id_touches_nothing() -> None:
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, statement, params=None):
+            self.calls += 1
+            return SimpleNamespace(rowcount=0)
+
+    conn = _Conn()
+    await task_queue._terminalize_campaign_run(
+        conn, phase="failed", payload={"ad_id": "1"}, result=None
+    )
+    await task_queue._terminalize_campaign_run(
+        conn, phase="failed", payload={"run_id": "не-uuid"}, result=None
+    )
+    assert conn.calls == 0
+
+
+def test_terminal_task_transition_closes_the_run() -> None:
+    """Закрытие залива стоит в общей точке терминализации, а не у одного вызывающего."""
+    source = inspect.getsource(task_queue._transition_terminal_task)
+    assert "_terminalize_campaign_run" in source
+
+
+# 18.08.2026: задача залива пролежала полчаса незабранной и сгорела по дедлайну
+# с текстом, называвшим следствие. Диагноз обязан называть невыполненное условие
+# готовности и повторять конъюнкты гейта в том же порядке.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row", "expected_code"),
+    [
+        ({"maintenance": True}, "browser_maintenance"),
+        ({"state": None}, "readiness_missing"),
+        (
+            {"state": "profile_mismatch", "reason_code": "vision_profile_mismatch"},
+            "state:profile_mismatch",
+        ),
+        ({"contract": 4}, "browser_contract_incompatible"),
+        ({"observed_profile": "other"}, "vision_profile_mismatch"),
+        ({"has_session": False}, "browser_session_missing"),
+        ({"fresh": False}, "readiness_stale"),
+    ],
+)
+async def test_waiting_task_names_the_unmet_readiness_condition(row, expected_code) -> None:
+    base = {
+        "waiting": 2,
+        "run_ids": ["11111111-1111-1111-1111-111111111111"],
+        "expected_profile": "profile-1",
+        "state": "ready",
+        "reason_code": "ready",
+        "contract": 5,
+        "observed_profile": "profile-1",
+        "has_session": True,
+        "fresh": True,
+        "maintenance": False,
+    }
+    base.update(row)
+
+    class _Conn:
+        async def execute(self, statement, params=None):
+            return SimpleNamespace(first=lambda: SimpleNamespace(**base))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    engine = SimpleNamespace(connect=lambda: _Conn())
+    block = await task_queue.explain_browser_claim_block(
+        engine, task_type="campaign_create", lanes=("bulk",)
+    )
+
+    assert block is not None
+    assert block.reason_code == expected_code
+    assert block.human.startswith("Жду готовности браузера:")
+    assert block.run_ids == ("11111111-1111-1111-1111-111111111111",)
+
+
+@pytest.mark.asyncio
+async def test_open_gate_and_empty_queue_explain_nothing() -> None:
+    for row in ({"waiting": 0}, {"waiting": 3}):
+        base = {
+            "waiting": 1,
+            "run_ids": [],
+            "expected_profile": "profile-1",
+            "state": "ready",
+            "reason_code": "ready",
+            "contract": 5,
+            "observed_profile": "profile-1",
+            "has_session": True,
+            "fresh": True,
+            "maintenance": False,
+        }
+        base.update(row)
+
+        class _Conn:
+            async def execute(self, statement, params=None, _row=base):
+                return SimpleNamespace(first=lambda: SimpleNamespace(**_row))
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        engine = SimpleNamespace(connect=lambda: _Conn())
+        assert (
+            await task_queue.explain_browser_claim_block(
+                engine, task_type="campaign_create", lanes=("bulk",)
+            )
+            is None
+        )

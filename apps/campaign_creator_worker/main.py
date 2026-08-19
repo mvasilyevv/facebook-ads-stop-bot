@@ -39,6 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.campaign_creator_worker import (
+    TASK_TYPE,
     _campaign_upload_root,
     _resolve_creo_dir,
     load_run,
@@ -57,6 +58,9 @@ from apps.campaign_creator_worker import (
 )
 from apps.campaign_creator_worker import (
     finalize_run_succeeded as _finalize_run_succeeded,
+)
+from apps.campaign_creator_worker import (
+    note_waiting_reason as _note_waiting_reason,
 )
 from core.campaign_builder.builder import build_campaign_spec
 from core.campaign_builder.creative_ledger import record_creative
@@ -79,6 +83,7 @@ from core.tasks.irreversible_control import (
 )
 from core.tasks.queue import (
     Task,
+    explain_browser_claim_block,
     release_after_browser_readiness_rejection,
     requeue_for_retry,
 )
@@ -1179,6 +1184,7 @@ async def task_loop(
     uploader: MediaUploader,
 ) -> None:
     """Главный цикл claim → execute → mark."""
+    last_waiting_reason = ""
     while not stop.is_set():
         try:
             claim = await _claim(engine)
@@ -1188,8 +1194,30 @@ async def task_loop(
             continue
 
         if claim.queue_empty or claim.task is None:
+            # Пустой claim при непустой очереди означает закрытый гейт готовности.
+            # Молчать нельзя: задача пролежит до дедлайна, а оператор всё это
+            # время видит «в очереди» без причины.
+            try:
+                block = await explain_browser_claim_block(
+                    engine, task_type=TASK_TYPE, lanes=("bulk",)
+                )
+            except Exception:  # noqa: BLE001
+                block = None
+                logger.exception("не удалось объяснить ожидание готовности браузера")
+            if block is None:
+                last_waiting_reason = ""
+            else:
+                if block.reason_code != last_waiting_reason:
+                    logger.warning(
+                        "campaign_create: %d задач ждут готовности браузера (%s)",
+                        block.waiting,
+                        block.reason_code,
+                    )
+                    last_waiting_reason = block.reason_code
+                await _note_waiting_reason(engine, run_ids=block.run_ids, reason=block.human)
             await _sleep_or_stop(stop)
             continue
+        last_waiting_reason = ""
 
         try:
             vision_profile_id = str(claim.browser_profile_id or "").strip()

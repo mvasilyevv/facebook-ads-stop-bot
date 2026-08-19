@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -515,3 +516,36 @@ __all__ = [
     "set_run_status",
     "update_run_progress",
 ]
+
+
+async def note_waiting_reason(
+    engine: AsyncEngine,
+    *,
+    run_ids: Sequence[str],
+    reason: str,
+) -> int:
+    """Записать в незабранные заливы причину ожидания канала браузера.
+
+    Пишем только при СМЕНЕ причины: иначе строка переписывалась бы каждый опрос
+    и «обновлён» перестал бы что-либо значить. Статус остаётся queued — залив
+    действительно ещё не начинался, меняется только объяснение.
+    """
+    ids = [str(item).strip() for item in run_ids if str(item).strip()]
+    if not ids:
+        return 0
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE campaign_run
+                SET progress = COALESCE(progress, '{}'::jsonb)
+                    || jsonb_build_object('waiting_reason', :reason),
+                    updated_at = NOW()
+                WHERE id = ANY(CAST(:ids AS UUID[]))
+                  AND status = 'queued'
+                  AND COALESCE(progress->>'waiting_reason', '') IS DISTINCT FROM :reason
+                """
+            ),
+            {"ids": ids, "reason": reason},
+        )
+    return int(result.rowcount or 0)

@@ -370,6 +370,10 @@ async def _execute_block(
         adset_id = adset_ids[adset_index]
         for ad in mat_adset.ads:
             url_tags = url_tags_of(cfg, ad.code)
+            # Стадия объявляется на КАЖДОМ объявлении, а не один раз до цикла:
+            # иначе со второго объявления загрузка медиа идёт под стадией
+            # «creating», и failed_step в инциденте называет не тот шаг.
+            state.stage = "uploading"
             # upload
             if ad.media_kind == "video":
                 video_id = await uploader.upload_video_from_bytes(

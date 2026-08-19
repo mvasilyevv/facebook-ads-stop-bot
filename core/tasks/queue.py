@@ -664,6 +664,64 @@ async def _enqueue_standalone_campaign_unknown(
     )
 
 
+_TERMINALIZE_CAMPAIGN_RUN_SQL = text(
+    """
+    UPDATE campaign_run
+    SET status = CASE WHEN :phase = 'cancelled' THEN 'cancelled' ELSE 'failed' END,
+        error = COALESCE(NULLIF(error, ''), :reason),
+        updated_at = NOW()
+    WHERE id = CAST(:run_id AS UUID)
+      AND status NOT IN ('succeeded', 'failed', 'cancelled')
+    """
+)
+
+
+def _campaign_run_terminal_reason(
+    phase: Literal["failed", "cancelled", "unknown"],
+    result: dict[str, Any] | None,
+) -> str:
+    """Причина словами оператора, а не кодом задачи."""
+    if phase == "cancelled":
+        return "Залив отменён до завершения."
+    if phase == "unknown":
+        return "Залив прерван, подтверждение Facebook не получено — нужна сверка кабинета."
+    if str((result or {}).get("reason") or "") == "absolute_deadline_exceeded":
+        return "Срок задачи истёк, и воркер её так и не начал — залив не выполнялся."
+    return "Задача залива завершилась отказом."
+
+
+async def _terminalize_campaign_run(
+    conn: AsyncConnection,
+    *,
+    phase: Literal["failed", "cancelled", "unknown"],
+    payload: dict[str, Any],
+    result: dict[str, Any] | None,
+) -> None:
+    """Закрыть залив вместе с его задачей, в той же транзакции.
+
+    Терминальную задачу закрывает не только воркер: по абсолютному дедлайну её
+    закрывает подметальщик, который воркера не звал ни разу. Без этого залив
+    18.08.2026 восемнадцать часов показывался оператору как «в очереди», хотя
+    задача была мертва. Оператор видит зависание вместо отказа, и естественная
+    реакция — запустить залив заново; это money-путь, два run на одну кампанию.
+    """
+    run_id = str((payload or {}).get("run_id") or "").strip()
+    if not run_id:
+        return
+    try:
+        uuid.UUID(run_id)
+    except (ValueError, AttributeError, TypeError):
+        return
+    await conn.execute(
+        _TERMINALIZE_CAMPAIGN_RUN_SQL,
+        {
+            "run_id": run_id,
+            "phase": phase,
+            "reason": _campaign_run_terminal_reason(phase, result),
+        },
+    )
+
+
 async def _transition_terminal_task(
     conn: AsyncConnection,
     *,
@@ -677,6 +735,7 @@ async def _transition_terminal_task(
     task_type: str = "",
 ) -> None:
     """Atomically project a terminal task to exactly one durable operator event."""
+    await _terminalize_campaign_run(conn, phase=phase, payload=payload, result=result)
     has_incident_event = await _transition_correlated_incident(
         conn,
         task_id=task_id,
@@ -1022,6 +1081,104 @@ _CLAIM_SQL = text(
               correlation_id
     """
 ).bindparams(bindparam("lanes", expanding=True))
+
+
+_BROWSER_CLAIM_DIAGNOSIS_SQL = text(
+    """
+    SELECT
+        (SELECT count(*) FROM task_queue AS task
+          WHERE task.task_type = :tt
+            AND task.status IN ('pending', 'retrying')
+            AND task.lane IN :lanes
+            AND task.available_at <= clock_timestamp()) AS waiting,
+        (SELECT array_agg(DISTINCT task.payload->>'run_id')
+           FROM task_queue AS task
+          WHERE task.task_type = :tt
+            AND task.status IN ('pending', 'retrying')
+            AND task.lane IN :lanes
+            AND task.payload->>'run_id' IS NOT NULL) AS run_ids,
+        config.profile_id AS expected_profile,
+        channel.state AS state,
+        channel.reason_code AS reason_code,
+        channel.observed_contract_version AS contract,
+        channel.observed_profile_id AS observed_profile,
+        (NULLIF(channel.observed_session_id, '') IS NOT NULL) AS has_session,
+        (channel.readiness_expires_at > clock_timestamp()) AS fresh,
+        EXISTS (
+            SELECT 1 FROM system_config AS gate
+             WHERE gate.key = 'browser_maintenance'
+               AND (gate.value->>'expires_at')::timestamptz > clock_timestamp()
+        ) AS maintenance
+    FROM vision_config AS config
+    LEFT JOIN browser_channel_readiness AS channel
+      ON channel.channel = 'meta_api'
+     AND channel.vision_config_id = config.id
+    WHERE config.singleton_key = 'default'
+    """
+).bindparams(bindparam("lanes", expanding=True))
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserClaimBlock:
+    """Почему задача лежит незабранной, когда канал браузера не готов."""
+
+    waiting: int
+    run_ids: tuple[str, ...]
+    reason_code: str
+    human: str
+
+
+async def explain_browser_claim_block(
+    engine: AsyncEngine,
+    *,
+    task_type: str,
+    lanes: Sequence[str],
+) -> BrowserClaimBlock | None:
+    """Назвать условие готовности, которое не выполнено, пока задача ждёт.
+
+    Гейт ``claim_browser_ready_task`` молчалив по устройству: нет строки
+    готовности — нет и кандидата, а задача остаётся ``pending`` без ошибки.
+    18.08.2026 залив так пролежал полчаса и сгорел по дедлайну с текстом,
+    называвшим следствие («absolute task deadline exceeded»), а не причину.
+    Диагноз повторяет конъюнкты гейта в том же порядке, поэтому он не может
+    разойтись с ним «на глаз».
+    """
+    effective_lanes = tuple(lanes)
+    if not effective_lanes:
+        return None
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                _BROWSER_CLAIM_DIAGNOSIS_SQL,
+                {"tt": task_type, "lanes": list(effective_lanes)},
+            )
+        ).first()
+    if row is None or not int(row.waiting or 0):
+        return None
+    run_ids = tuple(str(item) for item in (row.run_ids or []) if item)
+    if row.maintenance:
+        code, human = "browser_maintenance", "канал браузера на обслуживании"
+    elif row.state is None:
+        code, human = "readiness_missing", "канал браузера ни разу не подтвердил готовность"
+    elif str(row.state) != "ready":
+        code = f"state:{row.state}"
+        human = f"канал браузера не готов ({row.reason_code or row.state})"
+    elif int(row.contract or 0) != 5:
+        code, human = "browser_contract_incompatible", "версия контракта браузера не совпадает"
+    elif str(row.observed_profile or "") != str(row.expected_profile or ""):
+        code, human = "vision_profile_mismatch", "живой профиль Vision не тот, что настроен"
+    elif not row.has_session:
+        code, human = "browser_session_missing", "у канала браузера нет конкретной сессии"
+    elif not row.fresh:
+        code, human = "readiness_stale", "подтверждение готовности устарело"
+    else:
+        return None
+    return BrowserClaimBlock(
+        waiting=int(row.waiting),
+        run_ids=run_ids,
+        reason_code=code,
+        human=f"Жду готовности браузера: {human}.",
+    )
 
 
 _BROWSER_READY_CLAIM_SQL = text(

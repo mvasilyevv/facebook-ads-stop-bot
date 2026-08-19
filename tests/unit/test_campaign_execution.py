@@ -729,3 +729,37 @@ def test_on_creative_created_called(monkeypatch):
     assert {code for code, _, _ in seen} == set(
         c["body"]["name"] for c in client.calls if "adcreatives" in c["endpoint"]
     )
+
+
+# 19.08.2026: stage="uploading" выставлялся один раз ДО цикла и перебивался на
+# "creating" внутри него. Начиная со второго объявления загрузка медиа
+# показывалась созданием, и failed_step в инциденте называл не тот шаг.
+def test_upload_failure_of_second_ad_names_uploading(monkeypatch):
+    _patch_uniquify(monkeypatch)
+    block = _image_block(n_adsets=1, concept_count=2)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=2)
+
+    class _SecondUploadFails(_FakeUploader):
+        async def upload_image(self, ad_account_id, image_bytes, *, filename="upload.jpg", **kw):
+            self.images.append(image_bytes)
+            if len(self.images) == 2:
+                raise PermanentError("upload rejected")
+            return f"hash-{len(self.images)}"
+
+    client = _FakeClient()
+    uploader = _SecondUploadFails()
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=uploader,
+        )
+
+    with pytest.raises(PartialCreateError) as ei:
+        asyncio.run(run())
+    assert ei.value.failed_step == "uploading"
