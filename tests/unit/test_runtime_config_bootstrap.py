@@ -198,7 +198,8 @@ async def test_adset_bootstrap_encryption_error_does_not_expose_input(
 
 @pytest.mark.asyncio
 async def test_web_app_url_bootstrap_writes_once_and_existing_tombstone_wins() -> None:
-    url = "https://app.example.test/tma/?source=bootstrap"
+    # Без query: web_app_url обязан быть чистым HTTPS-base (см. normalize_web_app_base).
+    url = "https://app.example.test/tma"
     engine = _Engine()
     settings = SimpleNamespace(web_app_url=url)
 

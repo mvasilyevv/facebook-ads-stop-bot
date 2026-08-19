@@ -9,18 +9,14 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Mapping
+from urllib.parse import parse_qsl, urlsplit
 
+from core.safe_diagnostics import redact_sensitive_text
 from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
 
 _MAX_CARD_CHARS = 700
 _ACTION_CALLBACK_RE = re.compile(r"^a:[A-Za-z0-9_-]{22}$")
-_NAVIGATION_URL_RE = re.compile(
-    r"^https://[^\s]+[?&](?:nav|startapp)=[A-Za-z0-9_-]{22}(?:&[^\s]*)?$"
-)
-_UUID_RE = re.compile(
-    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
-)
+_RAW_CAPABILITY_RE = re.compile(r"^[A-Za-z0-9_-]{22}$")
 _SEVERITY_MARK = {
     "ok": "✅",
     "warning": "⚠️",
@@ -37,11 +33,11 @@ class RenderedNotification:
 
 
 def _safe_line(value: str, *, max_length: int) -> str:
-    without_ids = _UUID_RE.sub("объект", value.strip())
+    redacted = redact_sensitive_text(value).strip()
     escaped: list[str] = []
     used = 0
     truncated = False
-    for char in without_ids:
+    for char in redacted:
         fragment = html.escape(char, quote=False)
         if used + len(fragment) > max_length:
             truncated = True
@@ -53,6 +49,29 @@ def _safe_line(value: str, *, max_length: int) -> str:
             used -= len(escaped.pop())
         escaped.append("…")
     return "".join(escaped)
+
+
+def _safe_button_label(value: str) -> str:
+    return redact_sensitive_text(value).strip()[:64] or "Действие"
+
+
+def _is_safe_navigation_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        query = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.fragment
+        and not any(char.isspace() for char in value)
+        and len(query) == 1
+        and query[0][0] in {"nav", "startapp"}
+        and _RAW_CAPABILITY_RE.fullmatch(query[0][1])
+    )
 
 
 def _render_lines(facts: NotificationCardFacts, severity: str) -> list[str]:
@@ -88,7 +107,7 @@ def render_notification(
 
     buttons: list[dict[str, object]] = []
     if navigation_url:
-        if not _NAVIGATION_URL_RE.fullmatch(navigation_url):
+        if not _is_safe_navigation_url(navigation_url):
             raise ValueError("Invalid opaque Telegram navigation URL")
         buttons.append({"text": "Открыть", "url": navigation_url})
     for action in event.actions:
@@ -96,7 +115,9 @@ def render_notification(
         if callback_data:
             if not _ACTION_CALLBACK_RE.fullmatch(callback_data):
                 raise ValueError("Invalid opaque Telegram callback_data")
-            buttons.append({"text": action.label, "callback_data": callback_data})
+            buttons.append(
+                {"text": _safe_button_label(action.label), "callback_data": callback_data}
+            )
         if len(buttons) == 2:
             break
 
