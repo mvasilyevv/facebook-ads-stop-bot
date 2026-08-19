@@ -537,7 +537,7 @@ export function createMetaApiServiceHandlers(
             );
           }
         }
-      });
+      }, { signal: grpcAbort.controller.signal });
 
       // The transport is gone. Never turn an aborted/closed gRPC into a false
       // confirmed response; upstream keeps the external outcome UNKNOWN.
@@ -626,7 +626,7 @@ export function createMetaApiServiceHandlers(
           fullProbe,
           signal: grpcAbort.controller.signal,
         });
-      });
+      }, { signal: grpcAbort.controller.signal });
 
       if (grpcAbort.controller.signal.aborted) return;
       callback(null, {
@@ -755,7 +755,7 @@ export function createMetaApiServiceHandlers(
             _poisonRolePage(session, 'interactive', actId, page);
           }
         }
-      });
+      }, { signal: grpcAbort.controller.signal });
 
       if (grpcAbort.controller.signal.aborted) return;
       if (!result.ok && result.error.includes('TOKEN_NOT_FOUND_IN_PAGE')) {
@@ -983,7 +983,7 @@ export function createMetaApiServiceHandlers(
                 _poisonRolePage(activeSession, 'interactive', numericActId, page);
               }
             }
-          });
+          }, { signal: grpcAbort.controller.signal });
           if (grpcAbort.controller.signal.aborted) return;
           if (res.ok && res.videoId) {
             respondSuccess(res.videoId);

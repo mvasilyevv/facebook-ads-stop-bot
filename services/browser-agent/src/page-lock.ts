@@ -30,25 +30,76 @@ export function pageLockKey(
   ].join(':');
 }
 
+export interface PageLockOptions {
+  /** Дедлайн операции. По его срабатыванию ожидание очереди бросается. */
+  signal?: AbortSignal;
+}
+
 export function withPageRoleLock<T>(
   sessionId: string | undefined,
   role: PageLockRole,
   cabinetId: string | undefined,
   fn: () => Promise<T>,
+  options: PageLockOptions = {},
 ): Promise<T> {
-  return withPageLock(pageLockKey(sessionId, role, cabinetId), fn);
+  return withPageLock(pageLockKey(sessionId, role, cabinetId), fn, options);
 }
 
-export function withPageLock<T>(sessionId: string | undefined, fn: () => Promise<T>): Promise<T> {
+/** Ожидание своей очереди, прерываемое дедлайном операции. */
+function awaitTurn(previous: Promise<unknown>, signal?: AbortSignal): Promise<void> {
+  const queued = previous.then(
+    () => undefined,
+    () => undefined,
+  );
+  if (!signal) return queued;
+  if (signal.aborted) {
+    return Promise.reject(new Error('page lock wait aborted before it started'));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(new Error('page lock wait aborted by operation deadline'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    void queued.then(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    });
+  });
+}
+
+export function withPageLock<T>(
+  sessionId: string | undefined,
+  fn: () => Promise<T>,
+  options: PageLockOptions = {},
+): Promise<T> {
   const key = sessionId && sessionId.trim() ? sessionId.trim() : _DEFAULT_KEY;
   const prev = _tails.get(key) ?? Promise.resolve();
-  // Следующий стартует ПОСЛЕ предыдущего (ошибку предыдущего игнорируем для очереди).
-  const run = prev.catch(() => {}).then(() => fn());
-  // Хвост очереди не должен «отравляться» rejection'ом — гасим в хвосте отдельно.
+  // Слот держателя отделён от ожидания. Хвост очереди указывает на слот, а не на
+  // сам вызов: отказавшийся ждать освобождает слот немедленно и не пускает
+  // следующего вперёд живого держателя — взаимное исключение важнее скорости.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   _tails.set(
     key,
-    run.catch(() => {}),
+    prev.then(
+      () => held,
+      () => held,
+    ),
   );
+  const run = (async () => {
+    try {
+      await awaitTurn(prev, options.signal);
+    } catch (error) {
+      // Очередь не наша: слот отдаём сразу, иначе следующий ждал бы отменённого.
+      release();
+      throw error;
+    }
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  })();
   return run;
 }
 

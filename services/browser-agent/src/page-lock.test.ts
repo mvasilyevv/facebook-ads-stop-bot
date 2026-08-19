@@ -110,3 +110,71 @@ describe('withPageLock (H-7 per-session mutex)', () => {
     assert.equal(await withPageLock('', async () => 'def'), 'def');
   });
 });
+
+// #187: очередь блокировок не имела предела ожидания. Операция, чей gRPC-дедлайн
+// уже истёк, дожидалась своей очереди и ОТПРАВЛЯЛА мутацию в Meta после того, как
+// клиент получил DEADLINE_EXCEEDED. За зависшим сканом так встаёт авто-стоп.
+describe('withPageLock: дедлайн ожидания', () => {
+  it('ожидающий отваливается по дедлайну и НЕ выполняет операцию', async () => {
+    _resetPageLocks();
+    let mutations = 0;
+    let releaseHolder!: () => void;
+    const holder = withPageLock('s-deadline', () =>
+      new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      }));
+
+    const controller = new AbortController();
+    const waiting = withPageLock(
+      's-deadline',
+      async () => {
+        mutations += 1;
+      },
+      { signal: controller.signal },
+    );
+    controller.abort('grpc_deadline_exceeded');
+
+    await assert.rejects(waiting, /page lock wait aborted/);
+    assert.equal(mutations, 0, 'мутация не должна уйти после отказа по дедлайну');
+
+    releaseHolder();
+    await holder;
+    // Держатель отпустил слот уже после отказа ожидающего — операция всё равно
+    // не выполняется: отменённое ожидание не воскресает.
+    await sleep(5);
+    assert.equal(mutations, 0);
+  });
+
+  it('после отвалившегося ожидания очередь обслуживает следующего', async () => {
+    _resetPageLocks();
+    const events: string[] = [];
+    let releaseHolder!: () => void;
+    const holder = withPageLock('s-next', async () => {
+      events.push('holder:start');
+      await new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+      events.push('holder:end');
+    });
+
+    const controller = new AbortController();
+    const abandoned = withPageLock('s-next', async () => {
+      events.push('abandoned:run');
+    }, { signal: controller.signal });
+    controller.abort('grpc_deadline_exceeded');
+    await assert.rejects(abandoned, /page lock wait aborted/);
+
+    const next = withPageLock('s-next', async () => {
+      events.push('next:start');
+    });
+
+    await sleep(5);
+    // Взаимное исключение сохранено: следующий НЕ стартовал, пока держатель жив.
+    assert.deepEqual(events, ['holder:start']);
+
+    releaseHolder();
+    await holder;
+    await next;
+    assert.deepEqual(events, ['holder:start', 'holder:end', 'next:start']);
+  });
+});
