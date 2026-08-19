@@ -382,6 +382,11 @@ jobs:
           BUNDLE: ${{ needs.control-bundle.result }}
           REHEARSAL: ${{ needs.docker-rehearsal.result }}
           DEPLOY: ${{ needs.deploy.result }}
+          # Три условия, по которым выкатка пропускается молча. Без них отчёт
+          # может сказать только «не выполнялась», и причину человек ищет сам.
+          EVENT: ${{ github.event_name }}
+          DEPLOY_ENABLED: ${{ vars.CI_DEPLOY_ENABLED }}
+          REF: ${{ github.ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # Пока владелец не завёл секреты, релиз молчит, но не падает. Секреты
@@ -431,12 +436,22 @@ jobs:
             failed="${failed:+$failed, }предел времени: ${timeouts}"
           fi
 
+          # Отчёт обязан отвечать на единственный вопрос читателя: тронут прод
+          # или нет, и если нет — почему и что делать. «Выкатка не запускалась»
+          # этого не отвечало: причин у пропуска несколько, а человек читает
+          # сообщение в Telegram без доступа к условиям джобы.
           if [ -n "$failed" ]; then
             text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"
           elif [ "$DEPLOY" = "success" ]; then
-            text="Релиз выкачен. ${RUN_URL}"
+            text="Релиз выкачен на прод. ${RUN_URL}"
+          elif [ "$EVENT" != "workflow_dispatch" ]; then
+            text="Образы собраны, прод не тронут: это прогон от пуша, а пуш не выкатывает никогда. Выкатка только вручную: Actions -> Release -> Run workflow. ${RUN_URL}"
+          elif [ "$DEPLOY_ENABLED" != "true" ]; then
+            text="Ручной запуск прошёл, но выкатка выключена тумблером: переменная CI_DEPLOY_ENABLED не равна true. ${RUN_URL}"
+          elif [ "$REF" != "refs/heads/main" ]; then
+            text="Ручной запуск прошёл, но выкатка идёт только с main, а запуск был с другой ветки. ${RUN_URL}"
           else
-            text="Релиз собран, выкатка не запускалась. ${RUN_URL}"
+            text="Образы собраны, прод не тронут: выкатка не выполнялась. Смотри условия джобы Deploy fbctl bundle. ${RUN_URL}"
           fi
 
           # Токен в пути — требование Bot API, обойти его нечем. Наружу он не
