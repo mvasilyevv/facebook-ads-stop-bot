@@ -305,3 +305,36 @@ async def test_gateway_uses_configured_origin_for_real_webhook_round_trip(
     assert methods == ["setWebhook", "getWebhookInfo"]
     assert all(url.startswith("http://telegram-stub:18080/bot") for url in requested_urls)
     assert token not in repr(gateway)
+
+
+@pytest.mark.asyncio
+async def test_set_webhook_accepts_the_generation_bound_url_it_is_always_given() -> None:
+    """URL вебхука всегда несёт ?bot_generation=N — запрет query его не касается.
+
+    19.08.2026 ужесточение «никакого query в URL вебхука» уронило шаг деплоя
+    configure_telegram_webhook на всех пяти шардах репетиции: bind_webhook_generation
+    намеренно привязывает callback-origin Telegram к одному поколению токена в БД,
+    и без этой привязки нельзя отличить апдейт от устаревшего поколения. Разрешена
+    ровно эта форма — секрет в query по-прежнему отклоняется.
+    """
+    from core.telegram.webhook_configuration import bind_webhook_generation
+
+    sent: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gateway = TelegramHTMLGateway(
+        "123456:abcdefghijklmnopqrstuvwxyz0123456789", http_client=http_client
+    )
+    url = bind_webhook_generation(
+        "https://app.example.test/api/v1/integrations/telegram/webhook", 7
+    )
+
+    await gateway.set_webhook(url=url, secret_token="safe-webhook-secret")
+
+    assert sent and sent[0]["url"] == url
+    assert sent[0]["url"].endswith("?bot_generation=7")
+    await http_client.aclose()

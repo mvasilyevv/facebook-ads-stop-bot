@@ -56,7 +56,12 @@ def _sanitize_reply_markup(value: object) -> object:
     return value
 
 
-def _is_safe_public_https_url(value: str, *, allow_opaque_navigation: bool = False) -> bool:
+def _is_safe_public_https_url(
+    value: str,
+    *,
+    allow_opaque_navigation: bool = False,
+    allow_webhook_generation: bool = False,
+) -> bool:
     try:
         parsed = urlsplit(value)
     except ValueError:
@@ -71,6 +76,11 @@ def _is_safe_public_https_url(value: str, *, allow_opaque_navigation: bool = Fal
     ):
         return False
     if not parsed.query:
+        return True
+    # Поколение токена — не секрет, а порядковый номер: он привязывает
+    # callback-origin Telegram к одному поколению в БД, и без него апдейт от
+    # устаревшего поколения неотличим от свежего. Разрешена ровно эта форма.
+    if allow_webhook_generation and re.fullmatch(r"bot_generation=[1-9][0-9]*", parsed.query):
         return True
     return bool(
         allow_opaque_navigation
@@ -414,7 +424,7 @@ class TelegramHTMLGateway:
         secret_token: str | SecretStr,
         drop_pending_updates: bool = False,
     ) -> None:
-        if not _is_safe_public_https_url(url):
+        if not _is_safe_public_https_url(url, allow_webhook_generation=True):
             raise ValueError("Telegram webhook URL must be HTTPS without credentials or query")
         secret = (
             secret_token.get_secret_value()
