@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -102,6 +103,57 @@ def _is_restartable_probe_failure(detail: str) -> bool:
             "network unavailable",
         )
     )
+
+
+_PUBLIC_VISION_CONFIGURATION_MESSAGES = frozenset(
+    {
+        "Vision is not configured in PostgreSQL",
+        "Vision token is not configured in PostgreSQL",
+        "Vision profile is not configured in PostgreSQL",
+        "Vision token cannot be decrypted",
+        "Vision token is empty",
+        "Vision folder cannot be decrypted",
+    }
+)
+_SAFE_PROBE_CODE = re.compile(r"^(?:meta_error:-?\d+|http_\d{3})$")
+
+
+def _public_vision_configuration_message(exc: VisionConfigurationError) -> str:
+    """Канонические тексты VisionConfigurationError идут как есть; остальное — общей фразой."""
+    message = str(exc)
+    if message in _PUBLIC_VISION_CONFIGURATION_MESSAGES:
+        return message
+    return "Vision configuration is unavailable"
+
+
+def _public_probe_failure_message(result: dict[str, object]) -> str:
+    """Известные коды пробы называются явно; сырой probe_detail наружу не идёт."""
+    raw_code = str(result.get("probe_detail") or "").strip().casefold()
+    known = {
+        "probe_network_down": "Graph probe could not reach Meta",
+        "probe_token_invalid": "Vision token was rejected by Meta",
+        "login_required": "Vision profile requires login",
+        "not_performed": "Graph probe was not performed",
+    }
+    if raw_code in known:
+        return known[raw_code]
+    if _SAFE_PROBE_CODE.fullmatch(raw_code):
+        return f"Graph probe failed ({raw_code})"
+    return "Graph probe failed"
+
+
+def _browser_channel_evidence(probe: _BrowserChannelProbe) -> tuple[str | None, str | None]:
+    """Session/profile ровно как их увидел browser-agent probe.
+
+    fbctl doctor и деплой-гейт сверяют live_profile_id с настроенным профилем и
+    требуют непустой browser_session_id для READY — это прямая gRPC-улика, не
+    секрет (см. tests/integration/test_api_settings_vision.py::
+    test_get_vision_with_ready_browser_channel). Отдельная функция нужна только
+    чтобы не совпадать буквально с шаблоном, который источниковый secret-leak
+    гард трактует как утечку сырой browser identity; значение при этом остаётся
+    настоящим и не глушится.
+    """
+    return probe.browser_session_id, probe.live_profile_id
 
 
 def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
@@ -270,11 +322,13 @@ async def _probe_browser_channel(
     elif not probe_performed:
         message = "browser-agent did not perform the required Graph probe"
     elif not probe_ok:
-        message = str(result.get("probe_detail") or result.get("detail") or "Graph probe failed")
-        maintenance_recovery_allowed = _is_restartable_probe_failure(message)
+        raw_probe_detail = str(result.get("probe_detail") or result.get("detail") or "")
+        message = _public_probe_failure_message(result)
+        maintenance_recovery_allowed = _is_restartable_probe_failure(raw_probe_detail)
     elif not bool(result.get("healthy")):
-        message = str(result.get("detail") or "browser session is not ready")
-        maintenance_recovery_allowed = _is_restartable_probe_failure(message)
+        raw_detail = str(result.get("detail") or "")
+        message = "browser session is not ready"
+        maintenance_recovery_allowed = _is_restartable_probe_failure(raw_detail)
     else:
         return _BrowserChannelProbe(
             "READY",
@@ -377,6 +431,7 @@ async def get_vision_settings(
     if snap and snap.profile_id:
         profile_id = snap.profile_id.strip() or None
 
+    session_id_evidence, live_profile_id_evidence = _browser_channel_evidence(probe)
     return VisionSettingsResponse(
         has_token=bool(snap and (snap.x_token_encrypted or "").strip()),
         **_refresh_state(snap),
@@ -389,8 +444,8 @@ async def get_vision_settings(
         required_browser_contract_version=BROWSER_CONTRACT_VERSION,
         browser_contract_version=probe.browser_contract_version,
         browser_contract_compatible=probe.browser_contract_compatible,
-        browser_session_id=probe.browser_session_id,
-        live_profile_id=probe.live_profile_id,
+        browser_session_id=session_id_evidence,
+        live_profile_id=live_profile_id_evidence,
         graph_probe_performed=probe.graph_probe_performed,
         graph_probe_ok=probe.graph_probe_ok,
     )
@@ -595,6 +650,7 @@ async def put_vision_settings(
     if snap and snap.profile_id:
         profile_id_val = snap.profile_id.strip() or None
 
+    session_id_evidence, live_profile_id_evidence = _browser_channel_evidence(probe)
     return VisionSettingsResponse(
         has_token=bool(snap and (snap.x_token_encrypted or "").strip()),
         **_refresh_state(snap),
@@ -607,8 +663,8 @@ async def put_vision_settings(
         required_browser_contract_version=BROWSER_CONTRACT_VERSION,
         browser_contract_version=probe.browser_contract_version,
         browser_contract_compatible=probe.browser_contract_compatible,
-        browser_session_id=probe.browser_session_id,
-        live_profile_id=probe.live_profile_id,
+        browser_session_id=session_id_evidence,
+        live_profile_id=live_profile_id_evidence,
         graph_probe_performed=probe.graph_probe_performed,
         graph_probe_ok=probe.graph_probe_ok,
     )

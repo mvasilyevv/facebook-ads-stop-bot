@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,7 +11,10 @@ import grpc
 import httpx
 import pytest
 
+import apps.api.routers.v1.operator as operator_router
 import apps.api.routers.v1.settings_telegram as settings_telegram
+import apps.api.routers.v1.settings_vision as settings_vision
+import apps.health_watchdog.main as health_watchdog
 import core.meta_api.adapters as meta_adapters
 import core.meta_api.audit as meta_audit
 from core.meta_api.client import MetaApiClient
@@ -28,7 +32,9 @@ from core.telegram.schemas import (
 )
 from core.telegram.web_app_url import normalize_web_app_base
 from core.telemetry import sanitized_http_url
+from core.vision_runtime import VisionConfigurationError
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _SECRET = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
 _UUID = "00000000-0000-4000-8000-000000000099"
 
@@ -295,3 +301,89 @@ def test_meta_adapter_parse_warning_does_not_log_raw_value(caplog) -> None:
 
     assert "value_type=str" in caplog.text
     assert _SECRET not in caplog.text
+
+
+def test_operator_incident_copy_redacts_untrusted_text_fields() -> None:
+    incident = {
+        "id": _UUID,
+        "severity": "critical",
+        "status": "open",
+        "title": f"access_token={_SECRET}",
+        "summary": f"external {_UUID}",
+        "resource_type": "ad",
+        "resource_id": _UUID,
+        "resource_label": f"https://tracker.test/ad?token={_SECRET}",
+        "ad_account_id": "111",
+        "opened_at": health_watchdog.datetime(2026, 8, 15, tzinfo=health_watchdog.UTC),
+        "facts": {"risk": f"Bearer {_SECRET}"},
+    }
+
+    item = operator_router._incident_item(incident, usd_scope_confirmed=True)
+
+    public_copy = " ".join(
+        filter(
+            None,
+            [item.title, item.summary, item.reason, item.target.label],
+        )
+    )
+    assert _SECRET not in public_copy
+    assert _UUID not in public_copy
+    assert "<redacted>" in public_copy
+    assert item.id.startswith("inc_")
+    assert _UUID not in item.id
+    assert item.action.href == f"/incidents/{item.id}"
+
+
+def test_operator_attention_incident_redacts_copy_and_internal_uuid() -> None:
+    incident = {
+        "id": _UUID,
+        "severity": "critical",
+        "status": "open",
+        "title": f"access_token={_SECRET}",
+        "summary": f"external {_UUID}",
+        "resource_type": "ad",
+        "resource_id": _UUID,
+        "resource_label": f"https://tracker.test/ad?token={_SECRET}",
+        "opened_at": health_watchdog.datetime(2026, 8, 15, tzinfo=health_watchdog.UTC),
+        "incident_key": "autostop:channel_down",
+    }
+
+    item = operator_router._incident_attention_item(incident)
+    serialized = item.model_dump_json()
+
+    assert item.id.startswith("inc_")
+    assert item.action is not None
+    assert item.action.href == f"/incidents/{item.id}"
+    assert _SECRET not in serialized
+    assert _UUID not in serialized
+
+
+def test_operator_api_sources_do_not_project_raw_correlation_uuid() -> None:
+    operator_sources = (
+        "apps/api/routers/v1/operator.py",
+        "apps/api/routers/v1/settings_observer.py",
+        "apps/api/routers/v1/settings_telegram.py",
+    )
+
+    for relative_path in operator_sources:
+        source = (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "correlation_id=str(" not in source, relative_path
+
+
+def test_vision_operator_response_never_projects_browser_identity() -> None:
+    source = (_REPO_ROOT / "apps/api/routers/v1/settings_vision.py").read_text(encoding="utf-8")
+
+    assert "browser_session_id=probe.browser_session_id" not in source
+    assert "live_profile_id=probe.live_profile_id" not in source
+
+
+def test_vision_public_diagnostics_ignore_raw_probe_and_configuration_details() -> None:
+    raw = f"access_token={_SECRET} https://vision.test/probe?token={_SECRET} {_UUID}"
+
+    assert settings_vision._public_probe_failure_message({"probe_detail": raw}) == (
+        "Graph probe failed"
+    )
+    assert (
+        settings_vision._public_vision_configuration_message(VisionConfigurationError(raw))
+        == "Vision configuration is unavailable"
+    )

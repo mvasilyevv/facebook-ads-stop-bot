@@ -42,6 +42,7 @@ from apps.api.routers.v1.schemas.settings_telegram import (
 from core.models.settings.telegram_config import TelegramConfig
 from core.models.telegram.invite import TelegramInvite
 from core.models.telegram.recipient import TelegramRecipient
+from core.public_identifiers import public_uuid
 from core.telegram.menu_button import sync_menu_buttons
 from core.telegram.notifications import (
     retire_disabled_recipient_notifications_in_transaction,
@@ -960,7 +961,7 @@ async def get_telegram_notification_diagnostics(
                 state=str(row.state),
                 error_code=str(row.last_error_code),
                 updated_at=row.updated_at,
-                correlation_id=str(row.correlation_id),
+                correlation_id=public_uuid(row.correlation_id, prefix="req"),
             )
             for row in error_rows
         ],

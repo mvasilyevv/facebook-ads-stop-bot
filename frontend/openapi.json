@@ -4218,7 +4218,6 @@
             "required": true,
             "schema": {
               "type": "string",
-              "format": "uuid",
               "title": "Incident Id"
             }
           }
@@ -4329,7 +4328,6 @@
             "required": true,
             "schema": {
               "type": "string",
-              "format": "uuid",
               "title": "Incident Id"
             }
           },

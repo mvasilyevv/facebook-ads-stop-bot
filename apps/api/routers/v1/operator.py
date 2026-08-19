@@ -94,6 +94,8 @@ from core.operator.queries import (
     fetch_operator_revision,
     fetch_operator_scan_state,
 )
+from core.public_identifiers import parse_public_uuid, public_uuid
+from core.safe_diagnostics import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/operator", tags=["operator"])
@@ -133,6 +135,16 @@ def _problem(*, status_code: int, code: str, message: str, correlation_id: str) 
         field_errors=None,
     )
     return JSONResponse(status_code=status_code, content=problem.model_dump(mode="json"))
+
+
+def _public_incident_id(value: object) -> str:
+    """Непрозрачный публичный id инцидента вместо внутреннего UUID."""
+    return public_uuid(value, prefix="inc")
+
+
+def _public_request_id(value: object) -> str:
+    """Непрозрачный публичный id команды/подтверждения вместо внутреннего UUID."""
+    return public_uuid(value, prefix="req")
 
 
 def _age(now: datetime, value: datetime | None) -> int | None:
@@ -1284,20 +1296,34 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
         if resource_type in {"account", "ad_account"}
         else "system"
     )
+    public_incident_id = _public_incident_id(incident["id"])
+    title = redact_sensitive_text(incident.get("title")).strip() or "Инцидент требует проверки"
+    summary = (
+        redact_sensitive_text(incident.get("summary") or incident.get("title")).strip()
+        or "Инцидент требует проверки"
+    )
     return OperatorAttentionItem(
-        id=str(incident["id"]),
+        id=public_incident_id,
         kind="incident",
         severity=incident["severity"],
-        title=str(incident["title"]),
-        summary=str(incident.get("summary") or incident["title"]),
+        title=title[:240],
+        summary=summary[:500],
         reason=str(incident.get("status") or "open"),
         occurred_at=incident["opened_at"],
         target=OperatorAttentionTarget(
             kind=kind,
-            id=str(incident.get("resource_id")) if incident.get("resource_id") else None,
-            label=str(incident.get("resource_label")) if incident.get("resource_label") else None,
+            id=(
+                redact_sensitive_text(incident.get("resource_id"))
+                if incident.get("resource_id")
+                else None
+            ),
+            label=(
+                redact_sensitive_text(incident.get("resource_label"))[:240]
+                if incident.get("resource_label")
+                else None
+            ),
         ),
-        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{public_incident_id}"),
         recovery_action=(
             "retry_scan"
             if str(incident.get("incident_key") or "").startswith(LOGIN_REQUIRED_INCIDENT_PREFIX)
@@ -1321,12 +1347,12 @@ def _incident_public_reason(incident: dict[str, Any]) -> str | None:
     facts = facts_value if isinstance(facts_value, dict) else {}
     direct = facts.get("risk")
     if isinstance(direct, str) and direct.strip():
-        return direct.strip()[:240]
+        return redact_sensitive_text(direct).strip()[:240]
     card = facts.get("card")
     if isinstance(card, dict):
         nested = card.get("risk")
         if isinstance(nested, str) and nested.strip():
-            return nested.strip()[:240]
+            return redact_sensitive_text(nested).strip()[:240]
     return None
 
 
@@ -1347,10 +1373,11 @@ def _incident_item(
     )
     requires_usd_evidence = _incident_requires_usd_evidence(incident)
     money_copy_visible = not requires_usd_evidence or usd_scope_confirmed
-    raw_title = str(incident.get("title") or "").strip()
-    raw_summary = str(incident.get("summary") or "").strip()
+    raw_title = redact_sensitive_text(incident.get("title")).strip()
+    raw_summary = redact_sensitive_text(incident.get("summary")).strip()
+    public_incident_id = _public_incident_id(incident["id"])
     return OperatorIncidentItem(
-        id=str(incident["id"]),
+        id=public_incident_id,
         severity=incident["severity"],
         status=incident["status"],
         title=(
@@ -1368,10 +1395,18 @@ def _incident_item(
         account_id=(str(incident["ad_account_id"]) if incident.get("ad_account_id") else None),
         target=OperatorAttentionTarget(
             kind=kind,
-            id=str(incident.get("resource_id")) if incident.get("resource_id") else None,
-            label=(str(incident.get("resource_label")) if incident.get("resource_label") else None),
+            id=(
+                redact_sensitive_text(incident.get("resource_id"))
+                if incident.get("resource_id")
+                else None
+            ),
+            label=(
+                redact_sensitive_text(incident.get("resource_label"))[:240]
+                if incident.get("resource_label")
+                else None
+            ),
         ),
-        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{public_incident_id}"),
         requires_usd_evidence=requires_usd_evidence,
     )
 
@@ -2095,7 +2130,7 @@ async def _enqueue_operator_command(
         public_id=f"#{receipt.task_id}",
         state=receipt.state,
         created=receipt.created,
-        correlation_id=str(receipt.correlation_id),
+        correlation_id=_public_request_id(receipt.correlation_id),
     )
 
 
@@ -2155,7 +2190,7 @@ async def retry_operator_scan(
         public_id=f"#{receipt.task_id}",
         state=receipt.state,
         created=receipt.created,
-        correlation_id=str(receipt.correlation_id),
+        correlation_id=_public_request_id(receipt.correlation_id),
     )
 
 
@@ -2308,14 +2343,23 @@ async def get_operator_incidents(
     responses=_PROBLEM_RESPONSES,
 )
 async def get_operator_incident(
-    incident_id: uuid.UUID,
+    incident_id: str,
     engine: DepEngine,
     settings: DepSettings,
 ) -> OperatorIncidentDetailResponse | JSONResponse:
     correlation_id = str(uuid.uuid4())
+    try:
+        internal_incident_id = parse_public_uuid(incident_id, prefix="inc")
+    except ValueError:
+        return _problem(
+            status_code=404,
+            code="incident_not_found",
+            message="Инцидент не найден",
+            correlation_id=correlation_id,
+        )
     now = datetime.now(UTC)
     try:
-        incident = await fetch_operator_incident(engine, incident_id=incident_id)
+        incident = await fetch_operator_incident(engine, incident_id=internal_incident_id)
     except Exception:  # noqa: BLE001
         logger.exception(
             "operator incident detail failed correlation_id=%s",
@@ -2412,18 +2456,27 @@ async def get_operator_incident(
     responses=_PROBLEM_RESPONSES,
 )
 async def acknowledge_operator_incident(
-    incident_id: uuid.UUID,
+    incident_id: str,
     engine: DepEngine,
     request: Request,
     acknowledged_by: str = Header(
         default="operator:web", alias="X-Operator-Principal", max_length=128
     ),
 ) -> OperatorIncidentAckResponse | JSONResponse:
-    correlation_id = uuid.uuid4()
+    correlation_id = str(uuid.uuid4())
+    try:
+        internal_incident_id = parse_public_uuid(incident_id, prefix="inc")
+    except ValueError:
+        return _problem(
+            status_code=404,
+            code="incident_not_found",
+            message="Инцидент не найден",
+            correlation_id=correlation_id,
+        )
     try:
         acknowledgement = await acknowledge_incident(
             engine,
-            incident_id=incident_id,
+            incident_id=internal_incident_id,
             acknowledged_by=getattr(request.state, "operator_principal", acknowledged_by),
         )
     except IncidentNotFoundError:
@@ -2431,14 +2484,14 @@ async def acknowledge_operator_incident(
             status_code=404,
             code="incident_not_found",
             message="Инцидент не найден",
-            correlation_id=str(correlation_id),
+            correlation_id=correlation_id,
         )
     except IncidentNotAcknowledgeableError as exc:
         return _problem(
             status_code=409,
             code="incident_not_acknowledgeable",
             message=f"Инцидент уже находится в состоянии {exc.status}",
-            correlation_id=str(correlation_id),
+            correlation_id=correlation_id,
         )
     except Exception:  # noqa: BLE001
         logger.exception(
@@ -2449,13 +2502,13 @@ async def acknowledge_operator_incident(
             status_code=503,
             code="incident_ack_unavailable",
             message="Подтверждение инцидента временно недоступно",
-            correlation_id=str(correlation_id),
+            correlation_id=correlation_id,
         )
     return OperatorIncidentAckResponse(
-        incident_id=str(incident_id),
+        incident_id=_public_incident_id(internal_incident_id),
         status="acknowledged",
         acknowledged_at=acknowledgement.acknowledged_at,
-        correlation_id=str(acknowledgement.correlation_id),
+        correlation_id=_public_request_id(acknowledgement.correlation_id),
     )
 
 

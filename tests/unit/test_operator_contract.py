@@ -30,6 +30,7 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorSeverity,
 )
 from core.operator.queries import _task_item, task_action_kind, task_action_state
+from core.public_identifiers import public_uuid
 
 
 def test_campaign_run_notify_scope_preserves_only_a_valid_opaque_id() -> None:
@@ -914,9 +915,15 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
         }
         for id_, account_id in (("1", "111"), ("2", "222"))
     ]
+    # operator._incident_attention_item теперь кодирует "id" как непрозрачный
+    # публичный идентификатор (core.public_identifiers.public_uuid), поэтому
+    # фикстуре нужен настоящий UUID, а не человекочитаемый "incident-111".
+    incident_ids = {
+        account_id: f"00000000-0000-4000-8000-{account_id:0>12}" for account_id in ("111", "222")
+    }
     incidents = [
         {
-            "id": f"incident-{account_id}",
+            "id": incident_ids[account_id],
             "severity": "warning",
             "status": "open",
             "title": f"Incident cabinet {account_id}",
@@ -999,7 +1006,7 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
     assert [item.account_id for item in snapshot.actions.data.items] == ["111"]
     assert snapshot.attention.data is not None
     assert {item.id for item in snapshot.attention.data.items} == {
-        "incident-111",
+        public_uuid(incident_ids["111"], prefix="inc"),
         "task:1",
     }
     assert snapshot.attention.state == DataState.READY
