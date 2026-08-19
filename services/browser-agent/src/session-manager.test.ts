@@ -1503,9 +1503,20 @@ test("после входа кабинет открывается и пауза 
     /cabinet_login_required/,
   );
 
-  // Человек вошёл в удержанной вкладке, интервал паузы истёк — одна проба.
+  // Пока в удержанной вкладке открыт вход, пробы её не трогают, сколько бы
+  // человек ни вводил пароль и код — иначе войти невозможно физически.
+  for (let tick = 0; tick < 5; tick += 1) {
+    await assert.rejects(
+      manager.ensureScanPage(session, { actId: "111" }),
+      /cabinet_login_required/,
+    );
+  }
+  assert.equal(newPageCalls, 1);
+  assert.equal(currentUrl, "https://www.facebook.com/login.php?next=x");
+
+  // Вход состоялся: адрес вкладки сменился — ждать конца интервала незачем.
   signedIn = true;
-  (manager as any).loginRequired.get("profile-1").at -= 10 * 60_000;
+  currentUrl = "https://www.facebook.com/";
 
   const resolved = await manager.ensureScanPage(session, { actId: "111" });
   assert.equal(resolved, page as any);

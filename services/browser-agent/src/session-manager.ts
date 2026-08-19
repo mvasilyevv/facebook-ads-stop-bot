@@ -807,18 +807,54 @@ export class SessionManager {
     return Math.max(0, LOGIN_REQUIRED_RETRY_COOLDOWN_MS - (now - latch.at));
   }
 
-  /** Забрать удержанную страницу входа для повторной пробы (одна вкладка на профиль). */
+  /** Забрать удержанную страницу входа для повторной пробы (одна вкладка на профиль).
+   *
+   * Пока в ней открыт вход, страница не отдаётся никому: в этот момент в ней
+   * работает человек. Навигировать её на кабинет значило бы стирать наполовину
+   * введённые логин и код — ровно то, из-за чего войти и не удавалось. */
   private takeRetainedLoginPage(session: BrowserSession): Page | null {
     const key = this.loginLatchKey(session);
     const latch = this.loginRequired.get(key);
     const page = latch?.page ?? null;
-    if (latch) {
-      this.loginRequired.set(key, { at: latch.at, page: null });
-    }
     if (!page || isPageClosed(page) || this.poisonedPages.has(page)) {
+      if (latch) {
+        this.loginRequired.set(key, { at: latch.at, page: null });
+      }
       return null;
     }
+    if (isFacebookLoginUrl(safePageUrl(page))) {
+      return null;
+    }
+    // Адрес сменился — вход состоялся или страницу увели вручную. Забираем.
+    this.loginRequired.set(key, { at: latch!.at, page: null });
     return page;
+  }
+
+  /**
+   * Держать ли паузу разлогина прямо сейчас.
+   *
+   * Удержанная вкладка входа — не только вежливость к оператору, но и самый
+   * точный признак состояния профиля:
+   *   в ней всё ещё вход  → человек логинится, паузу продлеваем и браузер не
+   *                         трогаем вообще, сколько бы это ни заняло;
+   *   адрес сменился      → вход состоялся, ждать конца интервала незачем;
+   *   вкладки нет         → судим по интервалу, как обычно.
+   */
+  private shouldHoldForLogin(session: BrowserSession): boolean {
+    const key = this.loginLatchKey(session);
+    const latch = this.loginRequired.get(key);
+    if (!latch) {
+      return false;
+    }
+    const page = latch.page;
+    if (page && !isPageClosed(page)) {
+      if (isFacebookLoginUrl(safePageUrl(page))) {
+        this.loginRequired.set(key, { at: Date.now(), page });
+        return true;
+      }
+      return false;
+    }
+    return this.loginRequiredRemainingMs(session, Date.now()) > 0;
   }
 
   private markLoginRequired(session: BrowserSession, page: Page | null): void {
@@ -962,7 +998,7 @@ export class SessionManager {
     // Профиль разлогинен: не трогаем браузер вообще. Ни новой вкладки, ни
     // навигации, ни закрытия — иначе каждая попытка вызывающего превращается в
     // ещё один цикл «открыл вкладку → Facebook отдал вход → закрыл вкладку».
-    if (this.loginRequiredRemainingMs(session, Date.now()) > 0) {
+    if (this.shouldHoldForLogin(session)) {
       throw new Error(
         `cabinet_login_required: Vision profile is signed out (act=${resolvedAct})`,
       );
