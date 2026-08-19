@@ -64,6 +64,17 @@ export function grpcCodeForError(err: any): number {
     // на которых вкладка кабинета не открылась.
     return grpc.status.FAILED_PRECONDITION;
   }
+  if (
+    message.includes('cabinet_not_found')
+    || message.includes('cabinet_not_confirmed')
+  ) {
+    // Вкладка кабинета не открылась. Все три текста рождаются только в
+    // ensureRolePage, то есть строго ДО первого обращения к Meta: страница —
+    // это то, ЧЕРЕЗ что мутация отправляется, и без неё отправлять нечем.
+    // INTERNAL здесь означал бы AmbiguousResultError, то есть «требуется ручная
+    // сверка» после залива, в котором наружу не ушло ни одного запроса.
+    return grpc.status.FAILED_PRECONDITION;
+  }
   if (message.includes('cabinet_login_required')) {
     // Профиль разлогинен: вкладка кабинета не открылась, до Meta не дошли и не
     // дойдём, пока человек не войдёт. Это отказ ДО отправки, а не потерянный

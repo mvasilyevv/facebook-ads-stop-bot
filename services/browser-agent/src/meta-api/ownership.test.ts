@@ -418,4 +418,20 @@ describe('классификация отказа вкладки кабинет�
     );
     assert.equal(grpcCodeForError(error), grpc.status.FAILED_PRECONDITION);
   });
+
+  // #188: отказ открытия вкладки тоже возникает строго до обращения к Meta —
+  // страница это то, ЧЕРЕЗ что мутация отправляется.
+  for (const message of [
+    'cabinet_not_found: navigation failed for act=111',
+    'cabinet_not_found: could not create page for act=111',
+    'cabinet_not_confirmed: final Ads Manager URL does not confirm act=111',
+    'cabinet_not_confirmed: selected page does not confirm act=111',
+  ]) {
+    it(`pre-send отказ вкладки: ${message}`, () => {
+      assert.equal(
+        grpcCodeForError(new Error(message)),
+        grpc.status.FAILED_PRECONDITION,
+      );
+    });
+  }
 });
