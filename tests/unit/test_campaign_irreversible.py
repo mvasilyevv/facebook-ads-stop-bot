@@ -341,6 +341,74 @@ def test_partial_branch_forwards_pre_dispatch_marker() -> None:
     assert branch.count("pre_dispatch=exc.pre_dispatch") == 2
 
 
+async def _deadline_exhausted_graph_error() -> BaseException:
+    """Реальная причина с money-пути: дедлайн истёк ДО Graph-вызова.
+
+    Ошибка берётся из production-кода, а не конструируется в тесте: инвариант
+    проверяется на том исключении, которое клиент действительно поднимает, когда
+    ни одного байта во внешнюю систему не ушло.
+    """
+    from core.deadlines import bind_absolute_deadline
+    from core.meta_api.client import MetaApiClient
+
+    client = MetaApiClient(session_id="session-deadline")
+    client._stub = SimpleNamespace()  # noqa: SLF001
+    with bind_absolute_deadline(datetime.now(UTC) - timedelta(seconds=1)):
+        try:
+            await client.execute_graph_call(
+                method="POST",
+                endpoint="/act_123/campaigns",
+                query_params={},
+                body_json={"name": "Campaign", "status": "PAUSED"},
+                ad_account_id="123",
+            )
+        except BaseException as exc:  # noqa: BLE001 — причина и есть предмет теста
+            return exc
+    raise AssertionError("execute_graph_call не отказал на исчерпанном дедлайне")
+
+
+# Дедлайн, истёкший ДО Graph-вызова, — доказанный отказ до отправки: запрос не
+# уходил, объектов не создано. Такой отказ обязан остаться REJECTED с разрешённым
+# повтором, а не превратиться в «Meta могла принять часть изменений».
+@pytest.mark.asyncio
+async def test_deadline_exhausted_before_graph_call_is_not_partial() -> None:
+    cause = await _deadline_exhausted_graph_error()
+    created = {"campaigns": [], "adsets": [], "creatives": [], "ads": []}
+
+    with pytest.raises(CampaignExecutionError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="creating_campaign",
+            campaign_create_attempted=True,
+        )
+
+    assert not isinstance(raised.value, PartialCreateError)
+    assert raised.value.__cause__ is cause
+    assert raised.value.irreversible_attempted is False
+    assert classify_execution_error(raised.value) == "transient"
+
+
+# Тот же доказанный отказ до отправки, но объекты прошлых шагов уже созданы:
+# исход остаётся partial (ручная чистка сирот), а причина не теряется —
+# pre_dispatch говорит, что этот конкретный запрос до Meta не дошёл.
+@pytest.mark.asyncio
+async def test_deadline_exhausted_after_confirmed_create_is_marked_pre_dispatch() -> None:
+    cause = await _deadline_exhausted_graph_error()
+    created = {"campaigns": ["campaign-1"], "adsets": [], "creatives": [], "ads": []}
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="creating_adsets",
+            campaign_create_attempted=True,
+        )
+
+    assert raised.value.pre_dispatch is True
+    assert classify_execution_error(raised.value) == "partial"
+
+
 # Permanent-причина (например, валидация) без attempted → permanent.
 def test_classify_pre_post_permanent() -> None:
     err = CampaignExecutionError("bad config")

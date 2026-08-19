@@ -41,6 +41,7 @@ from core.meta_api.errors import (
     BrowserReadinessRejectedError,
     MetaApiError,
     PermanentError,
+    PreDispatchRejectedError,
     SessionUnavailableError,
     classify_graph_error,
 )
@@ -55,6 +56,11 @@ _DEFAULT_TIMEOUT_SECONDS = 35.0
 _HEALTH_CHECK_TIMEOUT_SECONDS = 10.0
 # full_probe делает реальный fetch (browser-agent внутри ставит 8с) — даём запас на gRPC.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 15.0
+# Вердикты пробы, означающие мёртвый канал (зеркалит runNetworkProbe в browser-agent).
+# Всё остальное в detail — свободный текст и наружу не выносится.
+_LIVE_PROBE_REJECT_VERDICTS = frozenset(
+    {"login_required", "probe_token_invalid", "probe_network_down"}
+)
 _OPERATION_AUTHORITY_DB_TIMEOUT_SECONDS = 2.0
 # v5 removes URL-backed image upload and accepts only capability-bound bytes.
 # Older agents must fail contract health rather than retain the broader path.
@@ -2269,10 +2275,15 @@ class MetaApiClient:
 
         remaining = remaining_deadline_seconds()
         if remaining is not None and remaining <= 0.001:
-            raise SessionUnavailableError(
+            raise PreDispatchRejectedError(
                 "absolute deadline exhausted before exact browser identity resolution"
             )
-        timeout = _HEALTH_CHECK_TIMEOUT_SECONDS
+        # Money-предполёт делает РЕАЛЬНЫЙ GET /me той же сессией, что исполнит
+        # операцию: иначе первым сетевым контактом с Meta во всём заливе
+        # оказывается сам необратимый POST, и разлогин отказывает уже внутри
+        # money-окна. Вердикт кешируется browser-agent'ом на страницу, поэтому
+        # цепочка вызовов одного залива не платит за пробу на каждом шаге.
+        timeout = _HEALTH_PROBE_TIMEOUT_SECONDS
         if remaining is not None:
             timeout = max(0.001, min(timeout, remaining))
         try:
@@ -2283,7 +2294,7 @@ class MetaApiClient:
             identity = await self._stub.CheckMetaApiHealth(
                 meta_api_pb2.CheckMetaApiHealthRequest(
                     session_id=self.session_id,
-                    full_probe=False,
+                    full_probe=True,
                     expected_vision_profile_id=authority.vision_profile_id,
                     ad_account_id=str(account_id or "").replace("act_", "").strip(),
                 ),
@@ -2310,6 +2321,19 @@ class MetaApiClient:
                 f"observed={observed_contract_version})"
             )
 
+        if not bool(getattr(identity, "probe_performed", False)):
+            # Здоровье без выполненной пробы — это признак в DOM, а не
+            # доказательство: строка токена переживает и разлогин профиля, и
+            # мёртвый сетевой канал. Подписывать под неё одноразовый грант
+            # значит отдать первый контакт с Meta необратимому POST.
+            await self._invalidate_claimed_browser_readiness(
+                authority,
+                reason_code="exact_live_probe_missing",
+            )
+            raise BrowserReadinessRejectedError(
+                "money preflight has no live Meta probe from the operation session"
+            )
+
         exact_session_id = str(identity.session_id or "").strip()
         exact_profile_id = str(identity.vision_profile_id or "").strip()
         if (
@@ -2322,8 +2346,12 @@ class MetaApiClient:
                 authority,
                 reason_code="exact_live_identity_rejected",
             )
+            # Наружу уходит только машинный вердикт пробы из известного набора:
+            # свободный текст browser-agent может нести Graph-ответ с токеном.
+            verdict = str(getattr(identity, "probe_detail", "") or "").strip()
             raise BrowserReadinessRejectedError(
-                "exact browser session/profile is not ready for a money operation"
+                "exact browser session/profile is not ready for a money operation "
+                f"({verdict if verdict in _LIVE_PROBE_REJECT_VERDICTS else 'not_ready'})"
             )
 
         nonce = secrets.token_hex(16)
@@ -2375,7 +2403,7 @@ class MetaApiClient:
             raise PermanentError("money browser RPC requires a PostgreSQL operation authority")
         remaining = remaining_deadline_seconds()
         if remaining is not None and remaining <= 0.001:
-            raise SessionUnavailableError(
+            raise PreDispatchRejectedError(
                 "task absolute deadline exhausted before lease authority database read"
             )
         db_timeout = _OPERATION_AUTHORITY_DB_TIMEOUT_SECONDS
@@ -2399,7 +2427,7 @@ class MetaApiClient:
                     )
                     row = result.mappings().one_or_none()
                     if row is None:
-                        raise SessionUnavailableError(
+                        raise PreDispatchRejectedError(
                             "task lease is stale, cancelled, expired, or past its deadline"
                         )
 
@@ -2413,7 +2441,7 @@ class MetaApiClient:
                     )
                     deadline_value = row.get("deadline_epoch")
                     if deadline_value is None:
-                        raise SessionUnavailableError("task absolute deadline is unavailable")
+                        raise PreDispatchRejectedError("task absolute deadline is unavailable")
                     now_seconds = max(int(time.time()), int(row["db_now_epoch"]))
                     expires_at = min(
                         now_seconds + ttl_seconds,
@@ -2426,7 +2454,7 @@ class MetaApiClient:
                             int(time.time() + max(0.0, remaining_seconds)),
                         )
                     if expires_at <= now_seconds:
-                        raise SessionUnavailableError(
+                        raise PreDispatchRejectedError(
                             "live task lease/deadline expired before browser capability signing"
                         )
                     payload = browser_operation_payload(
@@ -2464,7 +2492,7 @@ class MetaApiClient:
         except Exception as exc:  # noqa: BLE001 — fail closed before browser send
             if isinstance(exc, (PermanentError, SessionUnavailableError)):
                 raise
-            raise SessionUnavailableError(
+            raise PreDispatchRejectedError(
                 "task lease authority issuance failed before browser send"
             ) from exc
         return expires_at, payload
@@ -2864,9 +2892,10 @@ class MetaApiClient:
 
         remaining = remaining_deadline_seconds()
         if remaining is not None and remaining <= 0.001:
-            raise AmbiguousResultError(
+            # Отправки не было: дедлайн проверен ДО единственного вызова, который
+            # мог бы уйти к Meta. Это REJECTED, а не потерянный ответ.
+            raise PreDispatchRejectedError(
                 "absolute deadline exhausted before Graph call",
-                code=-2,
                 endpoint=endpoint,
             )
 

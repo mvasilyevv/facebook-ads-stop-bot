@@ -205,6 +205,7 @@ def _duplicate_client(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -292,6 +293,7 @@ def _campaign_client() -> tuple[MetaApiClient, MagicMock]:
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -498,6 +500,7 @@ async def test_python_client_signs_exact_live_identity_task_and_lease(
     health = AsyncMock(
         return_value=SimpleNamespace(
             healthy=True,
+            probe_performed=True,
             browser_contract_version=BROWSER_CONTRACT_VERSION,
             session_id="session-exact",
             vision_profile_id="profile-exact",
@@ -583,6 +586,7 @@ async def test_python_client_fails_closed_without_task_authority_or_exact_profil
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="wrong-profile",
@@ -614,6 +618,125 @@ async def test_python_client_fails_closed_without_task_authority_or_exact_profil
             )
 
 
+def _probe_identity(
+    *,
+    healthy: bool = True,
+    probe_performed: bool = True,
+    detail: str = "ok",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        healthy=healthy,
+        browser_contract_version=BROWSER_CONTRACT_VERSION,
+        session_id="session-exact",
+        vision_profile_id="profile-exact",
+        probe_performed=probe_performed,
+        probe_ok=healthy,
+        detail=detail,
+        probe_detail=detail,
+    )
+
+
+def _capability_grants(engine: MagicMock) -> int:
+    return sum(
+        "INSERT INTO browser_operation_capability_uses" in str(call.args[0])
+        for call in engine._test_connection.execute.await_args_list
+    )
+
+
+# Money-предполёт обязан доказать, что Meta достижима из этой сессии, а не что в
+# DOM лежит строка токена. Без реального запроса первым контактом с внешней
+# системой оказывается сам необратимый POST.
+@pytest.mark.asyncio
+async def test_money_preflight_requests_a_real_network_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    client._stub.CheckMetaApiHealth = AsyncMock(return_value=_probe_identity())
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        await _prepare_campaign_graph(
+            client,
+            method="POST",
+            endpoint="/act_123/campaigns",
+            body=_valid_campaign_create_body("campaigns"),
+        )
+
+    request = client._stub.CheckMetaApiHealth.await_args.args[0]
+    assert request.full_probe is True
+
+
+# Ответ без выполненной пробы не доказывает достижимость Meta: capability не
+# подписывается, необратимый грант в БД не появляется.
+@pytest.mark.asyncio
+async def test_money_preflight_without_performed_probe_signs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, engine = _campaign_client()
+    client._stub.CheckMetaApiHealth = AsyncMock(
+        return_value=_probe_identity(probe_performed=False, detail="not_performed")
+    )
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(BrowserReadinessRejectedError):
+            await _prepare_campaign_graph(
+                client,
+                method="POST",
+                endpoint="/act_123/campaigns",
+                body=_valid_campaign_create_body("campaigns"),
+            )
+
+    assert _capability_grants(engine) == 0
+
+
+# Разлогиненный профиль виден предполёту как вердикт пробы: залив отвергается до
+# первого POST и возвращается в очередь, а не открывает карточку ручной сверки.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict",
+    ["login_required", "probe_token_invalid", "probe_network_down"],
+)
+async def test_money_preflight_rejects_dead_channel_verdicts(
+    monkeypatch: pytest.MonkeyPatch,
+    verdict: str,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, engine = _campaign_client()
+    client._stub.CheckMetaApiHealth = AsyncMock(
+        return_value=_probe_identity(healthy=False, detail=verdict)
+    )
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(BrowserReadinessRejectedError):
+            await _prepare_campaign_graph(
+                client,
+                method="POST",
+                endpoint="/act_123/campaigns",
+                body=_valid_campaign_create_body("campaigns"),
+            )
+
+    assert _capability_grants(engine) == 0
+
+
 @pytest.mark.asyncio
 async def test_python_client_rejects_stale_browser_contract_before_db_or_browser_send(
     monkeypatch: pytest.MonkeyPatch,
@@ -623,6 +746,7 @@ async def test_python_client_rejects_stale_browser_contract_before_db_or_browser
     health = AsyncMock(
         return_value=SimpleNamespace(
             healthy=True,
+            probe_performed=True,
             browser_contract_version=BROWSER_CONTRACT_VERSION - 1,
             session_id="session-exact",
             vision_profile_id="profile-exact",
@@ -664,6 +788,7 @@ async def test_graph_issuer_rejects_opaque_digest_without_canonical_semantics(
     health = AsyncMock(
         return_value=SimpleNamespace(
             healthy=True,
+            probe_performed=True,
             browser_contract_version=BROWSER_CONTRACT_VERSION,
             session_id="session-exact",
             vision_profile_id="profile-exact",
@@ -702,6 +827,7 @@ async def test_python_client_rejects_stale_or_mismatched_live_task_binding(
     health = AsyncMock(
         return_value=SimpleNamespace(
             healthy=True,
+            probe_performed=True,
             browser_contract_version=BROWSER_CONTRACT_VERSION,
             session_id="session-exact",
             vision_profile_id="profile-exact",
@@ -767,6 +893,7 @@ async def test_python_client_fails_closed_without_absolute_task_deadline(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -805,6 +932,7 @@ async def test_python_client_wraps_authority_database_failure_before_send(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -851,6 +979,7 @@ async def test_python_client_bounds_authority_database_read_before_send(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -896,6 +1025,7 @@ async def test_upload_capability_covers_rpc_deadline_but_is_lease_bounded(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2238,6 +2368,7 @@ async def test_meta_api_duplicate_rejects_arbitrary_graph_calls_before_grant(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2534,6 +2665,7 @@ async def test_meta_api_duplicate_rejects_malformed_recovery_checkpoint_before_g
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2570,6 +2702,7 @@ async def test_python_client_rejects_signed_status_semantic_substitution(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2665,6 +2798,7 @@ async def test_owner_worker_authorizes_exact_single_ad_status_action(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2732,6 +2866,7 @@ async def test_autopause_caller_rejects_manual_requester_even_for_pause(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2796,6 +2931,7 @@ async def test_autopause_caller_cannot_authorize_non_pause_mutation(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2865,6 +3001,7 @@ async def test_owner_worker_binds_bulk_task_to_exact_targets_and_action(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",
@@ -2976,6 +3113,7 @@ async def test_browser_session_change_mid_task_is_rejected(monkeypatch) -> None:
     health = AsyncMock(
         return_value=SimpleNamespace(
             healthy=True,
+            probe_performed=True,
             browser_contract_version=BROWSER_CONTRACT_VERSION,
             session_id="session-другая",
             vision_profile_id="profile-exact",
@@ -3013,6 +3151,7 @@ async def test_identity_probe_names_the_operation_cabinet(monkeypatch) -> None:
     health = AsyncMock(
         return_value=SimpleNamespace(
             healthy=True,
+            probe_performed=True,
             browser_contract_version=BROWSER_CONTRACT_VERSION,
             session_id="session-exact",
             vision_profile_id="profile-exact",

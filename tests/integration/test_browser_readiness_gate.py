@@ -476,6 +476,7 @@ async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
                 session_id="stale-session",
                 vision_profile_id=identity.profile_id,
                 healthy=True,
+                probe_performed=True,
             )
 
     monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", "s" * 64)
@@ -598,6 +599,7 @@ async def test_presend_circuit_open_closes_gate_and_consumes_attempt_budget(
                 session_id="session-ready",
                 vision_profile_id=identity.profile_id,
                 healthy=True,
+                probe_performed=True,
             )
 
     breaker = AsyncCircuitBreaker(

@@ -114,8 +114,29 @@ class SessionUnavailableError(TemporaryError):
     """
 
 
-class BrowserReadinessRejectedError(SessionUnavailableError):
-    """Exact live v5/profile/session check rejected before the controlled RPC."""
+class PreDispatchRejectedError(SessionUnavailableError):
+    """Отказ, про который известно, что запрос во внешнюю систему НЕ уходил.
+
+    Исход такого отказа — REJECTED: объектов не создано, побочного эффекта нет,
+    повтор безопасен. Записать здесь UNKNOWN значит потребовать от оператора
+    ручной сверки там, где сверять нечего (прод 19.08.2026: залив упал на
+    исчерпанном дедлайне ДО первого POST, а карточка сказала «Meta могла принять
+    часть изменений» при нуле созданных объектов).
+
+    Наследование от SessionUnavailableError оставляет прежними все ветки,
+    построенные на «канал не готов, отправки не было»: worker'ы уже считают эту
+    семью доказанным pre-send отказом.
+    """
+
+
+class BrowserReadinessRejectedError(PreDispatchRejectedError):
+    """Exact live v5/profile/session check rejected before the controlled RPC.
+
+    Отдельный лист нужен ровно для одного: задача возвращается в очередь без
+    сгорания попытки, а claim'нутая готовность канала гасится. Прочие доказанные
+    pre-send отказы (исчерпанный дедлайн, отказ выдачи гранта) попытку тратят —
+    повторять их без ограничения нельзя.
+    """
 
 
 # Маппинг Graph code → класс исключения. Default — PermanentError.
@@ -123,15 +144,21 @@ _CODE_MAP: dict[int, type[MetaApiError]] = {
     # Отрицательные коды — ВНУТРЕННИЕ сигналы browser-agent (реальные Graph-коды
     # положительные). Все транзиентные, но только доказанный pre-send
     # сбой можно слепо повторять; mid-flight потери требуют UNKNOWN/reconcile.
-    #   -1 TokenNotFound (EAA-токен ещё не в DOM свежей вкладки) — прогреется;
+    #   -1 TokenNotFound (EAA-токен ещё не в DOM свежей вкладки) — fetch не звался;
     #   -2 NetworkError (Failed to fetch / Timeout fetch внутри page.evaluate) — сетевой блип;
-    #   -3 page-evaluate error — page/сессия в переходном состоянии.
-    -1: SessionUnavailableError,
+    #   -3 page-evaluate error — page/сессия в переходном состоянии;
+    #   -4 отказ, случившийся до старта fetch (отмена/предусловие) — отправки не было
+    #      (browser-agent: CancelledBeforeSend).
+    -1: PreDispatchRejectedError,
     -2: AmbiguousResultError,
     # A page/context can disappear after fetch reached Meta but before
     # page.evaluate returned the response.  Unlike token-not-found (-1), this is
     # not proof of a pre-send failure and must never enter the blind-retry path.
     -3: AmbiguousResultError,
+    # Доказанный pre-send отказ на стороне browser-agent. Отдельный код нужен
+    # именно потому, что -2 склеивал «fetch не стартовал» с «ответ потерян» и
+    # обе ситуации уходили оператору как ручная сверка.
+    -4: PreDispatchRejectedError,
     1: PermanentError,
     2: TemporaryError,
     4: RateLimitedError,

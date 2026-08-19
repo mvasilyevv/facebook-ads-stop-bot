@@ -102,6 +102,7 @@ async def test_capability_signing_rechecks_live_database_fence_and_cancel(
         CheckMetaApiHealth=AsyncMock(
             return_value=SimpleNamespace(
                 healthy=True,
+                probe_performed=True,
                 browser_contract_version=BROWSER_CONTRACT_VERSION,
                 session_id="session-exact",
                 vision_profile_id="profile-exact",

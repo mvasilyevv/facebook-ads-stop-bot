@@ -1,11 +1,17 @@
 // H-8 (BA-3): executeGraphCall error-mapping. Канал мутаций (pause_ad/activate_ad/
 // budget/create) опирается на классификацию error.code (190 → токен протух,
-// -1/-2/-3 → token/network/page-evaluate). Регресс на разбор error-блока Meta.
+// -1/-2/-3/-4 → token/network/page-evaluate/proven-pre-send). Регресс на разбор
+// error-блока Meta.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { executeGraphCall, checkMetaApiHealth, isLoginRequiredError } from './client.js';
+import {
+  executeGraphCall,
+  checkMetaApiHealth,
+  isLoginRequiredError,
+  graphFetchInPage,
+} from './client.js';
 
 // Мок Playwright Page: page.evaluate(fn, args) → вызываем evalImpl(args) (fn игнорируем).
 function mockPage(evalImpl: (args: any) => any): any {
@@ -207,6 +213,105 @@ describe('executeGraphCall error-mapping (H-8)', () => {
     assert.equal(result.statusCode, 0);
     assert.equal(result.error?.code, -2);
     assert.equal(result.error?.type, 'NetworkError');
+  });
+
+  // Issue 195: отмена во время прогрева токена (waitForFunction) случается ДО
+  // того, как page.evaluate(graphFetchInPage) вообще вызван — fetch() не мог
+  // стартовать. Это доказанный pre-send, не тот же код, что «мог дойти до Meta».
+  it('отмена до page.evaluate (прогрев токена) → доказанный pre-send код, не -2', async () => {
+    const abort = new AbortController();
+    let evaluateCalls = 0;
+    const page = {
+      // Никогда не резолвится сама — единственный способ выйти отсюда это отмена.
+      waitForFunction: async () => new Promise(() => undefined),
+      // clearInPageFetchOperation/abortInPageFetches тоже дёргают evaluate (со
+      // строковым operationId) — считаем только вызов graphFetchInPage (args-объект
+      // с endpoint), как и в существующем -2 тесте выше.
+      evaluate: async (_fn: any, args: any) => {
+        if (args && typeof args === 'object' && 'endpoint' in args) {
+          evaluateCalls += 1;
+        }
+        return { status_code: 200, response_json: '{}' };
+      },
+    };
+
+    const pending = executeGraphCall(page as any, baseParams, { signal: abort.signal });
+    abort.abort('grpc_cancelled_during_warmup');
+    const result = await pending;
+
+    assert.equal(evaluateCalls, 0, 'page.evaluate(graphFetchInPage) не должен был вызываться');
+    assert.equal(result.statusCode, 0);
+    assert.notEqual(result.error?.code, -2, 'доказанный pre-send не должен склеиваться с -2');
+    assert.equal(result.error?.code, -4);
+    assert.equal(result.error?.type, 'CancelledBeforeSend');
+  });
+});
+
+// Issue 195: graphFetchInPage исполняется внутри страницы через page.evaluate,
+// но не ссылается ни на что из объемлющего модуля — поэтому его можно вызвать
+// напрямую в Node (document — единственная браузерная глобаль без нативного
+// аналога, стабим её вручную).
+describe('graphFetchInPage: pre-send классификация отмены (issue 195)', () => {
+  const inPageArgs = {
+    method: 'GET',
+    endpoint: '/me',
+    queryParams: {},
+    bodyJson: null,
+    timeoutMs: 5_000,
+    apiVersion: 'v22.0',
+    operationId: 'presend-test',
+  };
+
+  function withStubDocument<T>(run: () => Promise<T>): Promise<T> {
+    const token = `EAA${'x'.repeat(120)}`;
+    (globalThis as any).document = { documentElement: { innerHTML: token } };
+    return run().finally(() => {
+      delete (globalThis as any).document;
+      delete (globalThis as any).__fbAgentFetchAbort;
+    });
+  }
+
+  // Красный на текущем коде до фикса: cancelled взведён РАНЬШЕ, чем controller.abort()
+  // вызывается внутри graphFetchInPage (строго перед fetch()) — сеть не тронута,
+  // но до фикса это неотличимо от отмены, поймавшей уже стартовавший fetch (-2).
+  it('cancelled уже true до вызова fetch() → -4 CancelledBeforeSend, не -2', async () => {
+    await withStubDocument(async () => {
+      (globalThis as any).__fbAgentFetchAbort = {
+        controllers: new Map(),
+        cancelled: new Set([inPageArgs.operationId]),
+      };
+      const result = await graphFetchInPage(inPageArgs);
+      const parsed = JSON.parse(result.response_json);
+      assert.equal(result.status_code, 0);
+      assert.notEqual(parsed.error?.code, -2, 'доказанный pre-send не должен склеиваться с -2');
+      assert.equal(parsed.error?.code, -4);
+      assert.equal(parsed.error?.type, 'CancelledBeforeSend');
+    });
+  });
+
+  // Контрольная группа: cancelled НЕ взведён заранее — обычный сетевой сбой
+  // (fetch падает сам, без всякой отмены) остаётся -2/NetworkError, как и раньше.
+  // fetch подменяется, чтобы не ходить в реальную сеть из юнит-теста.
+  it('обычный сетевой сбой без предварительной отмены остаётся -2 NetworkError', async () => {
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => {
+      throw new TypeError('Failed to fetch');
+    };
+    try {
+      await withStubDocument(async () => {
+        const result = await graphFetchInPage({
+          ...inPageArgs,
+          operationId: 'presend-test-network-fail',
+        });
+        const parsed = JSON.parse(result.response_json);
+        assert.equal(result.status_code, 0);
+        assert.equal(parsed.error?.code, -2);
+        assert.equal(parsed.error?.type, 'NetworkError');
+        assert.match(parsed.error?.message ?? '', /Failed to fetch/);
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
 

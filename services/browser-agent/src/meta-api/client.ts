@@ -102,6 +102,128 @@ const _PROBE_NOT_PERFORMED = {
   probeDetail: 'not_performed',
 } as const;
 
+interface InPageGraphFetchArgs {
+  method: string;
+  endpoint: string;
+  queryParams: Record<string, string>;
+  bodyJson: string | null;
+  timeoutMs: number;
+  apiVersion: string;
+  operationId: string;
+}
+
+interface InPageGraphFetchResult {
+  status_code: number;
+  response_json: string;
+}
+
+/**
+ * Исполняется ВНУТРИ страницы через page.evaluate (Playwright сериализует функцию
+ * через Function.prototype.toString и гоняет её в браузере) — поэтому функция не
+ * должна ссылаться ни на что из объемлющего Node.js-модуля, только на `args` и
+ * браузерные глобали (document, fetch, AbortController, globalThis).
+ *
+ * Экспортирована отдельно от executeGraphCall, чтобы pre-send классификацию
+ * (см. cancelledBeforeFetch ниже) можно было юнит-тестировать напрямую в Node —
+ * fetch/AbortController/globalThis там тоже есть, не хватает только document.
+ */
+export async function graphFetchInPage(args: InPageGraphFetchArgs): Promise<InPageGraphFetchResult> {
+  // Извлечь access_token из page source.
+  // Используем расширенный regex (EAA*, не только EAAbs*) — на случай если Meta
+  // поменяет префикс. Минимум 100 символов — отсекает шум.
+  const match = document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{100,}/);
+  if (!match) {
+    return {
+      status_code: 0,
+      response_json: JSON.stringify({
+        error: { code: -1, type: 'TokenNotFound', message: 'EAA-токен не найден в page source' },
+      }),
+    };
+  }
+  const token = match[0];
+
+  const root = globalThis as typeof globalThis & {
+    __fbAgentFetchAbort?: {
+      controllers: Map<string, Set<AbortController>>;
+      cancelled: Set<string>;
+    };
+  };
+  const state = root.__fbAgentFetchAbort ??= {
+    controllers: new Map<string, Set<AbortController>>(),
+    cancelled: new Set<string>(),
+  };
+
+  // Построить URL: https://graph.facebook.com/v22.0/<endpoint>?<params>&access_token=<token>
+  const url = new URL(`https://graph.facebook.com/${args.apiVersion}${args.endpoint}`);
+  for (const [key, value] of Object.entries(args.queryParams)) {
+    url.searchParams.set(key, value);
+  }
+  url.searchParams.set('access_token', token);
+
+  // AbortController для таймаута.
+  const controller = new AbortController();
+  const controllers = state.controllers.get(args.operationId) ?? new Set<AbortController>();
+  controllers.add(controller);
+  state.controllers.set(args.operationId, controllers);
+  if (state.cancelled.has(args.operationId)) controller.abort('grpc_cancelled');
+  // Доказанный pre-send: если gRPC-отмена уже была взведена ДО этой строки, abort()
+  // выше отработал строго раньше вызова fetch() ниже — сеть не тронута ни на бит.
+  // Это НЕ вывод из таймингов/resourceTiming (запрещено), а прямое следствие порядка
+  // операций в этом же синхронном участке кода.
+  const cancelledBeforeFetch = controller.signal.aborted;
+  const timeoutId = setTimeout(() => controller.abort('deadline_exceeded'), args.timeoutMs);
+
+  try {
+    const fetchOptions: RequestInit = {
+      method: args.method,
+      credentials: 'include', // КРИТИЧНО: использует cookies сессии (datr, c_user, xs, ...)
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    };
+
+    if (args.bodyJson) {
+      (fetchOptions.headers as Record<string, string>)['Content-Type'] = 'application/json';
+      fetchOptions.body = args.bodyJson;
+    }
+
+    const response = await fetch(url.toString(), fetchOptions);
+    const text = await response.text();
+    return {
+      status_code: response.status,
+      response_json: text,
+    };
+  } catch (err: any) {
+    if (cancelledBeforeFetch) {
+      return {
+        status_code: 0,
+        response_json: JSON.stringify({
+          error: {
+            code: -4,
+            type: 'CancelledBeforeSend',
+            message: 'gRPC отменён до вызова fetch: запрос не покидал browser',
+          },
+        }),
+      };
+    }
+    const cancelled = state.cancelled.has(args.operationId);
+    const errMessage = cancelled
+      ? 'gRPC request cancelled; external result is unknown'
+      : err?.name === 'AbortError'
+        ? `Timeout после ${args.timeoutMs}мс`
+      : String(err?.message ?? err);
+    return {
+      status_code: 0,
+      response_json: JSON.stringify({
+        error: { code: -2, type: 'NetworkError', message: errMessage },
+      }),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+    controllers.delete(controller);
+    if (controllers.size === 0) state.controllers.delete(args.operationId);
+  }
+}
+
 /**
  * Исполняет запрос к Marketing API изнутри активной Playwright-страницы.
  *
@@ -155,91 +277,18 @@ export async function executeGraphCall(
       );
     } catch {
       if (options.signal?.aborted) {
-        return cancelledGraphResult(t0, 'gRPC request cancelled before Graph fetch completed');
+        // page.evaluate(graphFetchInPage) below was never called — fetch() had
+        // no chance to run. This is proven pre-send, not a lost response.
+        return preSendCancelledGraphResult(
+          t0,
+          'gRPC request cancelled before Graph fetch was dispatched',
+        );
       }
       // Token-not-found is returned below as -1 and remains safely retryable.
     }
 
     options.assertBeforeDispatch?.();
-    const result = await raceWithAbort(page.evaluate(async (args) => {
-      // Извлечь access_token из page source.
-      // Используем расширенный regex (EAA*, не только EAAbs*) — на случай если Meta
-      // поменяет префикс. Минимум 100 символов — отсекает шум.
-      const match = document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{100,}/);
-      if (!match) {
-        return {
-          status_code: 0,
-          response_json: JSON.stringify({
-            error: { code: -1, type: 'TokenNotFound', message: 'EAA-токен не найден в page source' },
-          }),
-        };
-      }
-      const token = match[0];
-
-      const root = globalThis as typeof globalThis & {
-        __fbAgentFetchAbort?: {
-          controllers: Map<string, Set<AbortController>>;
-          cancelled: Set<string>;
-        };
-      };
-      const state = root.__fbAgentFetchAbort ??= {
-        controllers: new Map<string, Set<AbortController>>(),
-        cancelled: new Set<string>(),
-      };
-
-      // Построить URL: https://graph.facebook.com/v22.0/<endpoint>?<params>&access_token=<token>
-      const url = new URL(`https://graph.facebook.com/${args.apiVersion}${args.endpoint}`);
-      for (const [key, value] of Object.entries(args.queryParams)) {
-        url.searchParams.set(key, value);
-      }
-      url.searchParams.set('access_token', token);
-
-      // AbortController для таймаута.
-      const controller = new AbortController();
-      const controllers = state.controllers.get(args.operationId) ?? new Set<AbortController>();
-      controllers.add(controller);
-      state.controllers.set(args.operationId, controllers);
-      if (state.cancelled.has(args.operationId)) controller.abort('grpc_cancelled');
-      const timeoutId = setTimeout(() => controller.abort('deadline_exceeded'), args.timeoutMs);
-
-      try {
-        const fetchOptions: RequestInit = {
-          method: args.method,
-          credentials: 'include', // КРИТИЧНО: использует cookies сессии (datr, c_user, xs, ...)
-          headers: { Accept: 'application/json' },
-          signal: controller.signal,
-        };
-
-        if (args.bodyJson) {
-          (fetchOptions.headers as Record<string, string>)['Content-Type'] = 'application/json';
-          fetchOptions.body = args.bodyJson;
-        }
-
-        const response = await fetch(url.toString(), fetchOptions);
-        const text = await response.text();
-        return {
-          status_code: response.status,
-          response_json: text,
-        };
-      } catch (err: any) {
-        const cancelled = state.cancelled.has(args.operationId);
-        const errMessage = cancelled
-          ? 'gRPC request cancelled; external result is unknown'
-          : err?.name === 'AbortError'
-            ? `Timeout после ${args.timeoutMs}мс`
-          : String(err?.message ?? err);
-        return {
-          status_code: 0,
-          response_json: JSON.stringify({
-            error: { code: -2, type: 'NetworkError', message: errMessage },
-          }),
-        };
-      } finally {
-        clearTimeout(timeoutId);
-        controllers.delete(controller);
-        if (controllers.size === 0) state.controllers.delete(args.operationId);
-      }
-    }, evalParams), options.signal);
+    const result = await raceWithAbort(page.evaluate(graphFetchInPage, evalParams), options.signal);
 
     const durationMs = Date.now() - t0;
 
@@ -301,6 +350,28 @@ function cancelledGraphResult(startedAt: number, message: string): GraphApiCallR
       code: -2,
       subcode: 0,
       type: 'NetworkError',
+      message,
+      fbtraceId: '',
+    },
+  };
+}
+
+// Отдельно от cancelledGraphResult (-2, NetworkError): этот путь достижим только
+// когда page.evaluate(graphFetchInPage) ещё НЕ вызван — fetch() не мог стартовать.
+// -2 остаётся для всего, что случилось после диспатча evaluate (в т.ч. отмена,
+// пойманная в внешнем catch уже после отправки) — там доказательства нет.
+function preSendCancelledGraphResult(startedAt: number, message: string): GraphApiCallResult {
+  const responseJson = JSON.stringify({
+    error: { code: -4, type: 'CancelledBeforeSend', message },
+  });
+  return {
+    statusCode: 0,
+    responseJson,
+    durationMs: Date.now() - startedAt,
+    error: {
+      code: -4,
+      subcode: 0,
+      type: 'CancelledBeforeSend',
       message,
       fbtraceId: '',
     },

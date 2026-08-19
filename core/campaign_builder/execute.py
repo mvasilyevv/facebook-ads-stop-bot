@@ -41,7 +41,7 @@ from core.campaign_builder.uniquify import (
     build_uniquification_plan,
     uniquify_concepts,
 )
-from core.meta_api.errors import BrowserReadinessRejectedError, TemporaryError
+from core.meta_api.errors import PreDispatchRejectedError, TemporaryError
 
 logger = logging.getLogger(__name__)
 
@@ -547,18 +547,21 @@ def _raise_for_failure(
     Meta при уже созданных объектах обязан остаться partial, иначе он уедет в ветку
     «повтор безопасен» и даст дубль кампании. Природа причины при этом не теряется —
     её несёт pre_dispatch (см. PartialCreateError).
+
+    Проверяется база PreDispatchRejectedError, а не лист BrowserReadinessRejectedError:
+    доказанный отказ до отправки — это вся семья (истёкший дедлайн до Graph-вызова,
+    отказ выдачи одноразового гранта, отклонённая готовность канала). Листовой класс
+    решает другой вопрос — тратить ли попытку — и остаётся у воркера.
     """
     if _has_created(created):
         raise PartialCreateError(
             f"залив упал на шаге {failed_step!r} (часть объектов создана): {cause!r}",
             created_ids=created,
             failed_step=failed_step,
-            pre_dispatch=isinstance(cause, BrowserReadinessRejectedError),
+            pre_dispatch=isinstance(cause, PreDispatchRejectedError),
         ) from cause
-    if isinstance(cause, BrowserReadinessRejectedError):
-        err = CampaignExecutionError(
-            f"browser readiness rejected before Meta I/O on step {failed_step!r}"
-        )
+    if isinstance(cause, PreDispatchRejectedError):
+        err = CampaignExecutionError(f"rejected before Meta I/O on step {failed_step!r}")
         err.__cause__ = cause
         raise err from cause
     if campaign_create_attempted:

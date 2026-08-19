@@ -184,7 +184,7 @@ async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wa
 
     from core.deadlines import bind_absolute_deadline
     from core.meta_api.client import _LIVE_OPERATION_AUTHORITY_SQL, MetaApiClient
-    from core.meta_api.errors import AmbiguousResultError
+    from core.meta_api.errors import AmbiguousResultError, PreDispatchRejectedError
     from core.meta_api.operation_authority import _CONSUME_PENDING_CAPABILITY_SQL
 
     worker_source = inspect.getsource(
@@ -197,13 +197,16 @@ async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wa
     client = MetaApiClient(session_id="session-deadline")
     client._stub = SimpleNamespace()
     with bind_absolute_deadline(datetime.now(timezone.utc) - timedelta(seconds=1)):
-        with pytest.raises(AmbiguousResultError, match="absolute deadline exhausted"):
+        # Дедлайн проверяется ДО отправки, поэтому исход — доказанный отказ, а не
+        # потерянный ответ: ручная сверка при нуле ушедших запросов бессмысленна.
+        with pytest.raises(PreDispatchRejectedError, match="absolute deadline exhausted") as raised:
             await client.execute_graph_call(
                 method="POST",
                 endpoint="/230011223344",
                 query_params={"status": "PAUSED"},
                 ad_account_id="42",
             )
+    assert not isinstance(raised.value, AmbiguousResultError)
 
 
 def test_overdue_reconciler_does_not_reject_unclaimed_money_work() -> None:
