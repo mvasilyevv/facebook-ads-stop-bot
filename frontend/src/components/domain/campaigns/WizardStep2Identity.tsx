@@ -290,7 +290,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             </label>
             <div
               className={[
-                "min-h-20 rounded-[var(--radius-2)] border px-3 py-2.5 text-[13px]",
+                "min-h-20 flex-1 rounded-[var(--radius-2)] border px-3 py-2.5 text-[13px]",
                 values.account_context_state === "ready"
                   ? "border-success/35 bg-success/10"
                   : values.account_context_state === "stale"
@@ -351,11 +351,13 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
               </span>
             )}
           </div>
-          <div className="min-h-20 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 py-2.5 text-[13px] text-bg-9">
-            <span className="block font-display text-[12px] uppercase tracking-wider text-bg-8">
+          {/* Лейбл снаружи рамки, как у «Контекста кабинета» и полей формы:
+              лейбл внутри давал рамке другую верхнюю кромку и высоту. */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[12px] font-display tracking-wider uppercase text-bg-9">
               Единица работы
             </span>
-            <span className="mt-2 block">
+            <div className="min-h-20 flex-1 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 py-2.5 text-[13px] text-bg-9">
               {(values.ad_account_ids ?? []).length > 0
                 ? formatRussianCount(
                     values.ad_account_ids?.length ?? 0,
@@ -364,7 +366,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
                     "отдельных запусков",
                   )
                 : "Кабинеты ещё не выбраны"}
-            </span>
+            </div>
           </div>
         </div>
       </div>
