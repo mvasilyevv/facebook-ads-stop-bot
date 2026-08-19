@@ -46,9 +46,55 @@ function requireOwnedAccount(value: unknown, expectedAccountId: string): void {
   }
 }
 
+// executeGraphCall никогда не бросает: локальные сбои он пакует в statusCode=0
+// с внутренними кодами, а отказ Meta приходит обычным HTTP-статусом. Без
+// разделения этих миров причина оборванного preflight неустановима (инцидент
+// 19.08.2026: два залива подряд встали посередине с одинаковым сообщением).
+const LOCAL_READ_FAILURE_REASONS: ReadonlyMap<number, string> = new Map([
+  [-1, 'session_token_absent'],
+  [-2, 'channel_unreachable'],
+  [-3, 'page_context_lost'],
+]);
+
+function graphReadFailed(result: GraphApiCallResult): boolean {
+  return result.statusCode < 200 || result.statusCode >= 300 || Boolean(result.error);
+}
+
+function readFailureReason(result: GraphApiCallResult): string {
+  if (result.statusCode !== 0) {
+    return 'meta_refused';
+  }
+  return LOCAL_READ_FAILURE_REASONS.get(Number(result.error?.code ?? 0))
+    ?? 'channel_result_unknown';
+}
+
+/**
+ * Отказать в preflight с машиночитаемой причиной. Причина едет в gRPC-сообщении
+ * и доезжает до last_error задачи; классификация отказа не меняется — это
+ * по-прежнему pre-dispatch FAILED_PRECONDITION без побочных эффектов в Meta.
+ */
+function failGraphRead(result: GraphApiCallResult, subject: string): never {
+  const reason = readFailureReason(result);
+  const code = Number(result.error?.code ?? 0);
+  const type = String(result.error?.type ?? '');
+  // Текст сообщения логируется только когда он пришёл от Meta. Сообщения кодов
+  // -1/-2/-3 — это локальные тексты исключений страницы, наружу они не идут.
+  const metaMessage = reason === 'meta_refused'
+    ? ` meta_message=${JSON.stringify(String(result.error?.message ?? ''))}`
+    : '';
+  console.warn(
+    `[meta-api] ownership preflight read failed subject=${subject} reason=${reason}`
+    + ` status=${result.statusCode} code=${code} type=${type}${metaMessage}`,
+  );
+  throw new Error(
+    `Browser operation ownership preflight could not read ${subject}`
+    + ` (reason=${reason}, status=${result.statusCode}, code=${code})`,
+  );
+}
+
 function parseObjectOwnership(result: GraphApiCallResult): unknown {
-  if (result.statusCode < 200 || result.statusCode >= 300 || result.error) {
-    throw new Error('Browser operation ownership preflight could not read the Meta target');
+  if (graphReadFailed(result)) {
+    failGraphRead(result, 'the Meta target');
   }
   let body: unknown;
   try {
@@ -128,8 +174,8 @@ async function assertNumericTargetsOwned(
       ? `${options.operationId}:ownership`
       : undefined,
   });
-  if (result.statusCode < 200 || result.statusCode >= 300 || result.error) {
-    throw new Error('Browser operation ownership preflight could not read batch targets');
+  if (graphReadFailed(result)) {
+    failGraphRead(result, 'batch targets');
   }
 
   let rows: unknown;

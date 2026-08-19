@@ -33,7 +33,7 @@ import { assertGraphOperationOwnership } from './ownership.js';
 // It retains exact task/query/body semantics for every controlled operation.
 export const BROWSER_CONTRACT_VERSION = BROWSER_OPERATION_CONTRACT_VERSION;
 
-function grpcCodeForError(err: any): number {
+export function grpcCodeForError(err: any): number {
   const message = String(err?.message || '').toLowerCase();
   if (message.includes('capability consume was denied')) {
     // A durable row may already have been consumed by a process that died

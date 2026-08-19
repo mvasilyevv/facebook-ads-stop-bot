@@ -1,7 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as grpc from '@grpc/grpc-js';
 
+import type { GraphApiCallParams } from './client.js';
 import { assertGraphOperationOwnership } from './ownership.js';
+import { grpcCodeForError } from './service.js';
 
 const PAGE = {} as any;
 
@@ -193,6 +196,93 @@ describe('authoritative Meta object ownership preflight', () => {
       /unknown Graph batch shape/,
     );
     assert.equal(graphReads, 0);
+  });
+
+  it('separates a dead page, an unreachable channel and a Meta refusal', async () => {
+    // executeGraphCall никогда не бросает и пакует в statusCode=0 три разных мира
+    // (-1 токен, -2 сеть/таймаут/отмена, -3 смерть контекста страницы). Preflight
+    // обязан различать их между собой и от честного HTTP-отказа Meta, иначе
+    // причина оборванного залива неустановима.
+    const cases = [
+      {
+        reason: 'channel_unreachable',
+        statusCode: 0,
+        code: -2,
+        type: 'NetworkError',
+        message: 'Failed to fetch',
+      },
+      {
+        reason: 'page_context_lost',
+        statusCode: 0,
+        code: -3,
+        type: 'PageEvaluateError',
+        message: 'Execution context was destroyed',
+      },
+      {
+        reason: 'meta_refused',
+        statusCode: 400,
+        code: 100,
+        type: 'OAuthException',
+        message: 'Unsupported get request',
+      },
+    ];
+
+    const seenReasons = new Set<string>();
+    for (const testCase of cases) {
+      const probes: GraphApiCallParams[] = [
+        { method: 'POST', endpoint: '/111', queryParams: { status: 'PAUSED' } },
+        {
+          method: 'POST',
+          endpoint: '/',
+          queryParams: {
+            batch: JSON.stringify([{ method: 'POST', relative_url: '111?status=PAUSED' }]),
+          },
+        },
+      ];
+      for (const params of probes) {
+        let graphReads = 0;
+        await assert.rejects(
+          () => assertGraphOperationOwnership(PAGE, params, '123', {
+            executeGraph: async () => {
+              graphReads += 1;
+              return {
+                statusCode: testCase.statusCode,
+                responseJson: JSON.stringify({
+                  error: {
+                    code: testCase.code,
+                    type: testCase.type,
+                    message: testCase.message,
+                  },
+                }),
+                durationMs: 1,
+                error: {
+                  code: testCase.code,
+                  subcode: 0,
+                  type: testCase.type,
+                  message: testCase.message,
+                  fbtraceId: '',
+                },
+              };
+            },
+          }),
+          (err: unknown) => {
+            const text = String((err as Error).message);
+            assert.match(text, /ownership preflight/);
+            assert.match(text, new RegExp(`reason=${testCase.reason}(?![a-z_])`));
+            assert.match(text, new RegExp(`status=${testCase.statusCode}(?!\\d)`));
+            assert.match(text, new RegExp(`code=${testCase.code}(?!\\d)`));
+            // Классификация отказа не меняется: preflight остаётся pre-dispatch
+            // FAILED_PRECONDITION, а не PERMISSION_DENIED и не INTERNAL.
+            assert.equal(grpcCodeForError(err), grpc.status.FAILED_PRECONDITION);
+            seenReasons.add(testCase.reason);
+            return true;
+          },
+        );
+        // Ровно одно чтение владения: отказ не превращается в повторную отправку.
+        assert.equal(graphReads, 1);
+      }
+    }
+    assert.equal(seenReasons.size, 3);
   });
 
   it('rejects encoded or path-shaped batch targets before lookup', async () => {
