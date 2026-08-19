@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 VERIFY_WORKFLOW = ROOT / ".github/workflows/verify.yml"
 IMAGE_WORKFLOW = ROOT / ".github/workflows/publish-images.yml"
@@ -716,7 +718,7 @@ def test_called_verify_cannot_cancel_a_manual_release() -> None:
 # прямиком в Telegram.
 _REPORT_ALLOWED_EXPRESSIONS = frozenset(
     {
-        "!cancelled()",
+        "always()",
         "secrets.TELEGRAM_BOT_TOKEN",
         "secrets.TELEGRAM_ALERT_CHAT_ID",
         "needs.verify.result",
@@ -746,17 +748,28 @@ def test_release_reports_its_outcome_without_leaking_details() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     report = _job_block(release, "report")
 
-    # Отменённый прогон — не провал: push-прогоны отменяют друг друга на каждом
-    # следующем коммите, и always() слал бы «не выкачен» после каждой пары.
-    assert "if: ${{ !cancelled() }}" in report
-    assert "if: always()" not in report
-    # Провал предполётной проверки делает skipped всё, что ниже: без неё в
-    # needs отчёт рапортовал бы об успехе выкатки, которой не было.
-    assert (
-        "needs: [verify, bootstrap-source-preflight, images, control-bundle, "
-        "docker-rehearsal, deploy]" in report
-    )
+    # Джоба, срубленная собственным timeout-minutes, приходит как cancelled, а
+    # не failure. Отчёт обязан исполняться и тогда — иначе зависание, ради
+    # которого пределы времени и заводились, осталось бы без сообщения.
+    assert "if: ${{ always() }}" in report
+    # Вытеснение следующим пушем отличается по составу результатов, а не
+    # отказом исполняться: отменено всё, что начиналось, успевших нет.
+    assert 'if [ -z "$failures" ] && [ -n "$timeouts" ] && [ "$succeeded" -eq 0 ]' in report
+    assert "cancelled) timeouts=" in report
+    assert "success) succeeded=" in report
     assert "timeout-minutes: 5" in report
+
+    # Отчёт обязан знать КАЖДУЮ джобу релиза. Новая джоба, забытая в needs,
+    # даёт зелёное сообщение на красный прогон — ровно то, ради чего отчёт и
+    # заводился. Захардкоженный список здесь стареет молча, поэтому сверяем с
+    # фактическим составом workflow.
+    document = yaml.safe_load(release)
+    expected = sorted(name for name in document["jobs"] if name != "report")
+    declared = sorted(document["jobs"]["report"]["needs"])
+    assert declared == expected, (
+        f"джобы релиза мимо отчёта: {sorted(set(expected) - set(declared))} — "
+        "их провал уйдёт в Telegram как успех"
+    )
 
     # Пустой секрет не роняет релиз, но и не молчит: у джобы нет environment,
     # и владелец, положивший токен в окружение production, обязан узнать об
@@ -770,7 +783,12 @@ def test_release_reports_its_outcome_without_leaking_details() -> None:
     assert 'text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"' in report
     assert 'text="Релиз выкачен. ${RUN_URL}"' in report
     assert 'text="Релиз собран, выкатка не запускалась. ${RUN_URL}"' in report
-    assert '[ "$result" = "failure" ]' in report, "провалом считается только failure"
+    # Провалом считается и failure, и cancelled: срубленная своим пределом
+    # времени джоба приходит вторым, а не первым, и молчать о ней нельзя.
+    assert "failure|cancelled" not in report, "два состояния различаются, а не сливаются"
+    assert 'failures="${failures:+$failures, }$name ($result)"' in report
+    assert 'timeouts="${timeouts:+$timeouts, }$name"' in report
+    assert 'failed="${failed:+$failed, }предел времени: ${timeouts}"' in report
     assert '[ "$DEPLOY" = "success" ]' in report, (
         "«Релиз выкачен» обязано опираться на успех выкатки, а не на отсутствие провалов"
     )

@@ -356,10 +356,12 @@ jobs:
     name: Report release outcome
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Отменённый прогон — не провал. Прогоны от push отменяют друг друга на
-    # каждом следующем коммите, и always() рапортовал бы серию cancelled как
-    # «релиз не выкачен» после каждой пары коммитов подряд.
-    if: ${{ !cancelled() }}
+    # Джоба, срубленная собственным timeout-minutes, приходит как cancelled, а
+    # не failure — 19.08 так умерла джоба platform. Поэтому отчёт обязан
+    # исполняться и на отменённом прогоне, иначе зависание, ради которого
+    # пределы времени и ставились, осталось бы вообще без сообщения. Вытеснение
+    # следующим пушем отличается уже внутри шага, по составу результатов.
+    if: ${{ always() }}
     needs: [verify, bootstrap-source-preflight, images, control-bundle, docker-rehearsal, deploy]
     steps:
       # Наружу уходит только исход, имя провалившейся джобы и ссылка на прогон.
@@ -396,14 +398,36 @@ jobs:
           # main деплой не запускает (он требует workflow_dispatch), и «Релиз
           # выкачен» на таком прогоне было бы прямой ложью. Но skipped и не
           # провал: пропущенное звено ни на чём не встало.
-          failed=""
+          # cancelled у джобы значит две разные вещи, и путать их нельзя:
+          #  - весь прогон вытеснен следующим пушем — тогда отменено всё, что
+          #    успело начаться, ни одна джоба не дошла до успеха, и говорить
+          #    не о чем;
+          #  - джоба упёрлась в собственный предел времени — тогда рядом есть
+          #    успешные, и это ровно то зависание, ради которого пределы и
+          #    заводились.
+          failures=""
+          timeouts=""
+          succeeded=0
           for pair in "проверка:$VERIFY" "предполёт:$PREFLIGHT" "образы:$IMAGES" "бандл:$BUNDLE" "репетиция:$REHEARSAL" "выкатка:$DEPLOY"; do
             name="${pair%%:*}"
             result="${pair##*:}"
-            if [ "$result" = "failure" ]; then
-              failed="${failed:+$failed, }$name ($result)"
-            fi
+            case "$result" in
+              success) succeeded=$((succeeded + 1)) ;;
+              skipped) ;;
+              cancelled) timeouts="${timeouts:+$timeouts, }$name" ;;
+              *) failures="${failures:+$failures, }$name ($result)" ;;
+            esac
           done
+
+          if [ -z "$failures" ] && [ -n "$timeouts" ] && [ "$succeeded" -eq 0 ]; then
+            echo "прогон вытеснен следующим пушем — сообщать не о чем"
+            exit 0
+          fi
+
+          failed="$failures"
+          if [ -n "$timeouts" ]; then
+            failed="${failed:+$failed, }предел времени: ${timeouts}"
+          fi
 
           if [ -n "$failed" ]; then
             text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"
