@@ -212,7 +212,15 @@ def require_operator_snapshot(client: ProbeClient, api_origin: str, api_key: str
             raise FbctlError(f"operator snapshot evidence is incomplete: {name}")
 
 
-def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) -> None:
+def require_browser_contract(client: ProbeClient, api_origin: str, api_key: str) -> None:
+    """Проверить то, что доказывает правильность выкатки, и только это.
+
+    Несовместимый контракт и чужой живой профиль — дефекты релиза: выкатили не
+    тот образ или подключились не к тому браузеру. Такое обязано валить деплой.
+
+    Живость сессии Facebook сюда не входит намеренно: она не зависит от того,
+    что мы выкатили, и чинится человеком в браузере.
+    """
     status, payload = client.json(
         f"{api_origin}/api/settings/vision",
         headers=api_headers(api_key),
@@ -230,6 +238,20 @@ def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) ->
         raise FbctlError("browser-agent contract is incompatible")
     if not isinstance(profile_id, str) or not profile_id or live_profile_id != profile_id:
         raise FbctlError("live Vision profile does not match canonical configuration")
+
+
+def require_browser_channel_live(client: ProbeClient, api_origin: str, api_key: str) -> None:
+    """Проверить, что канал реально живой: Graph-проба прошла, сессия названа.
+
+    Отдельно от контракта: это состояние сессии Facebook, а не свойство релиза.
+    """
+    status, payload = client.json(
+        f"{api_origin}/api/settings/vision",
+        headers=api_headers(api_key),
+        timeout=40,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        raise FbctlError("browser readiness endpoint is unavailable")
     if (
         payload.get("graph_probe_performed") is not True
         or payload.get("graph_probe_ok") is not True
@@ -237,6 +259,12 @@ def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) ->
         raise FbctlError("browser-agent did not confirm the required Graph probe")
     if payload.get("channel_status") != "READY" or not payload.get("browser_session_id"):
         raise FbctlError("browser channel is not READY with a concrete session")
+
+
+def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) -> None:
+    """Полная проверка: правильность выкатки и живой канал разом."""
+    require_browser_contract(client, api_origin, api_key)
+    require_browser_channel_live(client, api_origin, api_key)
 
 
 def ensure_browser_channel(client: ProbeClient, api_origin: str, api_key: str) -> tuple[bool, str]:

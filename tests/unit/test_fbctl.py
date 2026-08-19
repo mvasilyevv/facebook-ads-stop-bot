@@ -3915,7 +3915,7 @@ def test_channel_step_does_not_claim_a_dead_api_as_its_own_failure(tmp_path: Pat
 
 
 class _UnhealableChannelProbes(FakeProbes):
-    """API поднялся, но браузерный канал не встаёт ни с одной попытки."""
+    """API поднялся, но живой профиль — не тот, что назван в конфигурации."""
 
     def __init__(self) -> None:
         self.json_urls: list[str] = []
@@ -3951,13 +3951,13 @@ def test_unhealable_channel_stops_the_whole_deploy_before_the_gate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Шаг не только падает сам — он обязан остановить весь релиз.
+    """Дефект выкатки не только падает сам — он обязан остановить весь релиз.
 
-    Отдельно проверенный контракт шага ничего не говорит о его месте в
-    последовательности. Здесь идёт настоящий deploy: непожелавший подняться
-    канал должен остановить его ДО гейта verify_application (иначе владелец
-    получил бы вторичный диагноз вместо первичного), не промоутить кандидата и
-    погасить money-воркеры через failure cleanup.
+    Живой профиль, не совпавший с канонической конфигурацией, означает, что мы
+    управляем не тем браузером: это свойство выкатки, а не состояние сессии
+    Facebook. Такой отказ должен остановить деплой ДО гейта verify_application
+    (иначе владелец получил бы вторичный диагноз вместо первичного), не
+    промоутить кандидата и погасить money-воркеры через failure cleanup.
     """
     root = _root(tmp_path)
     runner = FakeRunner()
@@ -3982,7 +3982,7 @@ def test_unhealable_channel_stops_the_whole_deploy_before_the_gate(
         sleep=lambda _seconds: None,
     )
 
-    with pytest.raises(FbctlError, match="Browser-agent profile recovery failed"):
+    with pytest.raises(FbctlError, match="live Vision profile does not match"):
         controller.deploy(DeployOptions(root=root))
 
     # Гейт verify_application читает снимок оператора — до него не дошло.
@@ -3996,6 +3996,78 @@ def test_unhealable_channel_stops_the_whole_deploy_before_the_gate(
 # channel: browser channel is not ready (Profile restart completed but the
 # channel is not ready)». Что делать оператору — в сообщении не было, и диагноз
 # добывали вручную шестью ssh-запросами, пока money-воркеры лежали.
+class _SignedOutChannelProbes(FakeProbes):
+    """Образ выкачен верно, профиль тот самый, но Facebook разлогинен."""
+
+    def json(self, url: str, *, headers=None, timeout: float = 15):
+        if url.endswith("/api/settings/vision"):
+            return 200, {
+                "required_browser_contract_version": 5,
+                "browser_contract_version": 5,
+                "browser_contract_compatible": True,
+                "profile_id": "profile-1",
+                "live_profile_id": "profile-1",
+                "graph_probe_performed": True,
+                "graph_probe_ok": False,
+                "channel_status": "UNAVAILABLE",
+                "browser_session_id": None,
+            }
+        return super().json(url, headers=headers, timeout=timeout)
+
+    def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
+        del payload, headers, timeout
+        assert url.endswith("/api/vision/ensure-cdp")
+        return 200, {
+            "ok": False,
+            "status": "UNAVAILABLE",
+            "message": "Profile restart completed but the channel is not ready",
+        }
+
+
+# Разлогин в Facebook — состояние браузера, а не свойство выкатки. Пока он валил
+# релиз, каждый выход из аккаунта означал непромоутнутого кандидата и погашенные
+# money-воркеры: прод останавливался ради того, чего он и так не сделал бы —
+# очередь не отдаёт money-задачу без свежего browser_channel_readiness.
+def test_signed_out_browser_channel_degrades_release_instead_of_failing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _root(tmp_path)
+    runner = FakeRunner()
+    clock = iter(range(0, 100_000, 100))
+    log: list[str] = []
+    monkeypatch.setattr(
+        ProductionController,
+        "_require_caddy_credentials",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(ProductionController, "_sync_caddy", lambda *_args: None)
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_retire_legacy_systemd_units",
+        lambda *_args, **_kwargs: [],
+    )
+    controller = ProductionController(
+        runner=runner,
+        probes=_SignedOutChannelProbes(),
+        materialize=_materialize,
+        monotonic=lambda: float(next(clock)),
+        sleep=lambda _seconds: None,
+        log=log.append,
+    )
+
+    result = controller.deploy(DeployOptions(root=root))
+
+    assert result.status == "DEGRADED"
+    assert "browser_channel_not_ready" in result.warnings
+    # Релиз промоутнут, воркеры подняты: прод работает всем, что не требует
+    # живого браузера.
+    assert (root / "runtime").is_symlink()
+    assert any(step == "start_workers" for step, _command in runner.commands)
+    assert not any(step == "failure_cleanup" for step, _command in runner.commands)
+    assert any("RustDesk" in message for message in log)
+
+
 def test_desktop_channel_failure_names_the_operator_action() -> None:
     import inspect
 

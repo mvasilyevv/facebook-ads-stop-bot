@@ -763,6 +763,13 @@ _REPORT_ALLOWED_EXPRESSIONS = frozenset(
         "github.server_url",
         "github.repository",
         "github.run_id",
+        # Причина пропуска выкатки. Значения фиксированные и не подконтрольны
+        # автору коммита: событие запуска, имя ветки и репозиторная переменная
+        # (vars, не secrets). В текст сообщения они не подставляются — только
+        # сравниваются, чтобы назвать причину словами.
+        "github.event_name",
+        "github.ref",
+        "vars.CI_DEPLOY_ENABLED",
     }
 )
 
@@ -812,10 +819,16 @@ def test_release_reports_its_outcome_without_leaking_details() -> None:
     assert "::warning::" in report
     assert "Repository secrets" in report
 
-    # Три исхода и ни одного четвёртого.
+    # Исходы: провал, выкатка и три разные причины пропуска. Причину обязан
+    # назвать сам отчёт — читатель видит его в Telegram и до условий джобы не
+    # добирается, а «выкатка не запускалась» он раз за разом читал как поломку.
     assert 'text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"' in report
-    assert 'text="Релиз выкачен. ${RUN_URL}"' in report
-    assert 'text="Релиз собран, выкатка не запускалась. ${RUN_URL}"' in report
+    assert 'text="Релиз выкачен на прод. ${RUN_URL}"' in report
+    assert '[ "$EVENT" != "workflow_dispatch" ]' in report
+    assert "прогон от пуша" in report
+    assert '[ "$DEPLOY_ENABLED" != "true" ]' in report
+    assert "CI_DEPLOY_ENABLED" in report
+    assert '[ "$REF" != "refs/heads/main" ]' in report
     # Провалом считается и failure, и cancelled: срубленная своим пределом
     # времени джоба приходит вторым, а не первым, и молчать о ней нельзя.
     assert "failure|cancelled" not in report, "два состояния различаются, а не сливаются"

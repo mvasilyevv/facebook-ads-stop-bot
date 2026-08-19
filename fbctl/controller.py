@@ -66,6 +66,7 @@ from fbctl.probes import (
     ensure_browser_channel,
     parse_worker_db_poll_success,
     parse_worker_heartbeat,
+    require_browser_contract,
     require_exact_browser,
     require_ok_status,
     require_openapi,
@@ -334,10 +335,13 @@ class ProductionController:
                 self._step("verify_adoption", options, lambda: self._require_adoption(config))
                 self._step("start_desktop", options, lambda: self._start_desktop(config))
                 self._step("start_application", options, lambda: self._start_application(config))
-                self._step(
-                    "ensure_desktop_channel",
-                    options,
-                    lambda: self._ensure_desktop_channel(config),
+                warnings.extend(
+                    self._step(
+                        "ensure_desktop_channel",
+                        options,
+                        lambda: self._ensure_desktop_channel(config),
+                    )
+                    or ()
                 )
                 self._step(
                     "verify_application",
@@ -970,7 +974,7 @@ class ProductionController:
         )
         self._require_managed_resources(config, include_campaign=True)
 
-    def _ensure_desktop_channel(self, config: RuntimeConfig) -> None:
+    def _ensure_desktop_channel(self, config: RuntimeConfig) -> tuple[str, ...]:
         """Поднять браузерный канал до того, как его начнёт проверять гейт.
 
         Стол пересоздаётся каждым деплоем, поэтому канал после старта всегда
@@ -989,9 +993,9 @@ class ProductionController:
         # Зовём её РОВНО ОДИН раз и дальше ждём чтением, иначе каждая попытка
         # убивает браузер, который ещё поднимается, и холодный старт не может
         # завершиться никогда — сколько бы времени шаг ни ждал.
-        ready, reason = ensure_browser_channel(self.probes, api, config.api_key)
+        ready, _reason = ensure_browser_channel(self.probes, api, config.api_key)
         if ready:
-            return
+            return ()
         try:
             wait_for(
                 "browser channel after the requested profile start",
@@ -1001,17 +1005,26 @@ class ProductionController:
                 monotonic=self.monotonic,
                 sleep=self.sleep,
             )
-        except Exception as exc:
-            # Технический текст ручки не говорит, что делать. Чаще всего Vision
-            # не поднимает браузер профиля после пересоздания стола, и починить
-            # это может только человек у экрана (инцидент 18.08.2026: диагноз
-            # добывали вручную, пока money-воркеры лежали).
-            raise FbctlError(
-                f"{exc} (последний ответ ручки: {reason}). Vision не поднял "
-                "браузер профиля за отведённое время после пересоздания стола: "
-                "зайди на стол через RustDesk, запусти профиль и проверь, что "
-                "Facebook залогинен, затем повтори деплой — он идемпотентен."
-            ) from exc
+        except Exception:
+            # Правильность выкатки проверяем жёстко: несовместимый контракт или
+            # чужой живой профиль — дефекты релиза, и они обязаны его валить.
+            require_browser_contract(self.probes, api, config.api_key)
+            # А вот мёртвый канал релизом не чинится. Чаще всего профиль просто
+            # разлогинен в Facebook — это состояние браузера, а не свойство
+            # выкатки. Валить релиз за это значило останавливать money-воркеры
+            # ради того, что они и так не смогут сделать: очередь не отдаёт
+            # money-задачу без свежего browser_channel_readiness, а каждый
+            # управляемый RPC отдельно проверяет живость канала. Отмечаем
+            # DEGRADED и идём дальше.
+            self.log(
+                "[fbctl] браузерный канал не готов: чаще всего профиль "
+                "разлогинен в Facebook. Релиз выкачен и помечен DEGRADED; "
+                "money-задачи очередь не отдаёт, пока канал мёртв. Зайди на "
+                "стол через RustDesk, запусти профиль и войди в Facebook — "
+                "повторять деплой ради этого не нужно."
+            )
+            return ("browser_channel_not_ready",)
+        return ()
 
     def _verify_application(self, config: RuntimeConfig) -> None:
         api = self._api_origin(config)
@@ -1019,9 +1032,12 @@ class ProductionController:
         require_ok_status(self.probes, f"{api}/readyz")
         require_openapi(self.probes, api)
         require_operator_snapshot(self.probes, api, config.api_key)
+        # Живость канала здесь уже не требуем: её проверил и, если нужно,
+        # пометил DEGRADED шаг ensure_desktop_channel. Иначе разлогин в Facebook
+        # валил бы релиз дважды и обеими проверками сразу.
         wait_for(
-            "exact Vision profile, browser contract v5 and Graph probe",
-            lambda: require_exact_browser(self.probes, api, config.api_key),
+            "exact Vision profile and browser contract v5",
+            lambda: require_browser_contract(self.probes, api, config.api_key),
             timeout=180,
             interval=3,
             monotonic=self.monotonic,
