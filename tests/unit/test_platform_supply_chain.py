@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VERIFY_WORKFLOW = ROOT / ".github/workflows/verify.yml"
 IMAGE_WORKFLOW = ROOT / ".github/workflows/publish-images.yml"
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+LOCKFILE = ROOT / "pnpm-lock.yaml"
 
 
 def _job_block(text: str, job: str) -> str:
@@ -184,7 +185,26 @@ def test_ui_evidence_is_a_release_gate() -> None:
     evidence = _job_block(verify, "ui-evidence")
 
     assert "pnpm install --frozen-lockfile" in evidence
-    assert "playwright install --with-deps chromium firefox webkit" in evidence
+    # Браузеры приходят из образа, закреплённого по digest: установка через
+    # `playwright install-deps` зовёт apt и 19.08.2026 повесила джобу на 29 минут.
+    # Версия образа обязана совпадать с клиентом из lock-файла — разъехавшись,
+    # они дают несовпадение сборок браузера прямо посреди приёмочного прогона.
+    image = re.search(
+        r"image: mcr\.microsoft\.com/playwright:v(?P<version>[\d.]+)-noble@sha256:[0-9a-f]{64}",
+        evidence,
+    )
+    assert image is not None, "джоба не закрепляет образ Playwright по digest"
+    locked = re.search(r"(?m)^  '@playwright/test@(?P<version>[\d.]+)':$", LOCKFILE.read_text())
+    assert locked is not None
+    assert image.group("version") == locked.group("version"), (
+        f"образ Playwright v{image.group('version')} разошёлся с клиентом "
+        f"{locked.group('version')} из pnpm-lock.yaml"
+    )
+    assert "--ipc=host" in evidence, "Chromium без общей IPC падает по разделяемой памяти"
+    executable = "\n".join(
+        line for line in evidence.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "playwright install" not in executable
     assert "build-storybook" in evidence
     assert "test:storybook" in evidence
     assert "test:e2e" in evidence

@@ -150,6 +150,17 @@ jobs:
     name: Storybook a11y and Playwright
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Браузеры и их системные библиотеки приходят готовыми в образе Playwright.
+    # Раньше их доставлял `playwright install-deps`, который внутри зовёт apt:
+    # 19.08.2026 шаг провисел 29 минут 48 секунд на зеркалах Ubuntu и срубил
+    # релиз таймаутом. Образ раннера несёт Chrome и Firefox, но не библиотеки
+    # WebKit, поэтому просто убрать установку было нельзя. Версия образа обязана
+    # совпадать с @playwright/test из lock-файла — иначе браузеры разъедутся с
+    # клиентом; это стережёт test_ui_evidence_is_a_release_gate.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+      # Chromium в контейнере без общей IPC падает по нехватке разделяемой памяти.
+      options: --ipc=host
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -168,25 +179,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
-
-      # Три браузера тянутся заново каждый прогон и занимают минуты. Ключ
-      # привязан к версии Playwright из lock-файла: смена версии — новый кэш.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install browser runtimes
-        run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            # Бинарники уже в кэше; системные библиотеки живут в образе раннера
-            # и кэшу не подлежат, поэтому ставим их отдельно.
-            pnpm --filter fb-stop-bot-frontend exec playwright install-deps chromium firefox webkit
-          else
-            pnpm --filter fb-stop-bot-frontend exec playwright install --with-deps chromium firefox webkit
-          fi
 
       - name: Storybook and accessibility
         run: |
