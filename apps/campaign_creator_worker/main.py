@@ -275,6 +275,7 @@ async def _persist_partial_created_ids(
     task: Task,
     created_ids: dict[str, Any],
     failed_step: str,
+    pre_dispatch: bool | None = None,
 ) -> bool:
     """created_ids partial-провала — в task_queue.result, не только в логи/campaign_run.
 
@@ -284,7 +285,7 @@ async def _persist_partial_created_ids(
     Пишем ДО mark_failed (guard status='running' тот же); best-effort — сбой записи
     не должен помешать mark_failed.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "outcome": "UNKNOWN",
         "reconcile_required": True,
         "manual_review_required": True,
@@ -293,6 +294,9 @@ async def _persist_partial_created_ids(
         "failed_step": failed_step,
         "created_ids": created_ids,
     }
+    # Признак пишем только доказанный: его отсутствие означает «неизвестно».
+    if pre_dispatch is not None:
+        payload["pre_dispatch"] = bool(pre_dispatch)
     try:
         async with engine.begin() as conn:
             result = await conn.execute(
@@ -373,7 +377,13 @@ def _campaign_unknown_result(
     reason: str,
     created_ids: dict[str, Any] | None = None,
     failed_step: str | None = None,
+    pre_dispatch: bool | None = None,
 ) -> dict[str, Any]:
+    """Результат неизвестного исхода: сверка обязательна, признаки — только доказанные.
+
+    pre_dispatch=True — доказано, что последний отказ был до отправки запроса в Meta.
+    None (ключа нет) — неизвестно; исход UNKNOWN и ручная сверка от признака не зависят.
+    """
     result: dict[str, Any] = {
         "outcome": "UNKNOWN",
         "reconcile_required": True,
@@ -386,6 +396,8 @@ def _campaign_unknown_result(
         result["created_ids"] = created_ids
     if failed_step is not None:
         result["failed_step"] = failed_step
+    if pre_dispatch is not None:
+        result["pre_dispatch"] = bool(pre_dispatch)
     if task.correlation_id is not None:
         result["correlation_id"] = str(task.correlation_id)
     return result
@@ -819,6 +831,7 @@ async def _execute_run(
             task=task,
             created_ids=exc.created_ids,
             failed_step=exc.failed_step,
+            pre_dispatch=exc.pre_dispatch,
         )
         await finalize_run_failed(
             engine,
@@ -832,6 +845,7 @@ async def _execute_run(
                 reason="partial_or_ack_lost",
                 created_ids=exc.created_ids,
                 failed_step=exc.failed_step,
+                pre_dispatch=exc.pre_dispatch,
             ),
             progress={
                 "stage": "failed",

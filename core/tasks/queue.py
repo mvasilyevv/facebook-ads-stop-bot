@@ -621,6 +621,11 @@ async def _enqueue_standalone_campaign_unknown(
         )
         if (count := _created_kind_count(created_ids.get(kind))) > 0
     ]
+    # Доказанный отказ до отправки в Facebook: перечисленное создано, сверх него
+    # создаться было нечему. Отсутствие признака означает «неизвестно» — тогда
+    # карточка ничего про отправку не утверждает. Без перечня созданного признаку
+    # не к чему привязаться, поэтому он молчит.
+    pre_dispatch = result.get("pre_dispatch") is True and bool(created_parts)
     lines = [
         (
             f"Успело создаться: {' · '.join(created_parts)}"
@@ -629,6 +634,8 @@ async def _enqueue_standalone_campaign_unknown(
         ),
         "Сверь результат в Ads Manager до повторного запуска",
     ]
+    if pre_dispatch:
+        lines.insert(1, "Сорвалось до отправки следующего запроса в Facebook")
 
     from core.telegram.worker_notify import notify_recurring_incident_in_transaction
 
@@ -640,9 +647,13 @@ async def _enqueue_standalone_campaign_unknown(
         severity="critical",
         title="Создание кампании требует сверки",
         summary=(
-            "Facebook мог создать только часть объектов."
-            if created_ids
-            else "Facebook мог принять создание, но подтверждение потеряно."
+            "Создалась часть объектов, сверх перечисленного создаться было нечему."
+            if pre_dispatch
+            else (
+                "Facebook мог создать только часть объектов."
+                if created_ids
+                else "Facebook мог принять создание, но подтверждение потеряно."
+            )
         ),
         lines=lines,
         risk="Повторный запуск без сверки удвоит кампанию и бюджет",

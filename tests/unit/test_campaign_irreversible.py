@@ -250,6 +250,97 @@ def test_readiness_rejection_after_confirmed_create_remains_partial() -> None:
     assert classify_execution_error(raised.value) == "partial"
 
 
+# Отказ готовности браузера ДО отправки в Meta, случившийся после подтверждённого
+# создания: исход не меняется (partial → UNKNOWN, ручная сверка), но причина
+# больше не теряется — pre_dispatch помечает доказанный отказ до отправки.
+def test_readiness_rejection_after_confirmed_create_is_marked_pre_dispatch() -> None:
+    cause = BrowserReadinessRejectedError("upload rejected before its Meta dispatch")
+    created = {"campaigns": ["campaign-1"], "adsets": [], "creatives": [], "ads": []}
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="uploading",
+            campaign_create_attempted=True,
+        )
+
+    # Стена от дубля стоит на месте: partial, необратимо, requeue запрещён.
+    assert classify_execution_error(raised.value) == "partial"
+    assert raised.value.irreversible_attempted is True
+    assert raised.value.pre_dispatch is True
+
+
+# Любая другая причина при непустом created: отказ до отправки НЕ доказан → pre_dispatch=False
+# (ответ Meta мог потеряться). False здесь означает «не доказано», а не «запрос ушёл».
+def test_partial_without_proof_of_pre_dispatch_is_not_marked() -> None:
+    cause = TemporaryError("vision flapped mid-flight")
+    created = {"campaigns": ["campaign-1"], "adsets": ["adset-1"], "creatives": [], "ads": []}
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="creating_ads",
+            campaign_create_attempted=True,
+        )
+
+    assert raised.value.pre_dispatch is False
+    assert classify_execution_error(raised.value) == "partial"
+
+
+# ack-lost (created пуст, POST campaign инициирован) — отказ заведомо ПОСЛЕ отправки.
+def test_ack_lost_partial_is_not_marked_pre_dispatch() -> None:
+    cause = TemporaryError("meta answer lost")
+    created = {"campaigns": [], "adsets": [], "creatives": [], "ads": []}
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="creating",
+            campaign_create_attempted=True,
+        )
+
+    assert raised.value.pre_dispatch is False
+
+
+# Результат задачи несёт признак наружу: исход прежний (UNKNOWN + ручная сверка),
+# добавлен только признак «отказ до отправки в Meta».
+def test_task_result_carries_pre_dispatch_without_changing_outcome() -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    result = worker._campaign_unknown_result(  # noqa: SLF001
+        _make_task(),
+        run_id="run-1",
+        reason="partial_or_ack_lost",
+        created_ids={"campaigns": ["campaign-1"]},
+        failed_step="uploading",
+        pre_dispatch=True,
+    )
+
+    assert result["outcome"] == "UNKNOWN"
+    assert result["reconcile_required"] is True
+    assert result["manual_review_required"] is True
+    assert result["pre_dispatch"] is True
+    # Неизвестность остаётся неизвестностью: без признака ключа в результате нет.
+    unmarked = worker._campaign_unknown_result(  # noqa: SLF001
+        _make_task(),
+        run_id="run-1",
+        reason="absolute_deadline_exceeded",
+    )
+    assert "pre_dispatch" not in unmarked
+
+
+# Ветка PartialCreateError воркера обязана прокинуть признак в оба места, куда пишет result.
+def test_partial_branch_forwards_pre_dispatch_marker() -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    src = inspect.getsource(worker._execute_run)  # noqa: SLF001
+    branch = src.split("except PartialCreateError")[1].split("except Exception")[0]
+    assert branch.count("pre_dispatch=exc.pre_dispatch") == 2
+
+
 # Permanent-причина (например, валидация) без attempted → permanent.
 def test_classify_pre_post_permanent() -> None:
     err = CampaignExecutionError("bad config")

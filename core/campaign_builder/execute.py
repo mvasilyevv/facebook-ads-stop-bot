@@ -108,14 +108,26 @@ class PartialCreateError(CampaignExecutionError):
     - ack-lost: POST создания campaign инициирован, но ответ потерян (created пуст,
       но объект мог родиться в Meta). created_ids тогда содержит пустые списки —
       сигнал «возможен осиротевший объект, проверь Meta вручную» (money-safety).
+
+    pre_dispatch — ДОКАЗАНО, что последний отказ случился до отправки запроса в Meta
+    (браузер отклонил вызов на своей стороне). Исход от этого не меняется: созданные
+    объекты никуда не делись, сверка обязательна. Признак нужен человеку и будущей
+    автоматике, чтобы отличить «сверх перечисленного создаться не могло» от «ответ
+    Meta потерян». False означает «не доказано», а НЕ «запрос точно ушёл».
     """
 
     def __init__(
-        self, message: str, *, created_ids: dict[str, list[str]], failed_step: str
+        self,
+        message: str,
+        *,
+        created_ids: dict[str, list[str]],
+        failed_step: str,
+        pre_dispatch: bool = False,
     ) -> None:
         super().__init__(message)
         self.created_ids = created_ids
         self.failed_step = failed_step
+        self.pre_dispatch = pre_dispatch
         # PartialCreateError по определению означает «необратимый шаг достигнут».
         self.irreversible_attempted = True
 
@@ -501,12 +513,18 @@ def _raise_for_failure(
       ручную проверку, retry запрещён;
     - иначе (падение ДО любого POST) → CampaignExecutionError, причина в __cause__ для
       classify (transient → requeue безопасен: объект гарантированно не создан).
+
+    Порядок проверок намеренный: created важнее природы причины. Отказ до отправки в
+    Meta при уже созданных объектах обязан остаться partial, иначе он уедет в ветку
+    «повтор безопасен» и даст дубль кампании. Природа причины при этом не теряется —
+    её несёт pre_dispatch (см. PartialCreateError).
     """
     if _has_created(created):
         raise PartialCreateError(
             f"залив упал на шаге {failed_step!r} (часть объектов создана): {cause!r}",
             created_ids=created,
             failed_step=failed_step,
+            pre_dispatch=isinstance(cause, BrowserReadinessRejectedError),
         ) from cause
     if isinstance(cause, BrowserReadinessRejectedError):
         err = CampaignExecutionError(

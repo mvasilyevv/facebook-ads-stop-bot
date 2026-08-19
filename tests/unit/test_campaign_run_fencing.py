@@ -326,6 +326,69 @@ async def test_uncorrelated_campaign_unknown_opens_durable_incident(monkeypatch)
     assert "повтор" in kwargs["risk"].lower()
 
 
+async def _campaign_unknown_incident(monkeypatch, result: dict) -> dict:
+    """Открывает инцидент кампании с заданным result и отдаёт карточку."""
+    import core.tasks.queue as queue
+    import core.telegram.worker_notify as worker_notify
+
+    incident = AsyncMock(return_value=True)
+    monkeypatch.setattr(queue, "_transition_correlated_incident", AsyncMock(return_value=False))
+    monkeypatch.setattr(worker_notify, "notify_recurring_incident_in_transaction", incident)
+
+    await queue.transition_terminal_task_in_transaction(
+        object(),  # type: ignore[arg-type]
+        task_id=91,
+        correlation_id=None,
+        phase="unknown",
+        payload={"run_id": "run-91"},
+        result=result,
+        requested_by="test",
+        lane="bulk",
+        task_type="campaign_create",
+    )
+    incident.assert_awaited_once()
+    return incident.await_args.kwargs
+
+
+# Отказ до отправки в Facebook читается в карточке: оператор видит, что сверх
+# перечисленного ничего не создавалось. Сверка и риск дубля при этом остаются.
+@pytest.mark.asyncio
+async def test_campaign_incident_shows_failure_happened_before_meta_dispatch(monkeypatch) -> None:
+    kwargs = await _campaign_unknown_incident(
+        monkeypatch,
+        {
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "created_ids": {"campaigns": ["c1"], "adsets": ["s1"]},
+            "pre_dispatch": True,
+        },
+    )
+
+    text = " ".join([kwargs["summary"], *kwargs["lines"]]).lower()
+    assert "до отправки" in text
+    assert "подтверждение потеряно" not in text
+    assert any("Ads Manager" in line for line in kwargs["lines"])
+    assert "повтор" in kwargs["risk"].lower()
+    assert kwargs["severity"] == "critical"
+
+
+# Без доказательства (признака нет) карточка ничего не утверждает про отправку.
+@pytest.mark.asyncio
+async def test_campaign_incident_without_proof_claims_nothing_about_dispatch(monkeypatch) -> None:
+    kwargs = await _campaign_unknown_incident(
+        monkeypatch,
+        {
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "created_ids": {"campaigns": ["c1"], "adsets": ["s1"]},
+        },
+    )
+
+    text = " ".join([kwargs["summary"], *kwargs["lines"]]).lower()
+    assert "до отправки" not in text
+    assert any("Ads Manager" in line for line in kwargs["lines"])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("finalizer", "result_payload", "expected_phase"),
