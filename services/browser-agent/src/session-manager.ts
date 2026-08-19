@@ -171,6 +171,21 @@ export function canonicalAdsManagerUrl(
     : null;
 }
 
+/**
+ * Страницы, созданные агентом под money-роль. Реестр процессный, а не
+ * сессионный: множество чужих ролей строилось только из карт ТЕКУЩЕЙ сессии, а
+ * поиск шёл по всему браузеру — вкладка, зарегистрированная сессией observer'а,
+ * свободно становилась money-страницей в сессии залива, и её перезагрузка
+ * сканом убивала execution context идущей мутации. Инвариант «страница скана не
+ * равна control-странице» без общего реестра межпроцессно не выполняется.
+ */
+const _agentMoneyPages = new WeakSet<Page>();
+
+/** Пометить страницу как money-владение агента. Синхронно, до первой навигации. */
+function reserveMoneyPage(page: Page): void {
+  _agentMoneyPages.add(page);
+}
+
 /** Найти среди ВСЕХ открытых вкладок живую вкладку Ads Manager нужного кабинета. */
 export function findAdsManagerPageByAct(
   browser: Browser | null,
@@ -185,7 +200,7 @@ export function findAdsManagerPageByAct(
       if (typeof page.isClosed === "function" && page.isClosed()) {
         continue;
       }
-      if (excludedPages.has(page)) {
+      if (excludedPages.has(page) || _agentMoneyPages.has(page)) {
         continue;
       }
       if (isConfirmedAdsManagerPage(page, actId)) {
@@ -1060,9 +1075,16 @@ export class SessionManager {
       if (key !== cabinetKey) reserved.add(page);
     }
 
-    page ??= resolvedAct
-      ? findAdsManagerPageByAct(browser, resolvedAct, reserved)
-      : null;
+    // Money-роли НИКОГДА не усыновляют чужую вкладку: единственным критерием
+    // подбора был URL, а маркера «вкладка агента» не существовало — поэтому
+    // ручная вкладка оператора или страница скана другой сессии становились
+    // страницей денежной мутации. Роль scan усыновление сохраняет осознанно:
+    // это не money-путь, и переоткрывать вкладку кабинета на каждый скан дорого.
+    if (role === "scan") {
+      page ??= resolvedAct
+        ? findAdsManagerPageByAct(browser, resolvedAct, reserved)
+        : null;
+    }
 
     if (!page) {
       // Живой вкладки нет, значит сейчас будет создание и навигация — именно то,
@@ -1079,9 +1101,17 @@ export class SessionManager {
       // Проба после паузы переиспользует удержанную страницу входа: если человек
       // уже вошёл в ней, там теперь живая сессия, а вкладка остаётся одна.
       page = this.takeRetainedLoginPage(session);
+      if (page && role !== "scan") {
+        reserveMoneyPage(page);
+      }
       if (!page) {
         try {
           page = await createPageWithinOperation(context, opts.signal);
+          // Резервируем ДО навигации и до любого следующего await: иначе между
+          // созданием и регистрацией страницу успевает выбрать чужая сессия.
+          if (role !== "scan") {
+            reserveMoneyPage(page);
+          }
         } catch {
           if (opts.signal?.aborted) {
             throw new Error("Browser operation cancelled");

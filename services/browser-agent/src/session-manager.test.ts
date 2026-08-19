@@ -1189,7 +1189,11 @@ test("ensureScanPage finds exact act in a non-active page across browser context
   assert.equal(session.primaryPage, exactCabinet);
 });
 
-test("duplicate exact-act tabs are selected deterministically and never shared across roles", async () => {
+// #182: скан усыновляет живую вкладку кабинета осознанно, а control — никогда.
+// Единственным критерием подбора был URL, маркера «вкладка агента» не было, и
+// страница скана свободно становилась страницей денежной мутации: её reload
+// убивал execution context идущего вызова.
+test("scan adopts an exact-act tab, control never does", async () => {
   const manager = new SessionManager();
   const first = {
     isClosed: () => false,
@@ -1199,17 +1203,19 @@ test("duplicate exact-act tabs are selected deterministically and never shared a
     isClosed: () => false,
     url: () => "https://www.facebook.com/adsmanager/manage/campaigns?act=333",
   };
+  let createdUrl = "about:blank";
+  const created = {
+    isClosed: () => false,
+    url: () => createdUrl,
+    goto: async (url: string) => {
+      createdUrl = url;
+    },
+  };
   const browser = {
     isConnected: () => true,
     contexts: () => [
-      {
-        pages: () => [first],
-        newPage: async () => assert.fail("must not open"),
-      },
-      {
-        pages: () => [second],
-        newPage: async () => assert.fail("must not open"),
-      },
+      { pages: () => [first], newPage: async () => created },
+      { pages: () => [second], newPage: async () => assert.fail("must not open here") },
     ],
   };
   const session = makeSession({ browser, primaryPage: first });
@@ -1217,8 +1223,52 @@ test("duplicate exact-act tabs are selected deterministically and never shared a
   const scan = await manager.ensureScanPage(session, { actId: "333" });
   const control = await manager.ensureControlPage(session, { actId: "333" });
 
-  assert.equal(scan, first);
-  assert.equal(control, second);
+  assert.equal(scan, first, "скан усыновляет живую вкладку кабинета");
+  assert.equal(control, created as any, "control работает только на своей вкладке");
+  assert.notEqual(control, second);
+});
+
+// Страница, созданная агентом под money-роль, не выбирается НИКЕМ другим —
+// включая скан другой сессии по тому же кабинету.
+test("money page of one session is invisible to another session's scan", async () => {
+  const manager = new SessionManager();
+  let createdUrl = "about:blank";
+  const created = {
+    isClosed: () => false,
+    url: () => createdUrl,
+    goto: async (url: string) => {
+      createdUrl = url;
+    },
+  };
+  const pages: any[] = [];
+  let secondCreated: any = null;
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      if (pages.length === 0) {
+        pages.push(created);
+        return created;
+      }
+      secondCreated = {
+        isClosed: () => false,
+        url: () =>
+          "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=444",
+        goto: async () => undefined,
+      };
+      pages.push(secondCreated);
+      return secondCreated;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const owner = makeSession({ id: "session-owner", browser, primaryPage: null });
+  const other = makeSession({ id: "session-other", browser, primaryPage: null });
+
+  const control = await manager.ensureControlPage(owner, { actId: "444" });
+  const scan = await manager.ensureScanPage(other, { actId: "444" });
+
+  assert.equal(control, created as any);
+  assert.notEqual(scan, control, "скан чужой сессии не забирает money-страницу");
+  assert.equal(scan, secondCreated);
 });
 
 // Чужой/несуществующий кабинет и закрытые вкладки → null (вкладку откроет ensureScanPage).
@@ -2101,11 +2151,14 @@ test("findLiveAdsManagerPage без браузера возвращает null",
 
 // Вкладку кабинета мог открыть оператор руками. Проба готовности обязана её
 // переиспользовать: перезагрузка сбросила бы его фильтры и выделение.
-test("ensureInteractivePage переиспользует вкладку кабинета, не навигируя и не закрывая её", async () => {
+// #182: interactive — тоже money-роль (загрузка медиа, Graph-чтения под грантом).
+// Чужую вкладку она не усыновляет: открытая оператором вкладка того же кабинета
+// остаётся нетронутой, агент работает на своей.
+test("ensureInteractivePage не трогает вкладку оператора и открывает свою", async () => {
   const manager = new SessionManager();
   let gotoCalls = 0;
   let closeCalls = 0;
-  const adsPage = {
+  const operatorPage = {
     isClosed: () => false,
     url: () =>
       "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012",
@@ -2116,9 +2169,17 @@ test("ensureInteractivePage переиспользует вкладку каби
       closeCalls += 1;
     },
   };
+  let createdUrl = "about:blank";
+  const created = {
+    isClosed: () => false,
+    url: () => createdUrl,
+    goto: async (url: string) => {
+      createdUrl = url;
+    },
+  };
   const browser = {
     isConnected: () => true,
-    contexts: () => [{ pages: () => [adsPage] }],
+    contexts: () => [{ pages: () => [operatorPage], newPage: async () => created }],
   };
   const session = makeSession({ browser });
 
@@ -2126,7 +2187,41 @@ test("ensureInteractivePage переиспользует вкладку каби
     actId: "2108857220005012",
   });
 
-  assert.equal(page, adsPage as any);
-  assert.equal(gotoCalls, 0);
-  assert.equal(closeCalls, 0);
+  assert.equal(page, created as any);
+  assert.equal(gotoCalls, 0, "вкладку оператора не навигируем");
+  assert.equal(closeCalls, 0, "и не закрываем");
+});
+
+// Своя же вкладка переиспользуется: реестр запрещает чужие, а не собственные.
+test("ensureInteractivePage переиспользует собственную вкладку кабинета", async () => {
+  const manager = new SessionManager();
+  let created = 0;
+  let currentUrl = "about:blank";
+  const own = {
+    isClosed: () => false,
+    url: () => currentUrl,
+    goto: async (url: string) => {
+      currentUrl = url;
+    },
+  };
+  const browser = {
+    isConnected: () => true,
+    contexts: () => [
+      {
+        pages: () => (created ? [own] : []),
+        newPage: async () => {
+          created += 1;
+          return own;
+        },
+      },
+    ],
+  };
+  const session = makeSession({ browser });
+
+  const first = await manager.ensureInteractivePage(session, { actId: "555" });
+  const second = await manager.ensureInteractivePage(session, { actId: "555" });
+
+  assert.equal(first, own as any);
+  assert.equal(second, own as any);
+  assert.equal(created, 1, "вторая вкладка под ту же роль и кабинет не нужна");
 });
