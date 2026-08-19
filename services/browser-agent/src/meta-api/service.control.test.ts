@@ -870,3 +870,161 @@ describe('MetaApiService exact-profile health', () => {
     assert.equal(response.detail.includes('1855748448431929'), false);
   });
 });
+
+// #183: money-мутация выполняется как page.evaluate(fetch) в живом SPA. Навигация
+// посреди evaluate даёт «Execution context was destroyed» — ту самую ошибку, что
+// убила залив 19.08.2026. Она приходит ПОСЛЕ отправки, поэтому исход неотличим
+// от потерянного ответа. Эпоха страницы превращает это в отказ ДО отправки.
+describe('MetaApiService: навигация money-страницы до отправки', () => {
+  function epochPage(onEvaluate?: () => void) {
+    const listeners = new Map<string, ((arg?: unknown) => void)[]>();
+    const page: any = {
+      on: (event: string, fn: (arg?: unknown) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), fn]);
+      },
+      isClosed: () => false,
+      mainFrame: () => 'main-frame',
+      waitForFunction: async () => true,
+      evaluate: async (_fn: unknown, args: any) => {
+        if (args && typeof args === 'object' && 'endpoint' in args) {
+          onEvaluate?.();
+          return { status_code: 200, response_json: '{"success":true}' };
+        }
+        return undefined;
+      },
+    };
+    page.navigate = () => {
+      for (const fn of listeners.get('request') ?? []) {
+        fn({ isNavigationRequest: () => true, frame: () => 'main-frame' });
+      }
+    };
+    return page;
+  }
+
+  function moneyRequest(sessionId: string, profileId: string) {
+    return {
+      session_id: sessionId,
+      vision_profile_id: profileId,
+      capability_expires_at: Math.floor(Date.now() / 1_000) + 30,
+      ad_account_id: '123',
+      method: 'POST',
+      endpoint: '/111',
+      query_params: { status: 'PAUSED' },
+      body_json: '',
+      timeout_ms: 30_000,
+    };
+  }
+
+  it('навигация во время чтения владения: грант не списан, мутации нет', async () => {
+    _resetPageLocks();
+    let consumed = 0;
+    let mutations = 0;
+    const page = epochPage(() => {
+      mutations += 1;
+    });
+    const session = { id: 'session-epoch', visionProfileId: 'profile-epoch' };
+    const handlers = createMetaApiServiceHandlers({
+      getSession: () => session,
+    } as unknown as SessionManager, {
+      getControlPage: () => page as any,
+      verifyOperationCapability: () => undefined,
+      assertGraphOperationOwnership: async () => {
+        // Ровно то, что произошло на проде: страница ушла на другой URL, пока
+        // мы читали владение объектом.
+        page.navigate();
+      },
+      consumeOperationCapability: async () => {
+        consumed += 1;
+      },
+    });
+
+    const error = await new Promise<any>((resolve) => {
+      handlers.executeGraphCallV5(
+        unaryCall(moneyRequest('session-epoch', 'profile-epoch')),
+        (value: unknown) => resolve(value),
+      );
+    });
+
+    // FAILED_PRECONDITION: отказ ДО внешней границы, а не потерянный ответ.
+    assert.equal(error.code, 9);
+    assert.match(String(error.message), /page_epoch_changed/);
+    assert.equal(consumed, 0, 'одноразовый грант не должен быть списан');
+    assert.equal(mutations, 0, 'ни один fetch не должен уйти в Meta');
+  });
+
+  it('навигация после списания гранта останавливает отправку', async () => {
+    _resetPageLocks();
+    let consumed = 0;
+    let mutations = 0;
+    const page = epochPage(() => {
+      mutations += 1;
+    });
+    const session = { id: 'session-epoch2', visionProfileId: 'profile-epoch2' };
+    const handlers = createMetaApiServiceHandlers({
+      getSession: () => session,
+    } as unknown as SessionManager, {
+      getControlPage: () => page as any,
+      verifyOperationCapability: () => undefined,
+      assertGraphOperationOwnership: async () => undefined,
+      consumeOperationCapability: async () => {
+        consumed += 1;
+        page.navigate();
+      },
+    });
+
+    const error = await new Promise<any>((resolve) => {
+      handlers.executeGraphCallV5(
+        unaryCall(moneyRequest('session-epoch2', 'profile-epoch2')),
+        (value: unknown) => resolve(value),
+      );
+    });
+
+    assert.equal(error.code, 9);
+    assert.equal(consumed, 1, 'грант уже был списан — это честный REJECTED');
+    assert.equal(mutations, 0, 'но мутация в Meta уйти не должна');
+  });
+
+  it('навигировавшая страница выбрасывается, следующий вызов работает на новой', async () => {
+    _resetPageLocks();
+    const poisoned: unknown[] = [];
+    const pages = [epochPage(), epochPage()];
+    let handedOut = 0;
+    const session = { id: 'session-heal', visionProfileId: 'profile-heal' };
+    const handlers = createMetaApiServiceHandlers({
+      getSession: () => session,
+    } as unknown as SessionManager, {
+      getControlPage: () => {
+        const page = pages[Math.min(handedOut, pages.length - 1)];
+        handedOut += 1;
+        return page as any;
+      },
+      verifyOperationCapability: () => undefined,
+      assertGraphOperationOwnership: async () => {
+        if (handedOut === 1) pages[0].navigate();
+      },
+      consumeOperationCapability: async () => undefined,
+      poisonRolePage: (_session, _role, _actId, page) => {
+        poisoned.push(page);
+      },
+    });
+
+    const first = await new Promise<any>((resolve) => {
+      handlers.executeGraphCallV5(
+        unaryCall(moneyRequest('session-heal', 'profile-heal')),
+        (value: unknown) => resolve(value),
+      );
+    });
+    assert.equal(first.code, 9);
+    assert.deepEqual(poisoned, [pages[0]], 'лечение — выбросить вкладку, а не перезагрузить');
+
+    // Канал снова работоспособен: вторая операция идёт на новой странице.
+    const second = await new Promise<any>((resolve) => {
+      handlers.executeGraphCallV5(
+        unaryCall(moneyRequest('session-heal', 'profile-heal')),
+        (_error: unknown, value: unknown) => resolve(value ?? _error),
+      );
+    });
+    assert.equal(second.status_code, 200);
+    assert.equal(handedOut, 2);
+  });
+});

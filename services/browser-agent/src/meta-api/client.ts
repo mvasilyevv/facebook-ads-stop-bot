@@ -44,6 +44,13 @@ export interface GraphApiCallResult {
 export interface GraphApiCallOptions {
   signal?: AbortSignal;
   operationId?: string;
+  /**
+   * Синхронная проверка непосредственно перед отправкой. Между ней и
+   * page.evaluate не должно быть ни одного await: money-путь так получает
+   * доказанный отказ ДО пересечения внешней границы, а не «Execution context
+   * was destroyed» уже после неё.
+   */
+  assertBeforeDispatch?: () => void;
 }
 
 export interface MetaApiHealthResult {
@@ -153,6 +160,7 @@ export async function executeGraphCall(
       // Token-not-found is returned below as -1 and remains safely retryable.
     }
 
+    options.assertBeforeDispatch?.();
     const result = await raceWithAbort(page.evaluate(async (args) => {
       // Извлечь access_token из page source.
       // Используем расширенный regex (EAA*, не только EAAbs*) — на случай если Meta
@@ -247,6 +255,12 @@ export async function executeGraphCall(
   } catch (err: any) {
     if (options.signal?.aborted) {
       return cancelledGraphResult(t0, 'gRPC request cancelled during Graph fetch');
+    }
+    // Отказ проверки перед отправкой — не исход внешней операции: fetch не
+    // уходил. Заворачивать его в code=-3 значило бы превратить доказанный
+    // отказ в неоднозначный «мог дойти до Meta».
+    if (String(err?.message ?? '').includes('page_epoch_changed')) {
+      throw err;
     }
     // Это ошибка на уровне page.evaluate (например, page закрылся, browser упал).
     return {

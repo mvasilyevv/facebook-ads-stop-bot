@@ -13,6 +13,11 @@ import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from '.
 import { uploadImage, uploadVideoSingle } from './upload.js';
 import { withPageRoleLock } from '../page-lock.js';
 import {
+  assertPageEpochUnchanged,
+  beginPageEpoch,
+  PageEpochChangedError,
+} from '../page-epoch.js';
+import {
   isTokenRejectedGraphError,
   recordFetchOutcome,
   shouldHealNow,
@@ -62,6 +67,11 @@ export function grpcCodeForError(err: any): number {
     // Вкладка не открывалась: попытка придержана после подряд идущих отказов.
     // Наружу ничего не ушло — это отказ ДО отправки, как и остальные пути,
     // на которых вкладка кабинета не открылась.
+    return grpc.status.FAILED_PRECONDITION;
+  }
+  if (message.includes('page_epoch_changed')) {
+    // Страница навигировала до отправки: грант не списан, fetch не уходил.
+    // Это доказанный отказ ДО внешней границы, а не потерянный ответ.
     return grpc.status.FAILED_PRECONDITION;
   }
   if (
@@ -450,6 +460,10 @@ export function createMetaApiServiceHandlers(
           operationPage = moneyControl
             ? await _getControlPage(session, actId, grpcAbort.controller.signal)
             : await _getInteractivePage(session, actId, grpcAbort.controller.signal);
+          // Снимок эпохи берётся сразу после выбора страницы: всё, что случится
+          // с ней дальше — до списания гранта и до отправки — обязано стать
+          // отказом, а не неоднозначным исходом.
+          const pageEpochSnapshot = beginPageEpoch(operationPage);
           if (moneyControl) {
             // Ownership is proven in the same page/lock that will send the
             // mutation. Only after that read succeeds do we atomically consume
@@ -469,6 +483,10 @@ export function createMetaApiServiceHandlers(
                 },
               },
             );
+            // Грант списывается необратимо, поэтому эпоха проверяется ДО него:
+            // навигация, случившаяся во время чтения владения, не должна стоить
+            // одноразового гранта.
+            assertPageEpochUnchanged(operationPage, pageEpochSnapshot);
             await _consumeOperationCapability(
               req,
               capabilityBinding!,
@@ -478,6 +496,9 @@ export function createMetaApiServiceHandlers(
           const graphResult = await executeGraphCall(operationPage, params, {
             signal: grpcAbort.controller.signal,
             operationId,
+            assertBeforeDispatch: moneyControl
+              ? () => assertPageEpochUnchanged(operationPage!, pageEpochSnapshot)
+              : undefined,
           });
 
           // Keep failed fetch recovery inside the same role lock. Cancellation
@@ -538,6 +559,15 @@ export function createMetaApiServiceHandlers(
             }
           }
           return graphResult;
+        } catch (error) {
+          // Навигировавшая money-страница непригодна навсегда: её execution
+          // context уже другой, а reload лечит не то — он сам навигация. Лечение
+          // здесь только одно: выбросить вкладку, следующий вызов создаст свою.
+          if (operationPage && error instanceof PageEpochChangedError) {
+            _poisonRolePage(session, role, actId, operationPage);
+            operationPage = undefined;
+          }
+          throw error;
         } finally {
           if (operationPage && grpcAbort.controller.signal.aborted) {
             _poisonRolePage(
