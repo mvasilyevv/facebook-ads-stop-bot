@@ -42,6 +42,14 @@ vi.mock("@/lib/api/operator", () => ({
   operatorProblemMessage: (error: unknown) => (error instanceof Error ? error.message : "Ошибка"),
 }));
 
+const mockObserverSettings = vi.fn();
+const mockToggleScanning = vi.fn();
+
+vi.mock("@/lib/api/settings", () => ({
+  useObserverSettings: () => mockObserverSettings(),
+  useToggleScanning: () => ({ mutateAsync: mockToggleScanning, isPending: false }),
+}));
+
 const mockToast = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
@@ -163,6 +171,44 @@ describe("operator dashboard", () => {
       error: null,
       refetch: vi.fn(),
     });
+    mockObserverSettings.mockReturnValue({
+      data: { is_scanning_enabled: true },
+      isPending: false,
+    });
+  });
+
+  it("управляет сканированием из шапки: состояние, цикл и тумблер", async () => {
+    const user = userEvent.setup();
+    mockToggleScanning.mockResolvedValue({});
+    renderDashboard();
+
+    const control = screen.getByRole("group", { name: "Периодическое сканирование" });
+    expect(within(control).getByText("Включено")).toBeInTheDocument();
+    // next_scan_at фикстуры в прошлом относительно реальных часов — цикл ожидается.
+    expect(within(control).getByText("цикл ожидается")).toBeInTheDocument();
+
+    await user.click(
+      within(control).getByRole("switch", { name: "Остановить периодическое сканирование" }),
+    );
+    expect(mockToggleScanning).toHaveBeenCalledWith(false);
+  });
+
+  it("без подтверждённых настроек сканирования не рисует тумблер", () => {
+    mockObserverSettings.mockReturnValue({ data: undefined, isPending: false });
+    renderDashboard();
+
+    const control = screen.getByRole("group", { name: "Периодическое сканирование" });
+    expect(within(control).getByText("Не подтверждено")).toBeInTheDocument();
+    expect(within(control).queryByRole("switch")).toBeNull();
+  });
+
+  it("карточка кабинета не показывает глобальный тумблер сканирования", () => {
+    render(
+      <OperatorRealtimeStatusProvider status="connected">
+        <OperatorCabinetDashboard cabinetId="123" />
+      </OperatorRealtimeStatusProvider>,
+    );
+    expect(screen.queryByRole("group", { name: "Периодическое сканирование" })).toBeNull();
   });
 
   it("shows the action-first overview and confirmed money", () => {

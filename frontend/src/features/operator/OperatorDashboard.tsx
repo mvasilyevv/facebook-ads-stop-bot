@@ -81,6 +81,8 @@ import {
   useOperatorSnapshot,
 } from "@/lib/api/operator";
 
+import { ScanningControl } from "./ScanningControl";
+
 import "./operator-ledger.css";
 
 // critical и warning не должны различаться одним лишь цветом:
@@ -221,6 +223,9 @@ function OperatorLedgerScreen({
           <p>{pageDescription}</p>
         </div>
         <div className="operator-ledger__header-tools">
+          {/* Управление сканированием — только на портфельной главной: карточка
+              кабинета не владеет глобальным тумблером Observer. */}
+          {!cabinetId ? <ScanningControl system={snapshot.system} /> : null}
           <Link className="ledger-proof-stamp" to="/system/sources">
             <StatusIcon size={16} aria-hidden="true" />
             <span>{DATA_STATE_LABEL[overviewState]}</span>

@@ -409,6 +409,23 @@ export async function installOperatorHarness(
   await page.route("**/api/tools/campaigns/presets", async (route) => {
     await route.fulfill({ json: [] });
   });
+  await page.route("**/api/settings/observer", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      json: {
+        is_scanning_enabled: true,
+        default_interval_seconds: 60,
+        owner_campaign_tag: null,
+        campaign_ids: [],
+        am_columns: [],
+        am_columns_use_default: true,
+        am_column_options: [],
+      },
+    });
+  });
   await page.route("**/api/tools/campaigns/draft**", async (route) => {
     if (route.request().method() === "GET") {
       await route.fulfill({ json: { draft: null } });
