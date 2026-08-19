@@ -286,6 +286,39 @@ def test_ui_evidence_is_a_release_gate() -> None:
     assert "needs: [verify, bootstrap-source-preflight]" in _job_block(release, "images")
 
 
+def test_only_localised_checks_are_skippable_and_release_always_runs_all() -> None:
+    """Фильтруется только то, чей вход локализован; релиз гоняет всё.
+
+    Джоба backend линтует весь репозиторий и читает .github, fbctl, deploy,
+    docker и packages из собственных тестов — её вход не локализован, и
+    фильтровать её нельзя. Джоба frontend гоняет sync:api, который импортирует
+    apps.api.main, — правка бэкенда её вход. Решение о пропуске принимается до
+    вызова verify.yml и приходит входом: результат вызванного workflow не
+    отличает «прошло всё» от «пропущено всё».
+    """
+    verify = VERIFY_WORKFLOW.read_text(encoding="utf-8")
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    document = yaml.safe_load(verify)
+
+    # PyYAML резолвит голый ключ `on:` в булево True (YAML 1.1, «Norway
+    # problem» резолвера) — document["on"] бросил бы KeyError. Ключ "jobs"
+    # этой проблеме не подвержен, поэтому состав джоб читается напрямую.
+    triggers = document[True]
+    assert triggers["workflow_call"]["inputs"]["full_run"]["type"] == "boolean"
+    assert triggers["workflow_call"]["inputs"]["full_run"]["default"] is False
+    assert "full_run: ${{ github.event_name == 'workflow_dispatch' }}" in release
+
+    for always_on in ("backend", "frontend", "platform"):
+        assert "if" not in document["jobs"][always_on], (
+            f"джоба {always_on} читает весь репозиторий и пропуску не подлежит"
+        )
+
+    evidence_if = " ".join(str(document["jobs"]["ui-evidence"]["if"]).split())
+    assert evidence_if == ("${{ inputs.full_run || needs.changes.outputs.ui == 'true' }}")
+    assert document["jobs"]["ui-evidence"]["needs"] == ["changes"]
+    assert "scripts/ci_changed_areas.py" in verify
+
+
 def test_pull_requests_run_verification_without_publishing() -> None:
     verify = VERIFY_WORKFLOW.read_text(encoding="utf-8")
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")

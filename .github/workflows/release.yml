@@ -27,6 +27,8 @@ jobs:
   verify:
     name: Verify release source
     uses: ./.github/workflows/verify.yml
+    with:
+      full_run: ${{ github.event_name == 'workflow_dispatch' }}
 
   bootstrap-source-preflight:
     name: Validate existing bootstrap identity

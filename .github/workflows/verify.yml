@@ -4,6 +4,15 @@ on:
   pull_request:
     branches: [main]
   workflow_call:
+    inputs:
+      full_run:
+        description: >-
+          Гнать всё без учёта состава изменений. Релиз выставляет true:
+          результат вызванного workflow не отличает «прошло всё» от
+          «пропущено всё», поэтому решение принимается снаружи.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,6 +27,34 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
+  changes:
+    name: Affected areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ui: ${{ steps.detect.outputs.ui }}
+    steps:
+      # Нужна история: детектор сравнивает два коммита, а checkout по умолчанию
+      # приносит только head.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      # Пропуск по ошибке дороже лишнего прогона: неизвестная база печатает
+      # все области как затронутые, и скрипт делает это сам.
+      - name: Detect affected areas
+        id: detect
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          if [ "${{ inputs.full_run }}" = "true" ]; then
+            python3 -B scripts/ci_changed_areas.py --assume-all >> "$GITHUB_OUTPUT"
+          else
+            python3 -B scripts/ci_changed_areas.py --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
   backend:
     name: Backend, schema and OpenAPI
     runs-on: ubuntu-latest
@@ -150,6 +187,8 @@ jobs:
     name: Storybook a11y and Playwright
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: [changes]
+    if: ${{ inputs.full_run || needs.changes.outputs.ui == 'true' }}
     # Браузеры и их системные библиотеки приходят готовыми в образе Playwright.
     # Раньше их доставлял `playwright install-deps`, который внутри зовёт apt:
     # 19.08.2026 шаг провисел 29 минут 48 секунд на зеркалах Ubuntu и срубил
