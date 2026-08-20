@@ -3017,9 +3017,13 @@ async def reconcile_stuck_running(
                 )
                     THEN CASE
                         WHEN lane = 'money' THEN NULL
+                        -- CAST на каждой ветке обязателен: CASE из одних
+                        -- плейсхолдеров выводится как text, а
+                        -- make_interval(secs => text) не существует. См.
+                        -- _with_lane_window — там тот же разбор.
                         ELSE NOW() + make_interval(secs => CASE lane
-                            WHEN 'bulk' THEN :bulk_wait_seconds
-                            ELSE :default_wait_seconds
+                            WHEN 'bulk' THEN CAST(:bulk_wait_seconds AS int)
+                            ELSE CAST(:default_wait_seconds AS int)
                         END)
                     END
                 ELSE deadline_at
