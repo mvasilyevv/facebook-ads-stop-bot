@@ -90,6 +90,8 @@ BROWSER_OPERATION_PERMANENT_REJECTIONS: frozenset[str] = frozenset(
         "graph_method_semantics",
         "graph_get_body",
         "graph_endpoint_query",
+        "ad_account_id_not_numeric",
+        "ad_account_id_missing",
     }
 )
 
@@ -115,15 +117,19 @@ def browser_operation_rejection_error(
     *,
     endpoint: str,
 ) -> BrowserOperationRejectedError | None:
-    """Отказ собственной авторизации браузера — с названной причиной.
+    """Отказ, который browser-agent вынес сам, — с названной причиной.
 
-    Все предикаты, дающие PERMISSION_DENIED, проверяются до первого fetch в
-    Meta, поэтому код причины одновременно доказывает, что наружу ничего не
-    ушло. Без кода доказательства нет: тогда возвращается None и вызывающий
-    остаётся на прежней, более осторожной классификации.
+    Все предикаты этой семьи проверяются до первого fetch в Meta, поэтому код
+    причины одновременно доказывает, что наружу ничего не ушло. Без кода
+    доказательства нет: тогда возвращается None и вызывающий остаётся на
+    прежней, более осторожной классификации.
+
+    Статусов два, потому что отказы разной природы: PERMISSION_DENIED — прав
+    не хватило, INVALID_ARGUMENT — запрос собран неверно (например, кабинет
+    задан не числом). На вопрос «ушло ли наружу» оба отвечают одинаково.
     """
     code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
-    if code != grpc.StatusCode.PERMISSION_DENIED:
+    if code not in (grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.INVALID_ARGUMENT):
         return None
     reason = _browser_operation_rejection_reason(exc)
     if reason is None:

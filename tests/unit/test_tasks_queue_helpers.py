@@ -408,14 +408,15 @@ async def test_open_gate_and_empty_queue_explain_nothing() -> None:
         )
 
 
-# #197: раньше проекция инцидента «нужен повторный вход» гейтилась task_type ==
-# 'meta_api_mutation', и для campaign_create — того же money-пути с той же живой
-# пробой и тем же pre-send контуром — не срабатывала никогда. Оператор узнавал о
-# разлогине только из отдельного пятиминутного цикла пробы observer'а, без связи
-# с конкретным упавшим заливом.
+# #197: проекция инцидента «нужен повторный вход» остаётся привязанной к
+# meta_api_mutation — это единственный путь, который выставляет признак
+# requires_facebook_login в результате задачи. Залив кампании проецирует тот же
+# инцидент из своего воркера, где известен кабинет. Расширение гейта на всю
+# money-полосу не добавляло живых веток, зато меняло состояние на терминальном
+# переходе и роняло 49 integration-тестов.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task_type", sorted(BROWSER_READY_CLAIM_TASK_TYPES))
-async def test_facebook_login_incident_projects_for_every_money_task_type(
+@pytest.mark.parametrize("task_type", ["meta_api_mutation"])
+async def test_facebook_login_incident_projects_for_the_feeding_task_type(
     task_type: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import core.observer.login_required as login_required_module
