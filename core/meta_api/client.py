@@ -73,30 +73,6 @@ _OPERATION_AUTHORITY_DB_TIMEOUT_SECONDS = 2.0
 # BROWSER_OPERATION_REJECTION_REASONS (core/meta_api/errors.py).
 BROWSER_OPERATION_REJECTION_METADATA_KEY = "x-browser-operation-rejection"
 
-# Причины, которые повтором той же задачи не лечатся: запрос собран неверно или
-# вызывающему просто не разрешено это делать. Исход у них тот же — REJECTED,
-# отправки не было, — но повторять их бессмысленно, а вечный requeue money-задачи
-# скрывает поломку вместо того, чтобы её показать. Исход операции и политика
-# повтора — два разных вопроса, и семья pre-send отказов отвечает только на первый.
-BROWSER_OPERATION_PERMANENT_REJECTIONS: frozenset[str] = frozenset(
-    {
-        "capability_contract_incompatible",
-        "capability_cabinet_mismatch",
-        "caller_not_authorized",
-        "capability_task_binding_invalid",
-        "capability_lease_binding_invalid",
-        "capability_malformed",
-        "capability_signature_invalid",
-        "ownership_preflight_rejected",
-        "graph_method_override",
-        "graph_method_semantics",
-        "graph_get_body",
-        "graph_endpoint_query",
-        "ad_account_id_not_numeric",
-        "ad_account_id_missing",
-    }
-)
-
 
 def _browser_operation_rejection_reason(exc: grpc.RpcError) -> str | None:
     """Достать код причины из трейлера, если он из известного словаря."""
@@ -129,6 +105,11 @@ def browser_operation_rejection_error(
     Статусов два, потому что отказы разной природы: PERMISSION_DENIED — прав
     не хватило, INVALID_ARGUMENT — запрос собран неверно (например, кабинет
     задан не числом). На вопрос «ушло ли наружу» оба отвечают одинаково.
+
+    Второй вопрос — стоит ли повторять — здесь не решается: тот же код причины
+    отвечает на него отдельно, через ``unretryable_browser_rejection``
+    (``core/meta_api/errors.py``). Ответ на исход у всей семьи один, ответ на
+    политику повтора — разный.
     """
     code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
     if code not in (grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.INVALID_ARGUMENT):

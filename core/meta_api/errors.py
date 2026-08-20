@@ -193,6 +193,62 @@ class BrowserOperationRejectedError(PreDispatchRejectedError):
         super().__init__(message, endpoint=endpoint)
 
 
+# Причины, которые повтором той же задачи не лечатся: запрос собран неверно или
+# вызывающему просто не разрешено это делать. Исход у них тот же — REJECTED,
+# отправки не было, — но повторять их бессмысленно, а вечный requeue money-задачи
+# скрывает поломку вместо того, чтобы её показать.
+#
+# Набор живёт здесь, а не в транспортном клиенте: он про код причины, а не про
+# gRPC. Каждый код обязан быть и в BROWSER_OPERATION_REJECTION_REASONS — иначе
+# оператор получит задачу, которая больше не повторится, и «причина не записана».
+BROWSER_OPERATION_PERMANENT_REJECTIONS: frozenset[str] = frozenset(
+    {
+        "capability_contract_incompatible",
+        "capability_cabinet_mismatch",
+        "caller_not_authorized",
+        "capability_task_binding_invalid",
+        "capability_lease_binding_invalid",
+        "capability_malformed",
+        "capability_signature_invalid",
+        "ownership_preflight_rejected",
+        "graph_method_override",
+        "graph_method_semantics",
+        "graph_get_body",
+        "graph_endpoint_query",
+        "ad_account_id_not_numeric",
+        "ad_account_id_missing",
+    }
+)
+
+
+def unretryable_browser_rejection(exc: BaseException) -> BrowserOperationRejectedError | None:
+    """Отказ браузера, который повтором той же задачи не лечится, — из цепочки причин.
+
+    Функция отвечает РОВНО на вопрос политики повтора и ничего не говорит про
+    исход операции. Исход у всей семьи ``PreDispatchRejectedError`` один и
+    доказывается отдельно: ``REJECTED``, запрос наружу не уходил, сверять
+    оператору нечего. Склеить два вопроса в один ``isinstance`` значит потерять
+    доказанный ``REJECTED`` там, где повтор как раз уместен (истёкший грант,
+    недоступный сервис выдачи разрешений).
+
+    Обходится цепочка ``__cause__``: залив заворачивает причину в
+    ``CampaignExecutionError``, и проверка одного верхнего исключения её не
+    увидит. Только ``__cause__``, без ``__context__``: случайное исключение,
+    всплывшее при обработке другого, не должно лишать задачу повторов.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if (
+            isinstance(current, BrowserOperationRejectedError)
+            and current.reason_code in BROWSER_OPERATION_PERMANENT_REJECTIONS
+        ):
+            return current
+        current = current.__cause__
+    return None
+
+
 class BrowserReadinessRejectedError(PreDispatchRejectedError):
     """Exact live v5/profile/session check rejected before the controlled RPC.
 
