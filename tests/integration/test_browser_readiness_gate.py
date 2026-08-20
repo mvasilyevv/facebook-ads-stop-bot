@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 import core.tasks.queue as task_queue
 from core.browser.circuit_breaker import AsyncCircuitBreaker
@@ -754,20 +755,41 @@ async def test_channel_is_ready_only_while_the_evidence_is_fresh_and_positive(
     assert await browser_channel_ready_now(pg_engine) is True
 
     # Свежесть считается часами PostgreSQL: истёкшая evidence — это «не готов»,
-    # а не «готов, но давно».
+    # а не «готов, но давно». Состариваются ОБЕ отметки сразу: срок годности
+    # позже момента наблюдения — часть схемы (ck_..._evidence), и наблюдения,
+    # которое протухло раньше, чем случилось, не существует.
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
                 UPDATE browser_channel_readiness
-                SET readiness_expires_at = clock_timestamp() - INTERVAL '1 second'
+                SET observed_at = clock_timestamp() - INTERVAL '2 hours',
+                    readiness_expires_at = clock_timestamp() - INTERVAL '1 hour'
                 WHERE channel = 'meta_api'
                 """
             )
         )
     assert await browser_channel_ready_now(pg_engine) is False
 
-    # Живой срок при неготовом состоянии тоже не готовность.
+    # Живой срок при неготовом состоянии не просто не считается готовностью —
+    # такой строки не может существовать: схема требует, чтобы у всего, кроме
+    # 'ready', срока годности не было вовсе. Предикату нечего фильтровать,
+    # потому что комбинация недостижима.
+    with pytest.raises(IntegrityError):
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE browser_channel_readiness
+                    SET state = 'unavailable',
+                        reason_code = 'no_ads_manager_page',
+                        readiness_expires_at = clock_timestamp() + INTERVAL '1 hour'
+                    WHERE channel = 'meta_api'
+                    """
+                )
+            )
+
+    # Неготовое состояние в единственной допустимой форме — без срока годности.
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
@@ -775,7 +797,7 @@ async def test_channel_is_ready_only_while_the_evidence_is_fresh_and_positive(
                 UPDATE browser_channel_readiness
                 SET state = 'unavailable',
                     reason_code = 'no_ads_manager_page',
-                    readiness_expires_at = clock_timestamp() + INTERVAL '1 hour'
+                    readiness_expires_at = NULL
                 WHERE channel = 'meta_api'
                 """
             )

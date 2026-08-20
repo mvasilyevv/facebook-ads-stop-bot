@@ -111,9 +111,14 @@ async def clean_campaign_draft(pg_engine, tmp_path: Path, monkeypatch):
                     text(
                         """
                         INSERT INTO meta_account_snapshot(
-                            account_id, timezone_name, currency, currency_observed_at
+                            account_id, timezone_name, currency, currency_observed_at,
+                            account_status, account_status_observed_at
                         )
-                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp())
+                        -- 1 = ACCOUNT_STATUS_ACTIVE. С миграции 0008 без
+                        -- подтверждённого статуса предполёт отвечает 422, и
+                        -- залив из черновика не доходит до проверки.
+                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp(),
+                                1, clock_timestamp())
                         """
                     )
                 )

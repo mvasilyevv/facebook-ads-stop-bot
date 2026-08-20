@@ -362,7 +362,13 @@ async def _execute_block(
         finally:
             # Признак накопительный: следующий блок залива не отменяет отправку,
             # которая уже случилась в предыдущем.
-            if campaign_dispatch.dispatched:
+            #
+            # Снимается он по ДОКАЗАННОМУ отсутствию отправки, а не по признаку
+            # отправки: «не доказано, что не уходил» обязано вести себя как
+            # «уходил». Иначе клиент, который в протоколе отметок не участвует,
+            # молчанием превращал бы возможный побочный эффект в разрешение
+            # повторить залив — то есть в дубль кампании.
+            if not campaign_dispatch.proven_not_dispatched:
                 state.campaign_create_attempted = True
     campaign_id = _extract_id(resp, what="campaign")
     created["campaigns"].append(campaign_id)

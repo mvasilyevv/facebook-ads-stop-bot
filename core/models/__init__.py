@@ -46,7 +46,11 @@ from core.models.observer import (
     AlertEvent,
     ScanRun,
 )
-from core.models.operator import OperatorDisplayPreference, OperatorRevisionEvent
+from core.models.operator import (
+    OperatorDisplayPreference,
+    OperatorRevisionEvent,
+    WorkerHeartbeat,
+)
 from core.models.settings import (
     AdoptionReceipt,
     AdsetProCredentials,
@@ -120,6 +124,7 @@ __all__ = [
     # operator
     "OperatorDisplayPreference",
     "OperatorRevisionEvent",
+    "WorkerHeartbeat",
     # tasks
     "AdsetDuplicatePreview",
     "BrowserOperationLease",

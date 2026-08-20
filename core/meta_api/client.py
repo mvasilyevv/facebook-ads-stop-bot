@@ -37,7 +37,7 @@ from clients.python_grpc.v1 import meta_api_pb2, meta_api_pb2_grpc
 from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 from core.deadlines import remaining_deadline_seconds
 from core.meta_api.budget_limits import checked_daily_budget_minor_units
-from core.meta_api.dispatch import mark_graph_dispatched
+from core.meta_api.dispatch import mark_graph_call_observed, mark_graph_dispatched
 from core.meta_api.errors import (
     BROWSER_OPERATION_REJECTION_REASONS,
     AmbiguousResultError,
@@ -2928,6 +2928,11 @@ class MetaApiClient:
             ad_account_id: явный кабинет исполнения. Для всех Graph writes и
                 status-reconciliation обязателен; отсутствие отклоняется до gRPC.
         """
+        # Отметка стоит ПЕРВОЙ строкой, до любой проверки: она отвечает не на
+        # вопрос «всё ли в порядке», а на вопрос «кто вёл этот вызов». Только
+        # пройдя отсюда до транспорта и не дойдя, можно утверждать, что запрос
+        # не уходил; отказ любой из проверок ниже — как раз такой случай.
+        mark_graph_call_observed()
         if self._stub is None:
             raise RuntimeError("MetaApiClient не запущен: вызови await start()")
 

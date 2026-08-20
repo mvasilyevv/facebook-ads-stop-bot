@@ -1134,7 +1134,12 @@ async def _launch_account_plan(
         run_id=only.run_id if only else None,
         task_id=only.task_id if only else None,
         idempotency_key=only.idempotency_key if only else None,
-        status="queued" if queued else "rejected",
+        # Статус берётся из того же источника, что и run_id: иначе повтор по
+        # существующему ключу возвращал бы прогон, уже закрытый с UNKNOWN, под
+        # словом «queued» — исход внешней операции выглядел бы зелёным.
+        # Плану из нескольких кампаний одного статуса нет, там остаётся
+        # сводка, а исходы кампаний перечислены в ``campaigns``.
+        status=only.status if only else ("queued" if queued else "rejected"),
         replayed=bool(campaigns) and all(campaign.replayed for campaign in campaigns),
         campaigns=campaigns,
     )

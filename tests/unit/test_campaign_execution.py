@@ -43,7 +43,7 @@ from core.campaign_builder.uniquify import (
     uniquify_concepts,
 )
 from core.creatives.video_uniquifier import VideoUniquifyError
-from core.meta_api.dispatch import mark_graph_dispatched
+from core.meta_api.dispatch import mark_graph_call_observed, mark_graph_dispatched
 from core.meta_api.errors import (
     PermanentError,
     RateLimitedError,
@@ -212,6 +212,11 @@ class _FakeClient:
     ответа. dispatched=False — клиент отказал ДО отправки (нет явного кабинета,
     отказ выдачи одноразового гранта, открытый предохранитель): во внешнюю
     систему не ушло ничего.
+
+    ``mark_graph_call_observed`` зовётся всегда и первой строкой — ровно как в
+    ``MetaApiClient.execute_graph_call``. Без неё ``dispatched=False`` означало
+    бы не «отказал до отправки», а «в протоколе отметок не участвует», то есть
+    незнание; отличить одно от другого — и есть предмет этих тестов.
     """
 
     def __init__(
@@ -231,6 +236,7 @@ class _FakeClient:
         self.calls.append(
             {"method": method, "endpoint": endpoint, "body": body_json, "act": ad_account_id}
         )
+        mark_graph_call_observed()
         if self._dispatched:
             mark_graph_dispatched()
         # endswith: '/ads' иначе матчит и '/adsets'.
@@ -707,6 +713,52 @@ def test_execute_transient_refusal_before_dispatch_stays_retryable(monkeypatch):
 
     assert not isinstance(ei.value, PartialCreateError)
     assert classify_execution_error(ei.value) == "transient"
+
+
+# Money-safety: клиент, который про отправку НИЧЕГО не сказал, — это незнание, а
+# не доказательство. Отсутствие отметки читалось как «доказано, что запрос не
+# уходил», и залив уходил в ветку «повтор безопасен»: возможный побочный эффект
+# превращался в разрешение создать кампанию второй раз. Здесь фиксируется
+# обратное — молчание обязано давать ack-lost и ручную сверку.
+def test_execute_silent_client_is_ack_lost_not_proven_rejection(monkeypatch):
+    _patch_uniquify(monkeypatch)
+    block = _image_block(n_adsets=1, concept_count=1)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=1)
+
+    class _SilentClient:
+        """Клиент вне протокола отметок: ни observed, ни dispatched."""
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def execute_graph_call(self, *, method, endpoint, body_json=None, ad_account_id=None):
+            self.calls.append(endpoint)
+            raise TemporaryError("browser-agent недоступен")
+
+    client = _SilentClient()
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=_FakeUploader(),
+        )
+
+    with pytest.raises(CampaignExecutionError) as ei:
+        asyncio.run(run())
+
+    assert client.calls == ["/act_123456789/campaigns"]
+    # Ack-lost: кампания могла родиться, повтор запрещён.
+    assert isinstance(ei.value, PartialCreateError)
+    assert ei.value.irreversible_attempted is True
+    assert ei.value.pre_dispatch is False
+    # Причина сама по себе transient, но исход уже необратим: 'partial' — это и
+    # есть «повтор запрещён, осиротевшее идёт на ручную сверку».
+    assert classify_execution_error(ei.value) == "partial"
 
 
 # Money-safety: падение уникализации (нет ffmpeg/битый файл) идёт ДО любого POST →
