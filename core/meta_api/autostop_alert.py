@@ -23,7 +23,13 @@ from typing import Any
 
 from sqlalchemy import text
 
-from core.meta_api.errors import RateLimitedError, SessionUnavailableError, TemporaryError
+from core.meta_api.errors import (
+    BROWSER_OPERATION_REJECTION_REASONS,
+    RateLimitedError,
+    SessionUnavailableError,
+    TemporaryError,
+    unretryable_browser_rejection,
+)
 from core.money import (
     currency_exponent,
     require_exact_currency_amount,
@@ -64,6 +70,50 @@ def is_channel_down_error(exc: BaseException) -> bool:
     return False
 
 
+# Ремонт руками оператора зависит от того, что именно сломалось, а карточка
+# инцидента — единственное место, где он это узнаёт. «Канал недоступен» и «канал
+# жив, но вызывающему отказано» требуют разных действий: в первом случае чинят
+# browser-agent и профиль Vision, во втором чинить их бесполезно — браузер
+# ответил и отказал в самой операции. Один текст на оба случая уводил оператора
+# перезапускать исправный канал.
+_CHANNEL_DOWN_LINES = (
+    "Проверь browser-agent и Vision-профиль",
+    "Отключи рискованные объявления вручную в Ads Manager",
+)
+_CALLER_REJECTED_LINES = (
+    "Канал жив: браузер ответил и отказал в самой операции",
+    "Перезапуск browser-agent и Vision-профиля здесь не поможет",
+    "Отключи рискованные объявления вручную в Ads Manager",
+)
+
+
+def _undelivered_stop_card(exc: BaseException) -> tuple[str, str, tuple[str, ...]]:
+    """Заголовок, суть и шаги оператора для одного недоставленного авто-стопа.
+
+    Разделяются ровно два случая, и вопрос тот же, что решает политику повтора:
+    ``unretryable_browser_rejection`` называет отказы, где браузер ответил и
+    отказал сам — запрос собран неверно или вызывающему не разрешено это
+    делать. Всё остальное в этой функции — недоступный канал.
+
+    Причина берётся из закрытого словаря: сырой текст отказа browser-agent
+    наружу не выносится, машинный код причины в карточку оператора не едет.
+    """
+    rejection = unretryable_browser_rejection(exc)
+    if rejection is None:
+        return (
+            "Авто-стоп не доходит до Facebook",
+            "Команда «выключить объявление» не дошла до кабинета.",
+            _CHANNEL_DOWN_LINES,
+        )
+    named = BROWSER_OPERATION_REJECTION_REASONS.get(rejection.reason_code)
+    detail = f" Причина: {named}." if named else ""
+    return (
+        "Авто-стоп отклонён до отправки в Facebook",
+        f"Браузер отказал в команде «выключить объявление» до отправки.{detail}",
+        _CALLER_REJECTED_LINES,
+    )
+
+
 async def maybe_alert_autostop_channel_down(
     *,
     exc: BaseException,
@@ -76,6 +126,7 @@ async def maybe_alert_autostop_channel_down(
 
     logger.error("autostop_alert CRITICAL: %s (ad=%s)", str(exc), fb_ad_id)
 
+    title, summary, lines = _undelivered_stop_card(exc)
     try:
         return await notify_recurring_incident(
             engine,
@@ -83,16 +134,13 @@ async def maybe_alert_autostop_channel_down(
             audience="all",
             event_type="autostop_channel_down",
             severity="critical",
-            title="Авто-стоп не доходит до Facebook",
+            title=title,
             # Инцидент общий для всего канала, а не для одного объявления:
             # id из конкретного сбоя ушёл бы в карточку случайной целью.
             # Он остаётся в логе выше, оператору нужен канал.
-            summary="Команда «выключить объявление» не дошла до кабинета.",
+            summary=summary,
             risk="Объявления продолжают тратить бюджет без стопа",
-            lines=[
-                "Проверь browser-agent и Vision-профиль",
-                "Отключи рискованные объявления вручную в Ads Manager",
-            ],
+            lines=list(lines),
             resource_type="meta_channel",
             resource_id="auto_stop",
         )

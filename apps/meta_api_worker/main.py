@@ -1874,7 +1874,20 @@ async def process_one_task(
         if payload.mutation_kind in _IRREVERSIBLE_KINDS and not known_not_committed:
             await _fail_irreversible(engine, task, payload, exc, reason="temporary")
             return
-        if unretryable_rejection is not None:
+        # Порядок ветвей зеркалит полосу залива: готовность канала — вопрос
+        # более ранний, чем политика повтора. Отказ живой проверки возвращает
+        # задачу в очередь, НЕ сжигая попытку, и это не должно держаться на том,
+        # что сегодня две семьи отказов живут на разных gRPC-статусах: стоит
+        # одной завернуть другую в ``__cause__`` — и попытка сгорала бы молча.
+        if readiness_rejected:
+            pre_send_status = await release_task_after_browser_readiness_rejection(
+                engine,
+                task=task,
+                target_lock_key=str(payload.target_id),
+                error=repr(exc),
+            )
+            retried = pre_send_status == "retrying"
+        elif unretryable_rejection is not None:
             # Запрос собран неверно или вызывающему не разрешено это делать:
             # повтор той же задачи вернёт тот же отказ. Исход прежний —
             # REJECTED, отправки не было и сверять нечего, — но задача
@@ -1927,14 +1940,6 @@ async def process_one_task(
                     engine=alert_ctx.engine,
                 )
             return
-        if readiness_rejected:
-            pre_send_status = await release_task_after_browser_readiness_rejection(
-                engine,
-                task=task,
-                target_lock_key=str(payload.target_id),
-                error=repr(exc),
-            )
-            retried = pre_send_status == "retrying"
         elif known_not_committed:
             pre_send_status = await requeue_task_proven_not_committed(
                 engine,
