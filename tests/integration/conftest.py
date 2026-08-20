@@ -31,6 +31,11 @@ from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from tests.integration.account_snapshot import (
+    capture_account_snapshot_rows,
+    restore_account_snapshot_rows,
+)
+
 _ALLOWED_DISPOSABLE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "postgres"})
 _SAFETY_TEST_DATABASE_PREFIX = "fb_agent_safety_test_"
 _SAFETY_TEST_DATABASE_SUFFIX = "_test"
@@ -404,23 +409,7 @@ async def known_test_cabinet_timezones(pg_engine):
     """Temporarily seed explicit cabinet context without leaking authority."""
     account_ids = ("123", "111", "222")
     async with pg_engine.begin() as conn:
-        previous_rows = [
-            dict(row)
-            for row in (
-                await conn.execute(
-                    text(
-                        """
-                        SELECT account_id, timezone_name, currency,
-                               currency_observed_at, created_at, updated_at
-                        FROM meta_account_snapshot
-                        WHERE account_id = ANY(CAST(:account_ids AS text[]))
-                        ORDER BY account_id
-                        """
-                    ),
-                    {"account_ids": list(account_ids)},
-                )
-            ).mappings()
-        ]
+        previous_rows = await capture_account_snapshot_rows(conn, account_ids)
         await conn.execute(
             text(
                 """
@@ -448,20 +437,7 @@ async def known_test_cabinet_timezones(pg_engine):
                 ),
                 {"account_ids": list(account_ids)},
             )
-            if previous_rows:
-                await conn.execute(
-                    text(
-                        """
-                        INSERT INTO meta_account_snapshot
-                            (account_id, timezone_name, currency,
-                             currency_observed_at, created_at, updated_at)
-                        VALUES
-                            (:account_id, :timezone_name, :currency,
-                             :currency_observed_at, :created_at, :updated_at)
-                        """
-                    ),
-                    previous_rows,
-                )
+            await restore_account_snapshot_rows(conn, previous_rows)
 
 
 @dataclass(frozen=True)

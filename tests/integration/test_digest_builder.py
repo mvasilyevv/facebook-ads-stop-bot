@@ -16,6 +16,10 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from core.telegram.digest_builder import build_digest
+from tests.integration.account_snapshot import (
+    capture_account_snapshot_rows,
+    restore_account_snapshot_rows,
+)
 
 
 @pytest_asyncio.fixture
@@ -46,23 +50,7 @@ async def clean_digest_tables(pg_engine):
             )
 
     async with pg_engine.connect() as conn:
-        previous_rows = [
-            dict(row)
-            for row in (
-                await conn.execute(
-                    text(
-                        """
-                        SELECT account_id, timezone_name, currency,
-                               currency_observed_at, created_at, updated_at
-                        FROM meta_account_snapshot
-                        WHERE account_id = ANY(CAST(:account_ids AS text[]))
-                        ORDER BY account_id
-                        """
-                    ),
-                    {"account_ids": list(account_ids)},
-                )
-            ).mappings()
-        ]
+        previous_rows = await capture_account_snapshot_rows(conn, account_ids)
 
     await _truncate()
     try:
@@ -71,19 +59,7 @@ async def clean_digest_tables(pg_engine):
         await _truncate()
         if previous_rows:
             async with pg_engine.begin() as conn:
-                await conn.execute(
-                    text(
-                        """
-                        INSERT INTO meta_account_snapshot
-                            (account_id, timezone_name, currency,
-                             currency_observed_at, created_at, updated_at)
-                        VALUES
-                            (:account_id, :timezone_name, :currency,
-                             :currency_observed_at, :created_at, :updated_at)
-                        """
-                    ),
-                    previous_rows,
-                )
+                await restore_account_snapshot_rows(conn, previous_rows)
 
 
 @pytest_asyncio.fixture
