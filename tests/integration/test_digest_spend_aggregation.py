@@ -18,6 +18,10 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from core.telegram.digest_builder import _top_ads_and_total_spend
+from tests.integration.account_snapshot import (
+    capture_account_snapshot_rows,
+    restore_account_snapshot_rows,
+)
 
 
 @pytest_asyncio.fixture
@@ -33,26 +37,10 @@ async def _seed_two_days(pg_engine):
 
     cid = uuid.uuid4()
     sid = uuid.uuid4()
-    previous_snapshot: dict | None = None
+    previous_rows: list[dict] = []
     try:
         async with pg_engine.begin() as conn:
-            previous = (
-                (
-                    await conn.execute(
-                        text(
-                            """
-                        SELECT account_id, timezone_name, currency,
-                               currency_observed_at, created_at, updated_at
-                        FROM meta_account_snapshot
-                        WHERE account_id = '123'
-                        """
-                        )
-                    )
-                )
-                .mappings()
-                .first()
-            )
-            previous_snapshot = dict(previous) if previous is not None else None
+            previous_rows = await capture_account_snapshot_rows(conn, ("123",))
 
             # Чистим таблицы в правильном порядке (FK)
             for t in ("ad_metrics", "fb_ads", "fb_adsets", "fb_campaigns"):
@@ -117,20 +105,7 @@ async def _seed_two_days(pg_engine):
             await conn.execute(text("DELETE FROM fb_adsets WHERE id = :id"), {"id": sid})
             await conn.execute(text("DELETE FROM fb_campaigns WHERE id = :id"), {"id": cid})
             await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
-            if previous_snapshot is not None:
-                await conn.execute(
-                    text(
-                        """
-                        INSERT INTO meta_account_snapshot
-                            (account_id, timezone_name, currency,
-                             currency_observed_at, created_at, updated_at)
-                        VALUES
-                            (:account_id, :timezone_name, :currency,
-                             :currency_observed_at, :created_at, :updated_at)
-                        """
-                    ),
-                    previous_snapshot,
-                )
+            await restore_account_snapshot_rows(conn, previous_rows)
 
 
 # Дайджест-total должен суммировать per-day итоги: 80 (день N-1) + 30 (день N) = 110.

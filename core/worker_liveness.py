@@ -188,7 +188,7 @@ async def poll_heartbeat_while_running(
     engine: AsyncEngine,
     worker_name: str,
     *,
-    interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+    interval_seconds: float | None = None,
 ) -> AsyncIterator[None]:
     """Keep ``last_poll_success_at`` fresh while one task actively executes.
 
@@ -200,11 +200,18 @@ async def poll_heartbeat_while_running(
     and its own failures cannot escape (``record_worker_heartbeat`` already
     swallows everything but ``CancelledError``), so it cannot affect the task
     it runs alongside.
+
+    ``interval_seconds=None`` означает «каденция всех воркеров», и берётся она
+    из ``HEARTBEAT_INTERVAL_SECONDS`` в момент вызова, а не в момент импорта.
+    Значение по умолчанию, вычисленное при определении функции, — вторая копия
+    той же константы: она перестаёт совпадать с ней молча, и никакой вызов
+    этого не показывает.
     """
+    interval = HEARTBEAT_INTERVAL_SECONDS if interval_seconds is None else interval_seconds
 
     async def _tick() -> None:
         while True:
-            await asyncio.sleep(interval_seconds)
+            await asyncio.sleep(interval)
             await record_worker_heartbeat(engine, worker_name, poll_success=True)
 
     ticker = asyncio.create_task(_tick())

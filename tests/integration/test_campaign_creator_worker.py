@@ -50,6 +50,7 @@ from core.meta_api.browser_readiness import (
     load_vision_readiness_identity,
     persist_browser_readiness,
 )
+from core.meta_api.dispatch import mark_graph_call_observed, mark_graph_dispatched
 from core.meta_api.errors import (
     BrowserReadinessRejectedError,
     PermanentError,
@@ -106,16 +107,43 @@ def _run_config() -> dict:
 
 
 class _FakeClient:
-    """Замоканный MetaApiClient.execute_graph_call с авто-id."""
+    """Замоканный MetaApiClient.execute_graph_call с авто-id.
 
-    def __init__(self, fail_on: str | None = None, error: Exception | None = None):
+    Внешнюю границу двойник моделирует так же, как настоящий клиент: факт
+    отправки ставит он сам, а не вызывающий. ``mark_graph_call_observed``
+    зовётся всегда и первой строкой — ровно как в
+    ``MetaApiClient.execute_graph_call``; ``mark_graph_dispatched`` — только
+    когда запрос действительно передан транспорту.
+
+    ``dispatched=True`` (по умолчанию) — запрос ушёл, и отказ после этого
+    неотличим от потерянного ответа. ``dispatched=False`` — клиент отказал ДО
+    отправки: во внешнюю систему не ушло ничего, повтор безопасен.
+
+    Без этих отметок двойник в протоколе не участвует, и его молчание читается
+    вызывающим как незнание — то есть ЛЮБОЙ смоделированный отказ становится
+    ack-lost. Так этот файл и разошёлся с контрактом волны #200: узкий прогон
+    оставался зелёным, потому что закрытое умолчание совпадало с ожиданием
+    одного теста, а доказанный отказ до отправки здесь просто не проверялся.
+    """
+
+    def __init__(
+        self,
+        fail_on: str | None = None,
+        error: Exception | None = None,
+        *,
+        dispatched: bool = True,
+    ):
         self.calls: list[str] = []
         self._n = 0
         self._fail_on = fail_on
         self._error = error or PermanentError("rejected")
+        self._dispatched = dispatched
 
     async def execute_graph_call(self, *, method, endpoint, body_json=None, ad_account_id=None):
         self.calls.append(endpoint)
+        mark_graph_call_observed()
+        if self._dispatched:
+            mark_graph_dispatched()
         # endswith, а не substring: '/ads' иначе матчит и '/adsets'.
         if self._fail_on and endpoint.endswith(self._fail_on):
             raise self._error
@@ -389,7 +417,13 @@ async def test_worker_fail_on_campaign_post_no_retry(pg_engine, clean_campaigns)
     task_id = await _seed_task(pg_engine, run_id, idem)
 
     claim = await claim_campaign_task(pg_engine)
-    client = _FakeClient(fail_on="/campaigns", error=SessionUnavailableError("no vision"))
+    # Запрос УШЁЛ в транспорт и там оборвался: ответа нет, кампания могла
+    # создаться. Признак ставит двойник, а не молчание протокола отметок.
+    client = _FakeClient(
+        fail_on="/campaigns",
+        error=SessionUnavailableError("no vision"),
+        dispatched=True,
+    )
     await process_one_task(pg_engine, claim.task, client=client, uploader=_FakeUploader())
 
     async with pg_engine.connect() as conn:
@@ -416,6 +450,62 @@ async def test_worker_fail_on_campaign_post_no_retry(pg_engine, clean_campaigns)
     assert run_status == "failed"
 
 
+# #248 (корень — #200): отказ, про который клиент ДОКАЗАЛ отсутствие отправки, не
+# зовёт оператора сверять пустой кабинет — даже когда класс причины не из семьи
+# PreDispatchRejectedError. Признак несёт отметка транспорта, а не тип исключения:
+# у клиента до отправки отказывают и проверка явного кабинета (ValueError), и
+# незапущенный транспорт (RuntimeError). Пока двойник этого файла в протоколе
+# отметок не участвовал, его молчание читалось как «не доказано» и любой такой
+# отказ уезжал в UNKNOWN с ручной сверкой при нуле созданных объектов.
+@pytest.mark.asyncio
+async def test_worker_proven_presend_refusal_is_rejected_not_manual_review(
+    pg_engine,
+    clean_campaigns,
+):
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, idem)
+
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None
+    client = _FakeClient(
+        fail_on="/campaigns",
+        # Дословная причина отказа клиента до отправки (core/meta_api/client.py):
+        # проверка явного кабинета стоит раньше транспорта и в семью
+        # PreDispatchRejectedError не входит.
+        error=ValueError("money Graph call requires explicit ad_account_id"),
+        dispatched=False,
+    )
+    await process_one_task(pg_engine, claim.task, client=client, uploader=_FakeUploader())
+
+    async with pg_engine.connect() as conn:
+        task = (
+            await conn.execute(
+                text("SELECT status, result FROM task_queue WHERE id = :tid"),
+                {"tid": task_id},
+            )
+        ).one()
+        run = (
+            await conn.execute(
+                text("SELECT status, created_meta_ids FROM campaign_run WHERE id = :rid"),
+                {"rid": run_id},
+            )
+        ).one()
+
+    assert client.calls == ["/act_123456789/campaigns"]
+    result = task.result if isinstance(task.result, dict) else json.loads(task.result)
+    # Отправки не было → побочного эффекта нет: исход REJECTED, а не UNKNOWN.
+    assert result["outcome"] == "REJECTED"
+    # Сверять оператору нечего: кабинет пуст, и звать его туда — потеря информации.
+    assert result.get("manual_review_required") is None
+    assert result.get("reconcile_required") is None
+    assert task.status == "failed"
+    created = run.created_meta_ids
+    if isinstance(created, str):
+        created = json.loads(created)
+    assert not any((created or {}).values())
+
+
 @pytest.mark.asyncio
 async def test_worker_presend_readiness_rejection_requeues_without_attempt_burn(
     pg_engine,
@@ -431,6 +521,9 @@ async def test_worker_presend_readiness_rejection_requeues_without_attempt_burn(
     client = _FakeClient(
         fail_on="/campaigns",
         error=BrowserReadinessRejectedError("local circuit open before browser dispatch"),
+        # Отказ предохранителя случается РАНЬШЕ транспорта: клиент вызов вёл,
+        # до отправки не дошёл. Отметка обязана это доказывать, а не умалчивать.
+        dispatched=False,
     )
     await process_one_task(
         pg_engine,
