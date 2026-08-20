@@ -15,6 +15,7 @@ from core.domain import AlertStage
 from core.observer.pipeline import build_rule_context as _build_rule_context
 from core.observer.queries import OfferRules
 from core.rules.evaluator import evaluate_stop_rules
+from core.rules.types import MIN_RATIO_DENOMINATOR
 from core.scanner.models import ScannedAdRow
 
 
@@ -152,17 +153,21 @@ def test_low_frequency_no_hit() -> None:
 # ====================== sanity-фильтры (защита от ложных стопов) ======================
 
 
-# Решение байера: гейт min_reach УБРАН — высокая частота стопает даже при малом reach
-# (не ждём накопления охвата; от шумовых выбросов защищает только outlier_cap).
-def test_low_reach_still_stops() -> None:
+# #204: частота — это отношение показы/охват, и её знаменатель — reach. Ниже
+# минимального объёма знаменателя отношение НЕИЗВЕСТНО, а не «плохое»: сигнал молчит.
+# Это не ожидание накопления данных (гейт по показам остаётся снятым, тест ниже), а
+# отказ считать известным число, которое на таком объёме ничего не измеряет.
+def test_low_reach_makes_ratio_unknown() -> None:
     offer = _offer(frequency_threshold=Decimal("4.0"))
-    row = _row(frequency=Decimal("5.0"), impressions=2000, reach=50)
+    row = _row(frequency=Decimal("5.0"), impressions=2000, reach=MIN_RATIO_DENOMINATOR - 1)
     ctx = build_rule_context(
         offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
     )
     result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.STOP
-    assert "frequency_anomaly" in result.matched_rule_codes
+    assert result.stage is None
+    # Неизвестное отношение не показывается оператору и как «прогресс до стопа».
+    assert result.nearest_stop is not None
+    assert result.nearest_stop.code != "frequency_anomaly"
 
 
 # Решение байера: гейт min_impressions УБРАН — высокая частота стопает даже при малых показах.
@@ -248,4 +253,94 @@ def test_low_threshold_cap_unchanged() -> None:
         offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
     )
     result = evaluate_stop_rules(row, ctx)
+    assert result.stage is None
+
+
+# ─── #204: отношение на малом объёме знаменателя — неизвестно, а не «плохое» ───
+
+
+# Регресс money-пути. Ад с подтверждённым депозитом судит деп-ветка (стоп с 56% CPA),
+# и шумная частота на охвате ниже минимума не имеет права перебить это смягчение.
+# Эталон сравнения — тот же ад, у которого отношения нет вовсе: решение обязано
+# совпасть бит-в-бит, включая тексты и прогресс до стопа.
+def test_deposit_softening_survives_ratio_on_small_denominator() -> None:
+    offer = _offer(frequency_threshold=Decimal("4.0"))
+    row = _row(
+        frequency=Decimal("5.0"),
+        impressions=2000,
+        reach=MIN_RATIO_DENOMINATOR - 1,
+        spend=Decimal("1.00"),  # 33% CPA — деп-ветка ещё молчит
+    )
+    noisy = build_rule_context(
+        offer,
+        frequency_current=row.frequency,
+        impressions=row.impressions,
+        reach=row.reach,
+        external_deposits=1,
+    )
+    without_ratio = build_rule_context(
+        offer,
+        frequency_current=None,
+        impressions=row.impressions,
+        reach=row.reach,
+        external_deposits=1,
+    )
+
+    result = evaluate_stop_rules(row, noisy)
+
+    assert result == evaluate_stop_rules(row, without_ratio)
+    assert result.stage is None
+    assert result.stop_rule_codes == []
+
+    # Смягчение по депозиту не выдумано: без депозита тот же ад стопается жёстко по
+    # цене (клик-ступень, расход без кликов) — цена остаётся фактом на любом объёме.
+    no_deposit = build_rule_context(
+        offer,
+        frequency_current=row.frequency,
+        impressions=row.impressions,
+        reach=row.reach,
+        external_deposits=0,
+    )
+    assert evaluate_stop_rules(row, no_deposit).stage == AlertStage.STOP
+
+
+# Ровно на минимуме объём знаменателя подтверждён — отношение снова известно, и
+# жёсткая ветка работает даже при депозите (frequency STOP поднимает стадию).
+# Пара с тестом выше задаёт границу: MIN-1 молчит, MIN стопает.
+def test_ratio_at_minimum_denominator_reaches_hard_branch() -> None:
+    offer = _offer(frequency_threshold=Decimal("4.0"))
+    row = _row(
+        frequency=Decimal("5.0"),
+        impressions=2000,
+        reach=MIN_RATIO_DENOMINATOR,
+        spend=Decimal("1.00"),
+    )
+    ctx = build_rule_context(
+        offer,
+        frequency_current=row.frequency,
+        impressions=row.impressions,
+        reach=row.reach,
+        external_deposits=1,
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage == AlertStage.STOP
+    assert "frequency_anomaly" in result.stop_rule_codes
+
+
+# Объём знаменателя не подтверждён (reach=None) → отношение неизвестно, а не
+# «достаточное». null означает незнание, и молчание здесь — единственный честный ответ.
+def test_unknown_denominator_makes_ratio_unknown() -> None:
+    offer = _offer(frequency_threshold=Decimal("4.0"))
+    row = _row(frequency=Decimal("5.0"), impressions=2000, reach=400)
+    ctx = build_rule_context(
+        offer,
+        frequency_current=row.frequency,
+        impressions=row.impressions,
+        reach=None,
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
     assert result.stage is None
