@@ -135,6 +135,7 @@ async def test_meta_api_worker_keeps_the_poll_signal_fresh_while_one_task_runs(
                 queue_empty=False,
                 task=task,
                 browser_profile_id="vision-profile-1",
+                browser_session_id="vision-session-1",
                 browser_readiness_generation=1,
             )
         ),

@@ -40,6 +40,7 @@ async def test_task_loop_forwards_alert_ctx(monkeypatch) -> None:
                 task=task,
                 queue_empty=False,
                 browser_profile_id="vision-profile-1",
+                browser_session_id="vision-session-1",
                 browser_readiness_generation=8,
             )
         ),
@@ -168,6 +169,7 @@ async def test_task_loop_survives_a_liveness_write_failure_on_the_money_lane(
                 task=task,
                 queue_empty=False,
                 browser_profile_id="vision-profile-1",
+                browser_session_id="vision-session-1",
                 browser_readiness_generation=1,
             )
         ),
