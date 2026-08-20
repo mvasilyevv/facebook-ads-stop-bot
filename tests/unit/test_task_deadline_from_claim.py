@@ -292,3 +292,28 @@ async def test_successful_claim_does_not_sweep() -> None:
 
     assert claim.task is not None
     assert not [sql for sql in statements if "queue_wait_limit_exceeded" in sql]
+
+
+def test_expired_task_carries_the_reason_the_operator_reads() -> None:
+    """Просроченная задача объясняет себя словами, а не одним машинным кодом.
+
+    Шов между двумя изменениями 20.08.2026: подметание писало в ``result``
+    только код причины, а очередь действий читает ключ ``operator_reason`` —
+    и оператор видел «Причина не записана» у задачи, причина которой известна
+    точно. Оба текста закрытые, ни один не приходит извне.
+    """
+    from core.tasks.queue import _EXPIRE_OVERDUE_SQL
+
+    assert "'operator_reason'" in _EXPIRE_OVERDUE_SQL
+    # Ожидание в очереди: ничего не уходило, повтор разрешён.
+    assert "В Facebook не уходило ничего" in _EXPIRE_OVERDUE_SQL
+    # Двусмысленный случай: повторять вслепую нельзя.
+    assert "сверка" in _EXPIRE_OVERDUE_SQL
+
+
+def test_expired_task_reason_never_promises_success() -> None:
+    """Ни одна ветка причины не выглядит успехом: просрочка — это отказ."""
+    from core.tasks.queue import _EXPIRE_OVERDUE_SQL
+
+    for forbidden in ("успешно", "выполнен", "готово"):
+        assert forbidden not in _EXPIRE_OVERDUE_SQL.lower()

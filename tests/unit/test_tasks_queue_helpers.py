@@ -181,7 +181,12 @@ async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wa
     # Окно исполнения выбирается по полосе строки и отсчитывается от захвата
     # (#219: то же правило теперь действует для всех полос, не только money).
     assert "CASE task.lane" in claim_sql
-    assert "WHEN 'money' THEN :money_deadline_seconds" in claim_sql
+    # Каждая ветка окна приведена к числу. Драйвер передаёт связанные значения
+    # без типа, поэтому CASE из одних плейсхолдеров выводится как text — и
+    # make_interval(secs => text) не существует. Живое падение 20.08.2026:
+    # claim валился на каждой задаче, а проверка точного текста этого не видела.
+    for lane in ("money", "bulk", "interactive", "background"):
+        assert f"CAST(:{lane}_deadline_seconds AS int)" in claim_sql
     assert "deadline_at = clock_timestamp() + make_interval" in claim_sql
     assert "browser_maintenance" in claim_sql
 

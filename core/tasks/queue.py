@@ -182,13 +182,19 @@ def _with_lane_window(statement: str, *, alias: str) -> str:
 
     Окно определено один раз на оператор: и дедлайн работы, и аренда считаются
     от одного и того же выражения, поэтому разойтись они не могут.
+
+    ``::int`` на каждой ветке обязателен. Драйвер передаёт связанные значения
+    без типа, поэтому ``CASE`` из одних плейсхолдеров выводится как ``text`` — и
+    ``make_interval(secs => text)`` не существует. Живое падение 20.08.2026:
+    claim валился на каждой задаче, а узкие тесты этого не видели, потому что
+    проверяли форму запроса, а не его исполнение.
     """
     window = (
         f"CASE {alias}.lane\n"
-        "            WHEN 'money' THEN :money_deadline_seconds\n"
-        "            WHEN 'bulk' THEN :bulk_deadline_seconds\n"
-        "            WHEN 'interactive' THEN :interactive_deadline_seconds\n"
-        "            ELSE :background_deadline_seconds\n"
+        "            WHEN 'money' THEN CAST(:money_deadline_seconds AS int)\n"
+        "            WHEN 'bulk' THEN CAST(:bulk_deadline_seconds AS int)\n"
+        "            WHEN 'interactive' THEN CAST(:interactive_deadline_seconds AS int)\n"
+        "            ELSE CAST(:background_deadline_seconds AS int)\n"
         "          END"
     )
     if "/*window*/" not in statement:
@@ -1132,8 +1138,8 @@ _CLAIM_SQL = text(
         lease_token = task_queue.lease_token + 1,
         deadline_at = clock_timestamp() + make_interval(secs => /*window*/),
         lease_expires_at = clock_timestamp() + make_interval(secs => GREATEST(
-          :lease_seconds,
-          /*window*/ + :finalize_headroom_seconds
+          CAST(:lease_seconds AS int),
+          /*window*/ + CAST(:finalize_headroom_seconds AS int)
         )),
         updated_at = clock_timestamp()
     WHERE id = (
@@ -1339,8 +1345,8 @@ _BROWSER_READY_CLAIM_SQL = text(
         lease_token = task.lease_token + 1,
         deadline_at = clock_timestamp() + make_interval(secs => /*window*/),
         lease_expires_at = clock_timestamp() + make_interval(secs => GREATEST(
-          :lease_seconds,
-          /*window*/ + :finalize_headroom_seconds
+          CAST(:lease_seconds AS int),
+          /*window*/ + CAST(:finalize_headroom_seconds AS int)
         )),
         updated_at = clock_timestamp()
     FROM candidate
@@ -3159,6 +3165,18 @@ _EXPIRE_OVERDUE_SQL = """
                       OR COALESCE(result->>'reconcile_required', 'false') = 'true'
                         THEN 'absolute_deadline_exceeded'
                     ELSE 'queue_wait_limit_exceeded'
+                END,
+                -- Очередь действий читает именно этот ключ. Без него оператор
+                -- видит «Причина не записана» у задачи, причина которой известна
+                -- точно. Оба текста закрытые: снаружи сюда ничего не приходит.
+                'operator_reason', CASE
+                    WHEN external_started_at IS NOT NULL
+                      OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        THEN 'Задача прервана по предельному сроку, '
+                             || 'а ответ внешней системы не получен — нужна сверка.'
+                    ELSE 'Задача так и не начала работу: истёк предельный срок '
+                         || 'ожидания в очереди. В Facebook не уходило ничего — '
+                         || 'можно запустить заново.'
                 END
             ),
         updated_at = NOW()
