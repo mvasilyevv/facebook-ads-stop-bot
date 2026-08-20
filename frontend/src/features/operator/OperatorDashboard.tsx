@@ -783,14 +783,28 @@ export function ActionList({ items }: { items: OperatorActionItem[] }) {
                 <span>Последний повтор {formatDateTime(item.updated_at, item.cabinet_timezone)}</span>
               ) : null}
             </div>
-            <Link
-              className="ledger-action-item__link"
-              to="/actions/$actionId"
-              params={{ actionId: item.id }}
-            >
-              Открыть действие
-              <ArrowRight size={14} aria-hidden="true" />
-            </Link>
+            {item.run_id ? (
+              // У залива есть свой экран с составом, созданными объектами и
+              // управлением. Вести оператора на общую карточку действия — значит
+              // показать конвейер обработки вместо самой кампании.
+              <Link
+                className="ledger-action-item__link"
+                to="/campaigns"
+                search={{ run: item.run_id }}
+              >
+                Открыть залив
+                <ArrowRight size={14} aria-hidden="true" />
+              </Link>
+            ) : (
+              <Link
+                className="ledger-action-item__link"
+                to="/actions/$actionId"
+                params={{ actionId: item.id }}
+              >
+                Открыть действие
+                <ArrowRight size={14} aria-hidden="true" />
+              </Link>
+            )}
           </li>
         );
       })}

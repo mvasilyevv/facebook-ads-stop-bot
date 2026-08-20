@@ -3472,6 +3472,8 @@ export interface components {
       state: components["schemas"]["OperatorActionState"];
       /** Title */
       title: string;
+      /** Run Id */
+      run_id?: string | null;
       /** Target Id */
       target_id?: string | null;
       /** Target Label */

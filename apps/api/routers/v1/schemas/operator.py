@@ -241,6 +241,9 @@ class OperatorActionItem(BaseModel):
     kind: Literal["pause", "activate", "scan", "create", "duplicate", "other"]
     state: OperatorActionState
     title: str
+    # Запуск залива, которому принадлежит действие. Без него экран действия
+    # не может показать сам залив — только собственный конвейер обработки.
+    run_id: str | None = None
     target_id: str | None = None
     target_label: str | None
     requested_at: datetime

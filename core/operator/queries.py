@@ -97,6 +97,27 @@ def _task_title(kind: str) -> str:
     }[kind]
 
 
+def _run_id(payload: dict[str, Any], result: dict[str, Any]) -> str | None:
+    """Запуск, которому принадлежит действие, — или ``None``, если его нет.
+
+    Сначала ``payload``: там ссылка есть с момента постановки в очередь, а в
+    ``result`` она появляется только при финализации. Действие, которое ещё
+    выполняется, — ровно то, ради которого оператор открывает залив.
+
+    Экран строит по этому значению адрес запуска, поэтому значение проверяется
+    как идентификатор, а не пробрасывается как есть.
+    """
+    for source in (payload, result):
+        raw = source.get("run_id")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            return str(uuid.UUID(raw.strip()))
+        except ValueError:
+            continue
+    return None
+
+
 def _task_item(row: Any) -> dict[str, Any]:
     payload = _json(row.payload)
     result = _json(row.result)
@@ -109,6 +130,7 @@ def _task_item(row: Any) -> dict[str, Any]:
         "public_id": f"#{row.id}",
         "kind": kind,
         "state": state,
+        "run_id": _run_id(payload, result),
         "title": _task_title(kind),
         "target_id": (
             str(payload_target_id)

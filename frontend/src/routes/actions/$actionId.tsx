@@ -120,6 +120,23 @@ function ActionDetailPage() {
         ) : null}
       </header>
 
+      {action.run_id ? (
+        <section className="mt-5 rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-1 p-5 sm:p-6">
+          <h2 className="m-0 font-display text-[20px] text-bg-11">Залив</h2>
+          <p className="mt-2 text-[14px] leading-6 text-bg-9">
+            Состав залива, созданные объекты и безопасные действия — на экране кампании.
+          </p>
+          <Link
+            to="/campaigns"
+            search={{ run: action.run_id }}
+            className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] bg-bg-3 px-4 text-[14px] font-semibold text-bg-11 hover:bg-bg-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            Открыть залив
+            <ArrowRight size={16} aria-hidden="true" />
+          </Link>
+        </section>
+      ) : null}
+
       <section className="mt-5 rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5 sm:p-6">
         <h2 className="m-0 font-display text-[20px] text-bg-11">Жизненный цикл</h2>
         <LifecycleRail state={action.state} />

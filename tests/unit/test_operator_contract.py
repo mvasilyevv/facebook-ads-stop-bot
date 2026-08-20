@@ -1310,3 +1310,62 @@ async def test_operator_ws_closes_for_reconciliation_when_pg_listener_terminates
     assert [message["type"] for message in websocket.messages] == ["snapshot_required"]
     assert connection.removed is True
     assert connection.termination_removed is True
+
+
+def _campaign_create_row(result: dict | None, payload: dict | None = None) -> SimpleNamespace:
+    """Строка задачи залива — единственный источник связи действия с запуском."""
+    return SimpleNamespace(
+        id=20,
+        task_type="campaign_create",
+        status="failed",
+        payload={"account_id": "111", **(payload or {})},
+        result=result,
+        target_label=None,
+        created_at=datetime(2026, 8, 20, 10, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 20, 10, 5, tzinfo=UTC),
+        requested_by="api_launch",
+        last_error="techtext",
+        correlation_id="00000000-0000-0000-0000-000000000020",
+    )
+
+
+def test_campaign_action_carries_the_run_it_belongs_to() -> None:
+    """Без ссылки на запуск экран действия не может показать сам залив.
+
+    Живая находка 20.08.2026: карточка «создание кампании» показывала
+    собственный конвейер, потому что состав залива, созданные объекты и
+    управление лежат в запуске, а действие о нём ничего не знало.
+    """
+    item = _task_item(
+        _campaign_create_row(
+            {"run_id": "5f1b25c9-1593-4cd5-b39e-068e877d32fa", "outcome": "UNKNOWN"}
+        )
+    )
+
+    assert item["run_id"] == "5f1b25c9-1593-4cd5-b39e-068e877d32fa"
+
+
+def test_action_without_a_run_reports_absence_not_a_fabricated_id() -> None:
+    """Нет запуска — это ``None``. Пустая строка увела бы экран на несуществующий запуск."""
+    assert _task_item(_campaign_create_row(None))["run_id"] is None
+    assert _task_item(_campaign_create_row({"outcome": "UNKNOWN"}))["run_id"] is None
+    assert _task_item(_campaign_create_row({"run_id": "   "}))["run_id"] is None
+
+
+def test_run_id_is_rejected_when_it_is_not_an_identifier() -> None:
+    """Значение из ``result`` не доверенное: экран строит по нему адрес запуска."""
+    assert _task_item(_campaign_create_row({"run_id": "../../etc"}))["run_id"] is None
+    assert _task_item(_campaign_create_row({"run_id": 12345}))["run_id"] is None
+
+
+def test_running_campaign_action_links_to_its_run_before_it_finishes() -> None:
+    """Ссылка на залив нужна раньше всего, пока он ещё идёт.
+
+    В ``result`` идентификатор появляется только при финализации, поэтому
+    источник связи — ``payload``: там он есть с момента постановки в очередь.
+    """
+    item = _task_item(
+        _campaign_create_row(None, {"run_id": "e02fbf4c-53e3-4451-8d43-2accfb65fbc7"})
+    )
+
+    assert item["run_id"] == "e02fbf4c-53e3-4451-8d43-2accfb65fbc7"

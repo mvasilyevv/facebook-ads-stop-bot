@@ -5,7 +5,7 @@
  * Переход к деталям (inline раскрытие или отдельная ссылка).
  */
 
-import { type FC, useState } from "react";
+import { type FC, useEffect, useRef, useState } from "react";
 import {
   campaignMetaIdGroups,
   campaignRunCommandLifecycle,
@@ -85,7 +85,12 @@ const STATUS_FILTER_OPTIONS = [
   { value: "cancelled", label: RUN_STATUS_LABELS.cancelled },
 ];
 
-export const CampaignRunsHistory: FC = () => {
+interface CampaignRunsHistoryProps {
+  /** Залив, который надо показать сразу раскрытым: оператор пришёл именно за ним. */
+  openRunId?: string | null;
+}
+
+export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ openRunId = null }) => {
   const [statusFilter, setStatusFilter] = useState("");
 
   const { data, isLoading, isError, error, refetch } = useRuns({
@@ -182,6 +187,7 @@ export const CampaignRunsHistory: FC = () => {
               <RunRow
                 key={run.id}
                 run={run}
+                openByDefault={run.id === openRunId}
                 onRefresh={async () => {
                   await refetch({ throwOnError: true });
                 }}
@@ -199,10 +205,20 @@ export const CampaignRunsHistory: FC = () => {
 interface RunRowProps {
   run: RunSummaryOut;
   onRefresh: () => Promise<unknown>;
+  openByDefault?: boolean;
 }
 
-const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
-  const [expanded, setExpanded] = useState(false);
+const RunRow: FC<RunRowProps> = ({ run, onRefresh, openByDefault = false }) => {
+  const [expanded, setExpanded] = useState(openByDefault);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // Оператор пришёл по ссылке за конкретным заливом: раскрываем и подводим к нему.
+  // Только раскрываем — схлопывать уже открытое вручную нельзя.
+  useEffect(() => {
+    if (!openByDefault) return;
+    setExpanded(true);
+    rowRef.current?.scrollIntoView({ block: "center" });
+  }, [openByDefault]);
 
   const createdAt = new Date(run.created_at).toLocaleString("ru-RU", {
     month: "short",
@@ -214,6 +230,7 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
   return (
     <>
       <div
+        ref={rowRef}
         data-testid="campaign-run-card"
         className="flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-bg-2 md:grid md:grid-cols-[minmax(0,1fr)_120px_140px] md:items-center"
       >
