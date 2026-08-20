@@ -228,6 +228,137 @@ describe("WizardStep7Launch — успешный залив", () => {
 
     expect(screen.getByText("Частичный результат")).toBeInTheDocument();
     expect(screen.getByText("Контекст кабинета не подтверждён")).toBeInTheDocument();
-    expect(screen.queryByText("Все кабинеты подтверждены")).toBeNull();
+    expect(screen.queryByText("Все кампании подтверждены")).toBeNull();
+  });
+
+  // Единица знаменателя — кампания, а не кабинет: у каждой кампании плана своя
+  // задача и свой исход (issue #214).
+  it("считает знаменатель по кампаниям одного кабинета", () => {
+    mocks.runDetail = null;
+    mocks.runDetails = {
+      "run-c1": SUCCEEDED_RUN,
+      "run-c2": { ...SUCCEEDED_RUN, status: "creating" },
+      "run-c3": SUCCEEDED_RUN,
+      "run-c4": SUCCEEDED_RUN,
+    };
+
+    render(
+      <WizardStep7Launch
+        config={CONFIG}
+        draftRevision={4}
+        draftSyncState="saved"
+        accountIds={["123"]}
+        launchReceipt={{
+          status: "queued",
+          draft_cleared: true,
+          request_state: "accepted",
+          accounts: [
+            {
+              account_id: "123",
+              status: "queued",
+              replayed: false,
+              campaigns: [
+                {
+                  campaign_key: "camp1",
+                  run_id: "run-c1",
+                  task_id: 1,
+                  status: "queued",
+                  replayed: false,
+                },
+                {
+                  campaign_key: "camp2",
+                  run_id: "run-c2",
+                  task_id: 2,
+                  status: "queued",
+                  replayed: false,
+                },
+                {
+                  campaign_key: "camp3",
+                  run_id: "run-c3",
+                  task_id: 3,
+                  status: "queued",
+                  replayed: false,
+                },
+                {
+                  campaign_key: "camp4",
+                  run_id: "run-c4",
+                  task_id: 4,
+                  status: "queued",
+                  replayed: false,
+                },
+              ],
+            },
+          ],
+        }}
+        onLaunchReceipt={vi.fn()}
+        onDraftCleared={vi.fn()}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/3 из 4 подтверждены/)).toBeInTheDocument();
+    for (const campaignKey of ["camp1", "camp2", "camp3", "camp4"]) {
+      expect(screen.getByText(campaignKey)).toBeInTheDocument();
+    }
+  });
+
+  // Отказ одной кампании не отменяет подтверждённые соседние.
+  it("показывает отказ одной кампании рядом с подтверждёнными соседями", () => {
+    mocks.runDetail = null;
+    mocks.runDetails = {
+      "run-c1": SUCCEEDED_RUN,
+      "run-c3": SUCCEEDED_RUN,
+    };
+
+    render(
+      <WizardStep7Launch
+        config={CONFIG}
+        draftRevision={4}
+        draftSyncState="saved"
+        accountIds={["123"]}
+        launchReceipt={{
+          status: "queued",
+          draft_cleared: true,
+          request_state: "partial",
+          accounts: [
+            {
+              account_id: "123",
+              status: "queued",
+              replayed: false,
+              campaigns: [
+                {
+                  campaign_key: "camp1",
+                  run_id: "run-c1",
+                  task_id: 1,
+                  status: "queued",
+                  replayed: false,
+                },
+                {
+                  campaign_key: "camp2",
+                  status: "rejected",
+                  error: "Концепт кампании не найден",
+                  replayed: false,
+                },
+                {
+                  campaign_key: "camp3",
+                  run_id: "run-c3",
+                  task_id: 3,
+                  status: "queued",
+                  replayed: false,
+                },
+              ],
+            },
+          ],
+        }}
+        onLaunchReceipt={vi.fn()}
+        onDraftCleared={vi.fn()}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Частичный результат")).toBeInTheDocument();
+    expect(screen.getByText("Концепт кампании не найден")).toBeInTheDocument();
+    expect(screen.getByText(/2 из 3 кампаний/)).toBeInTheDocument();
+    expect(screen.queryByText("Все кампании подтверждены")).toBeNull();
   });
 });

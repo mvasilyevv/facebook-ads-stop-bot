@@ -488,12 +488,12 @@ export interface paths {
     put?: never;
     /**
      * Launch Campaign
-     * @description Fan out one operator request into independent cabinet-scoped runs.
+     * @description Fan out one operator request into independent per-campaign runs.
      *
-     *     Each accepted cabinet still uses the existing atomic ``campaign_run + task``
-     *     transaction. An explicit multi-account request is restricted to
-     *     ``offer_ad_accounts`` and converts per-cabinet preflight failures into
-     *     per-cabinet receipts instead of rolling back successful siblings.
+     *     Веер идёт на двух уровнях: кабинеты плана, а внутри кабинета — кампании.
+     *     Каждая кампания получает свой ``campaign_run`` и свою задачу в той же
+     *     атомарной транзакции, что и раньше. Отказ до постановки — что кабинета,
+     *     что кампании — превращается в отдельный receipt и не откатывает соседей.
      */
     post: operations["launch_campaign_api_tools_campaigns_launch_post"];
     delete?: never;
@@ -3228,10 +3228,45 @@ export interface components {
     /**
      * LaunchAccountOut
      * @description Результат постановки одного кабинета, не скрывающий соседние ошибки.
+     *
+     *     ``campaigns`` — единицы залива этого кабинета. ``run_id``/``task_id``/
+     *     ``idempotency_key`` заполнены только когда кампания в кабинете ровно одна:
+     *     сводить план из нескольких кампаний к первой значило бы показать исход
+     *     одной кампании как исход кабинета.
      */
     LaunchAccountOut: {
       /** Account Id */
       account_id: string;
+      /** Run Id */
+      run_id?: string | null;
+      /** Task Id */
+      task_id?: number | null;
+      /** Status */
+      status: string;
+      /** Idempotency Key */
+      idempotency_key?: string | null;
+      /** Error */
+      error?: string | null;
+      /**
+       * Replayed
+       * @default false
+       */
+      replayed: boolean;
+      /** Campaigns */
+      campaigns?: components["schemas"]["LaunchCampaignOut"][];
+    };
+    /**
+     * LaunchCampaignOut
+     * @description Результат постановки ОДНОЙ кампании плана.
+     *
+     *     Одна кампания — одна задача и один наблюдаемый прогон, поэтому receipt тоже
+     *     на кампанию: ``run_id`` заполнен, когда кампания поставлена в очередь, и
+     *     равен ``null``, когда она отвергнута до постановки (тогда причина в
+     *     ``error``). Отказ одной кампании не меняет receipt остальных.
+     */
+    LaunchCampaignOut: {
+      /** Campaign Key */
+      campaign_key: string;
       /** Run Id */
       run_id?: string | null;
       /** Task Id */
@@ -3265,7 +3300,10 @@ export interface components {
     };
     /**
      * LaunchOut
-     * @description Один operator request с независимым receipt по каждому кабинету.
+     * @description Один operator request с независимым receipt по каждой кампании.
+     *
+     *     ``request_state`` считается по кампаниям, а не по кабинетам: единица залива
+     *     — кампания, и знаменатель «3 из 4» оператор видит именно по ним.
      */
     LaunchOut: {
       /** Run Id */

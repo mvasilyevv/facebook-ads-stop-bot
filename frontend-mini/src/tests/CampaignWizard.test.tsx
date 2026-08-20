@@ -180,10 +180,8 @@ describe("TMA campaign creator", () => {
     await user.click(screen.getByRole("button", { name: /Подтвердить план/ }));
     expect(screen.getByRole("region", { name: /Шаг 7:/ })).toBeVisible();
 
-    await user.click(
-      screen.getByRole("button", { name: /Подтвердить и поставить в очередь/ }),
-    );
-    expect(await screen.findByText("Запуски выполняются")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Подтвердить и поставить в очередь/ }));
+    expect(await screen.findByText("Кампании заливаются")).toBeVisible();
     expect(screen.getByText(/Зелёный итог появится только/)).toBeVisible();
     expect(api.launch).toHaveBeenCalledWith(
       expect.objectContaining({ draft_revision: 3, ad_account_ids: ["123"] }),
@@ -227,13 +225,11 @@ describe("TMA campaign creator", () => {
       await user.click(screen.getByRole("button", { name: /Далее/ }));
     }
     await user.click(screen.getByRole("button", { name: /Подтвердить план/ }));
-    await user.click(
-      screen.getByRole("button", { name: /Подтвердить и поставить в очередь/ }),
-    );
+    await user.click(screen.getByRole("button", { name: /Подтвердить и поставить в очередь/ }));
 
     expect(await screen.findByText("Частичный результат")).toBeVisible();
     expect(screen.getByText("Контекст кабинета не подтверждён")).toBeVisible();
-    expect(screen.queryByText("Все кабинеты подтверждены")).toBeNull();
+    expect(screen.queryByText("Все кампании подтверждены")).toBeNull();
   });
 
   // Тот же контракт в mini app: оператор видит причину, а не только факт.

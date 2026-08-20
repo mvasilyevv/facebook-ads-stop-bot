@@ -11,6 +11,7 @@
 import { type FC, useState } from "react";
 import {
   aggregateCampaignLaunchState,
+  campaignLaunchUnits,
   type CampaignLaunchObservedState,
 } from "@fb/features/campaigns";
 import { campaignRunFailurePresentation, campaignRunRequiresManualReview } from "@fb/shared";
@@ -166,44 +167,46 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
 };
 
 function LaunchBatchProgress({ receipt, onFinish }: { receipt: LaunchOut; onFinish: () => void }) {
-  const accounts = receipt.accounts ?? [];
-  const accepted = accounts.filter((account): account is typeof account & { run_id: string } =>
-    Boolean(account.run_id),
+  // Единица залива — кампания: у каждой своя задача и свой исход. Кабинет
+  // остаётся только группировкой на экране.
+  const units = campaignLaunchUnits(receipt.accounts);
+  const queued = units.filter((unit): unit is typeof unit & { runId: string } =>
+    Boolean(unit.runId),
   );
-  const details = useRunDetails(accepted.map((account) => account.run_id));
-  const detailByRunId = new Map(
-    accepted.map((account, index) => [account.run_id, details[index]?.data]),
-  );
-  const states: CampaignLaunchObservedState[] = accounts.map((account) => {
-    if (!account.run_id) return "rejected";
-    const detail = detailByRunId.get(account.run_id);
+  const details = useRunDetails(queued.map((unit) => unit.runId));
+  const detailByRunId = new Map(queued.map((unit, index) => [unit.runId, details[index]?.data]));
+  const states: CampaignLaunchObservedState[] = units.map((unit) => {
+    if (!unit.runId) return "rejected";
+    const detail = detailByRunId.get(unit.runId);
     if (detail?.task?.state === "unknown") return "unknown";
-    return (detail?.status ?? account.status) as CampaignLaunchObservedState;
+    return (detail?.status ?? unit.status) as CampaignLaunchObservedState;
   });
   const aggregate = aggregateCampaignLaunchState(states);
   const succeeded = states.filter((state) => state === "succeeded").length;
+  const total = units.length;
+  const accounts = receipt.accounts ?? [];
   const presentation = {
     working: {
-      title: "Запуски выполняются независимо",
-      detail: `${succeeded} из ${accounts.length} подтверждены; остальные ещё в работе или отклонены.`,
+      title: "Кампании заливаются независимо",
+      detail: `${succeeded} из ${total} подтверждены; остальные ещё в работе или отклонены.`,
       tone: "border-warning/35 bg-warning/10 text-warning",
       icon: <Loader2 size={16} className="animate-spin" aria-hidden="true" />,
     },
     succeeded: {
-      title: "Все кабинеты подтверждены",
-      detail: `${formatRussianCount(accounts.length, "запуск", "запуска", "запусков")} из ${formatRussianCount(accounts.length, "запуска", "запусков", "запусков")} завершен${russianCountIsOne(accounts.length) ? "" : "ы"} успешно.`,
+      title: "Все кампании подтверждены",
+      detail: `${formatRussianCount(total, "кампания", "кампании", "кампаний")} из ${formatRussianCount(total, "кампании", "кампаний", "кампаний")} залит${russianCountIsOne(total) ? "а" : "ы"} успешно.`,
       tone: "border-success/35 bg-success/10 text-success",
       icon: <CheckCircle size={16} aria-hidden="true" />,
     },
     partial: {
       title: "Частичный результат",
-      detail: `${formatRussianCount(succeeded, "запуск", "запуска", "запусков")} из ${formatRussianCount(accounts.length, "запуска", "запусков", "запусков")} успешн${russianCountIsOne(succeeded) ? "ен" : "ы"}. Остальные требуют отдельной проверки.`,
+      detail: `${succeeded} из ${formatRussianCount(total, "кампании", "кампаний", "кампаний")} залит${russianCountIsOne(succeeded) ? "а" : "ы"} успешно. Остальные требуют отдельной проверки.`,
       tone: "border-warning/40 bg-warning/10 text-warning",
       icon: <AlertTriangle size={16} aria-hidden="true" />,
     },
     failed: {
-      title: "Ни один запуск не подтверждён",
-      detail: "Ошибки показаны отдельно по каждому кабинету.",
+      title: "Ни одна кампания не подтверждена",
+      detail: "Ошибки показаны отдельно по каждой кампании.",
       tone: "border-danger/35 bg-danger/10 text-danger",
       icon: <XCircle size={16} aria-hidden="true" />,
     },
@@ -224,27 +227,46 @@ function LaunchBatchProgress({ receipt, onFinish }: { receipt: LaunchOut; onFini
         </strong>
         <p className="mt-1 text-[12px] text-bg-10">{presentation.detail}</p>
       </div>
-      {accounts.map((account) => (
-        <section
-          key={account.account_id}
-          className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-1 p-4"
-          aria-label={`Кабинет act_${account.account_id}`}
-        >
-          <div className="mb-3 flex items-center justify-between gap-3 border-b border-[var(--color-hairline)] pb-3">
-            <strong className="font-numeric text-[13px] text-bg-11">act_{account.account_id}</strong>
-            <span className="text-[12px] text-bg-9">
-              {account.run_id ? "Отдельный run" : "Не поставлен в очередь"}
-            </span>
-          </div>
-          {account.run_id ? (
-            <RunProgress runId={account.run_id} onFinish={onFinish} showFinish={false} />
-          ) : (
-            <p role="alert" className="m-0 text-[13px] text-danger">
-              {account.error ?? "Сервер отклонил запуск кабинета"}
-            </p>
-          )}
-        </section>
-      ))}
+      {accounts.map((account) => {
+        const accountUnits = units.filter((unit) => unit.accountId === account.account_id);
+        return (
+          <section
+            key={account.account_id}
+            className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-1 p-4"
+            aria-label={`Кабинет act_${account.account_id}`}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3 border-b border-[var(--color-hairline)] pb-3">
+              <strong className="font-numeric text-[13px] text-bg-11">
+                act_{account.account_id}
+              </strong>
+              <span className="text-[12px] text-bg-9">
+                {formatRussianCount(accountUnits.length, "кампания", "кампании", "кампаний")}
+              </span>
+            </div>
+            <div className="space-y-4">
+              {accountUnits.map((unit) => (
+                <div key={`${unit.accountId}:${unit.campaignKey ?? "—"}`}>
+                  {unit.campaignKey ? (
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="text-[12px] text-bg-10">{unit.campaignKey}</span>
+                      <span className="text-[12px] text-bg-9">
+                        {unit.runId ? "Отдельный run" : "Не поставлена в очередь"}
+                      </span>
+                    </div>
+                  ) : null}
+                  {unit.runId ? (
+                    <RunProgress runId={unit.runId} onFinish={onFinish} showFinish={false} />
+                  ) : (
+                    <p role="alert" className="m-0 text-[13px] text-danger">
+                      {unit.error ?? "Сервер отклонил запуск"}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })}
       {aggregate !== "working" ? (
         <Button variant="secondary" size="lg" onClick={onFinish}>
           Завершить визард
