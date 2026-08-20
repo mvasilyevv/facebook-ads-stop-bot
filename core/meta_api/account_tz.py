@@ -2,8 +2,9 @@
 """Durable Meta account context and cabinet-day resolution.
 
 ``meta_account_snapshot`` in PostgreSQL is the sole authority for validated
-IANA timezone and currency evidence. Numeric offsets, implicit USD and Redis
-caches are intentionally absent: cache loss must never change money semantics.
+IANA timezone, currency and ad-account-status evidence. Numeric offsets,
+implicit USD, an assumed-active account and Redis caches are intentionally
+absent: cache loss must never change money semantics.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.meta_api.account_status import validated_account_status
 from core.money import (
     UnsupportedCurrencyExponentError,
     currency_exponent,
@@ -119,6 +121,14 @@ class AccountCurrencyResolution:
 class FetchedAccountContext:
     timezone_name: str | None
     currency: str | None
+    # Подтверждённый Meta статус кабинета; None — «не подтверждён», не «активен».
+    account_status: int | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        """Meta не подтвердила ни одного поля — записывать в снимок нечего."""
+
+        return self.timezone_name is None and self.currency is None and self.account_status is None
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,24 +414,30 @@ async def fetch_account_timezone(client: Any, account_id: str) -> str | None:
 
 
 async def fetch_account_context(client: Any, account_id: str) -> FetchedAccountContext:
-    """Fetch validated timezone and currency in one authoritative Graph read."""
+    """Fetch validated timezone, currency and account status in one Graph read.
+
+    ``account_status`` читается тем же запросом: отдельный поход в Meta ради него
+    означал бы, что состояние кабинета и его денежный контекст расходятся во
+    времени.
+    """
 
     account = canonical_account_id(account_id)
     if not account:
-        return FetchedAccountContext(timezone_name=None, currency=None)
+        return FetchedAccountContext(timezone_name=None, currency=None, account_status=None)
     try:
         response = await client.execute_graph_call(
             method="GET",
             endpoint=f"/act_{account}",
-            query_params={"fields": "timezone_name,currency"},
+            query_params={"fields": "timezone_name,currency,account_status"},
             ad_account_id=account,
         )
     except Exception as exc:  # noqa: BLE001 - refresh is outside the money path
         logger.warning("account context fetch failed for act_%s: %s", account, exc)
-        return FetchedAccountContext(timezone_name=None, currency=None)
+        return FetchedAccountContext(timezone_name=None, currency=None, account_status=None)
     return FetchedAccountContext(
         timezone_name=validated_timezone_name(response.get("timezone_name")),
         currency=validated_currency_code(response.get("currency")),
+        account_status=validated_account_status(response.get("account_status")),
     )
 
 
@@ -462,17 +478,23 @@ async def persist_account_context(
     account_id: str,
     timezone_name: str | None,
     currency: str | None,
+    account_status: int | None = None,
     observed_at: datetime | None = None,
 ) -> bool:
-    """Upsert only validated account evidence; never replace it with a guess."""
+    """Upsert only validated account evidence; never replace it with a guess.
+
+    Статус кабинета хранится со своей отметкой наблюдения: неподтверждённый
+    статус обязан выглядеть неподтверждённым, а не унаследовать чужую свежесть.
+    """
 
     canonical_id = canonical_account_id(account_id)
     valid_timezone = validated_timezone_name(timezone_name)
     valid_currency = validated_currency_code(currency)
+    valid_status = validated_account_status(account_status)
     if (
         not canonical_id
         or len(canonical_id) > 32
-        or (valid_timezone is None and valid_currency is None)
+        or (valid_timezone is None and valid_currency is None and valid_status is None)
     ):
         return False
     evidence_at = observed_at or datetime.now(UTC)
@@ -483,10 +505,16 @@ async def persist_account_context(
             text(
                 """
                 INSERT INTO meta_account_snapshot
-                    (account_id, timezone_name, currency, currency_observed_at)
+                    (account_id, timezone_name, currency, currency_observed_at,
+                     account_status, account_status_observed_at)
                 VALUES
                     (:account_id, :timezone_name, CAST(:currency AS VARCHAR),
                      CASE WHEN CAST(:currency AS VARCHAR) IS NULL
+                          THEN NULL
+                          ELSE CAST(:observed_at AS TIMESTAMPTZ)
+                     END,
+                     CAST(:account_status AS SMALLINT),
+                     CASE WHEN CAST(:account_status AS SMALLINT) IS NULL
                           THEN NULL
                           ELSE CAST(:observed_at AS TIMESTAMPTZ)
                      END)
@@ -503,6 +531,15 @@ async def persist_account_context(
                         WHEN EXCLUDED.currency IS NOT NULL THEN EXCLUDED.currency_observed_at
                         ELSE meta_account_snapshot.currency_observed_at
                     END,
+                    account_status = COALESCE(
+                        EXCLUDED.account_status,
+                        meta_account_snapshot.account_status
+                    ),
+                    account_status_observed_at = CASE
+                        WHEN EXCLUDED.account_status IS NOT NULL
+                            THEN EXCLUDED.account_status_observed_at
+                        ELSE meta_account_snapshot.account_status_observed_at
+                    END,
                     updated_at = NOW()
                 """
             ),
@@ -510,6 +547,7 @@ async def persist_account_context(
                 "account_id": canonical_id,
                 "timezone_name": valid_timezone,
                 "currency": valid_currency,
+                "account_status": valid_status,
                 "observed_at": evidence_at,
             },
         )
@@ -535,11 +573,11 @@ async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
                 target=canonical_id,
             ) as fence:
                 context = await fetch_account_context(client, canonical_id)
-                if context.timezone_name is None and context.currency is None:
+                if context.is_empty:
                     # Молчаливый пропуск скрывал реальную причину: снимка нет,
                     # визард блокирует залив, а в логе ни строки (прод, 17.08.2026).
                     logger.warning(
-                        "Meta не отдала пояс и валюту по кабинету act_%s — снимок не обновлён",
+                        "Meta не отдала пояс, валюту и статус кабинета act_%s — снимок не обновлён",
                         canonical_id,
                     )
                     continue
@@ -549,6 +587,7 @@ async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
                     account_id=canonical_id,
                     timezone_name=context.timezone_name,
                     currency=context.currency,
+                    account_status=context.account_status,
                 ):
                     updated += 1
         except BrowserOperationBlocked:

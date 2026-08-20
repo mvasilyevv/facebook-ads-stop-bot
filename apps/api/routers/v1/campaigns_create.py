@@ -75,6 +75,7 @@ from core.ad_account_catalog import ad_account_catalog
 from core.campaign_builder.account_context import (
     CampaignAccountContext,
     CampaignAccountContextError,
+    campaign_account_context_message,
     require_campaign_account_context,
 )
 from core.campaign_builder.builder import build_campaign_spec, total_code_span
@@ -327,6 +328,30 @@ async def _require_offer_scope(
         )
 
 
+def _account_context_rejection(exc: CampaignAccountContextError) -> HTTPException:
+    """Перевести отказ контекста кабинета в отказ ДО отправки чего-либо в Meta.
+
+    Устаревший снимок и неактивный кабинет — это конфликт с состоянием, а не
+    ошибка ввода: оператор ничего не может исправить в форме. Причина уходит
+    словами, машинный код причины остаётся в логе.
+    """
+
+    context = exc.context
+    is_conflict = context.state == "stale" or context.blocked_by_account_status
+    logger.info(
+        "campaign launch rejected before dispatch: state=%s issue=%s",
+        context.state,
+        context.issue,
+    )
+    return HTTPException(
+        status_code=409 if is_conflict else 422,
+        detail=(
+            campaign_account_context_message(context)
+            or "Контекст кабинета не подтверждён — запуск заблокирован"
+        ),
+    )
+
+
 async def _campaign_config_from_request(
     body: ValidateIn | LaunchIn,
     engine: DepEngine,
@@ -341,13 +366,7 @@ async def _campaign_config_from_request(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Некорректный Ad Account ID") from exc
     except CampaignAccountContextError as exc:
-        status_code = 409 if exc.context.state == "stale" else 422
-        message = (
-            "Контекст кабинета устарел; дождитесь подтверждённого обновления Meta"
-            if exc.context.state == "stale"
-            else "Для кабинета не подтверждены таймзона, валюта или денежная точность"
-        )
-        raise HTTPException(status_code=status_code, detail=message) from exc
+        raise _account_context_rejection(exc) from exc
 
     if context.currency != "USD" or context.currency_exponent != 2:
         raise HTTPException(
