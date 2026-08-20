@@ -83,7 +83,12 @@ async def reconcile_stuck_running(engine: AsyncEngine) -> int:
 
 
 async def expire_overdue(engine: AsyncEngine) -> int:
-    """Close queued work whose absolute deadline elapsed before execution."""
+    """Close queued work that outwaited its queue wait limit.
+
+    Потребитель очереди закрывает свои просроченные задачи сам, на пустом
+    claim. Этот проход остаётся общей подметалкой: он видит и те полосы, у
+    которых прямо сейчас нет живого воркера.
+    """
     return await _canonical_expire_overdue_tasks(engine)
 
 
