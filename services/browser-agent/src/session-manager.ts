@@ -321,6 +321,15 @@ export class SessionManager {
    * остальные.
    */
   private openFailures = new Map<string, { streak: number; until: number }>();
+
+  // Профили, которые мы видели ЗАПУЩЕННЫМИ в этом процессе, и профили, которые
+  // мы останавливали САМИ. Пара нужна, чтобы отличить холодный старт (профиль
+  // просто не запущен — запускаем спокойно) от «профиль забрала другая машина»
+  // (мы его видели живым, сами не останавливали, а из /list он исчез).
+  // Во втором случае запускать нельзя: Vision развернёт архив из облака, то есть
+  // снимок чужой машины, и Facebook погасит такую сессию как чужую.
+  private observedRunningProfiles = new Set<string>();
+  private selfStoppedProfiles = new Set<string>();
   async startBrowser(options: {
     visionXToken: string;
     visionApiUrl: string;
@@ -378,6 +387,8 @@ export class SessionManager {
       console.log(
         `[session-manager] профиль уже с CDP-портом ${existingProfile.port}, использую как есть`,
       );
+      this.observedRunningProfiles.add(visionProfileId);
+      this.selfStoppedProfiles.delete(visionProfileId);
       profile = { port: existingProfile.port };
     } else if (existingProfile) {
       // У Vision порт иногда появляется с задержкой, поэтому сначала даем ему короткий grace period.
@@ -396,6 +407,17 @@ export class SessionManager {
       } else {
         throw buildMaintenanceRecoveryRequiredError(visionProfileId);
       }
+    } else if (
+      forceProfileRestart
+      && this.observedRunningProfiles.has(visionProfileId)
+      && !this.selfStoppedProfiles.has(visionProfileId)
+    ) {
+      // Профиль был живым в этом процессе, мы его не останавливали — и он исчез
+      // из /list. Значит его забрал другой потребитель (вторая машина с той же
+      // папкой профилей). Запуск здесь развернул бы облачный архив поверх живой
+      // сессии и разлогинил бы кабинет: ровно та цепочка, которая на проде
+      // выглядела как «профиль разлогинен» после каждого восстановления.
+      throw buildProfileTakenElsewhereError(visionProfileId);
     } else if (forceProfileRestart) {
       console.log(
         `[session-manager] maintenance recovery starts stopped profile`,
@@ -1263,6 +1285,9 @@ export class SessionManager {
     profileId: string,
     signal?: AbortSignal,
   ): Promise<{ port: number | null }> {
+    // Остановка наша — значит последующее исчезновение из /list ожидаемо и
+    // запускать профиль заново законно.
+    this.selfStoppedProfiles.add(profileId);
     try {
       return await visionClient.restartProfileToRecoverPort(
         folderId,
@@ -1350,6 +1375,17 @@ async function reloadPageWithinOperation(
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }
+}
+
+export const PROFILE_TAKEN_ELSEWHERE_MARKER = "cabinet_profile_taken_elsewhere";
+
+function buildProfileTakenElsewhereError(profileId: string): Error {
+  return new Error(
+    `${PROFILE_TAKEN_ELSEWHERE_MARKER}: профиль ${profileId} забрало другое ` +
+      "подключение. Перезапуск развернул бы облачный снимок поверх живой сессии " +
+      "и разлогинил бы кабинет, поэтому запуск не выполняется. " +
+      "Один профиль Vision — один потребитель.",
+  );
 }
 
 function buildMaintenanceRecoveryRequiredError(profileId: string): Error {

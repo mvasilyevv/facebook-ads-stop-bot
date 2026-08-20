@@ -2278,3 +2278,82 @@ test("ensureInteractivePage переиспользует собственную 
   assert.equal(second, own as any);
   assert.equal(created, 1, "вторая вкладка под ту же роль и кабинет не нужна");
 });
+
+// #205: профиль, который забрала другая машина, НЕ запускается заново.
+// Vision при остановке архивирует профиль в облако, а при запуске разворачивает
+// архив обратно. Если тот же профиль открыт на второй машине, наш «перезапуск
+// пропавшего профиля» разворачивает чужой снимок поверх живой сессии, и Facebook
+// гасит её как чужую. На проде это выглядело как «профиль разлогинен» после
+// каждого восстановления, причём локально сессия не рвалась никогда.
+test("профиль, забранный другой машиной, не перезапускается вслепую", async () => {
+  const manager = new SessionManager();
+  const adsPage = {
+    url: () => "https://www.facebook.com/adsmanager/manage/campaigns",
+  };
+  const browser = {
+    contexts: () => [{ addInitScript: async () => {}, pages: () => [adsPage] }],
+  };
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalStartProfile = VisionClient.prototype.startProfile;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  let profileIsRunning = true;
+  const startCalls: string[] = [];
+
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return "folder-1";
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return profileIsRunning
+      ? { folder_id: "folder-1", profile_id: "profile-taken", port: 7101 }
+      : null;
+  };
+  VisionClient.prototype.waitUntilCdpReady = async function waitUntilCdpReady() {
+    return true;
+  };
+  VisionClient.prototype.startProfile = async function startProfile(
+    _folderId: string,
+    profileId: string,
+  ) {
+    startCalls.push(profileId);
+    return { folder_id: "folder-1", profile_id: profileId, port: 7102 };
+  };
+  (chromium as any).connectOverCDP = async () => browser as any;
+
+  try {
+    // Сначала профиль живой — мы это видим и запоминаем.
+    await manager.startBrowser({
+      visionXToken: "token",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-taken",
+    });
+
+    // Профиль исчезает из /list, при этом мы его не останавливали.
+    profileIsRunning = false;
+
+    await assert.rejects(
+      manager.startBrowser({
+        visionXToken: "token",
+        visionApiUrl: "http://127.0.0.1:3030",
+        visionProfileId: "profile-taken",
+        forceProfileRestart: true,
+      } as any),
+      /cabinet_profile_taken_elsewhere/,
+      "исчезнувший не по нашей воле профиль обязан дать различимый отказ",
+    );
+    assert.deepEqual(
+      startCalls,
+      [],
+      "startProfile не должен вызываться: он развернёт облачный снимок поверх живой сессии",
+    );
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    VisionClient.prototype.startProfile = originalStartProfile;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
+});
