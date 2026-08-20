@@ -72,15 +72,24 @@ async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
             )
             if seed_account_context:
                 await conn.execute(
+                    # Статус кабинета — часть подтверждённого контекста с
+                    # миграции 0008: без него предполёт отвечает
+                    # `campaign_account_status_unknown`, и позитивные тесты
+                    # модуля видели бы 422 вместо самой проверки. Значение 1 —
+                    # ACCOUNT_STATUS_ACTIVE, единственный подтверждённо
+                    # активный кабинет; всё прочее — неизвестность.
                     text(
                         """
                         INSERT INTO meta_account_snapshot(
                             account_id,
                             timezone_name,
                             currency,
-                            currency_observed_at
+                            currency_observed_at,
+                            account_status,
+                            account_status_observed_at
                         )
-                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp())
+                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp(),
+                                1, clock_timestamp())
                         """
                     )
                 )
@@ -172,9 +181,12 @@ async def _seed_multi_account_offer(pg_engine, *, seed_second_context: bool) -> 
                         account_id,
                         timezone_name,
                         currency,
-                        currency_observed_at
+                        currency_observed_at,
+                        account_status,
+                        account_status_observed_at
                     )
-                    VALUES ('456', 'America/New_York', 'USD', clock_timestamp())
+                    VALUES ('456', 'America/New_York', 'USD', clock_timestamp(),
+                            1, clock_timestamp())
                     """
                 )
             )
