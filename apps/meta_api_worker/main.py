@@ -2143,24 +2143,42 @@ async def task_loop(
         vision_profile_id = str(claim.browser_profile_id or "").strip()
         if not vision_profile_id:
             raise RuntimeError("browser-ready claim returned no canonical Vision profile")
-        with client.operation_authority(
-            caller=_BROWSER_OPERATION_CALLER,
-            task_id=claim.task.id,
-            lease_owner=claim.task.lease_owner,
-            lease_token=claim.task.lease_token,
-            vision_profile_id=vision_profile_id,
-            browser_readiness_generation=claim.browser_readiness_generation,
-        ):
-            # Mutation может исполняться дольше poll_stale_after_seconds (upload,
-            # медленный Meta). Периодический тик доказывает «воркер занят
-            # настоящей работой» (review issue #176 Б2).
-            async with poll_heartbeat_while_running(engine, WORKER_NAME):
-                await process_one_task(
-                    engine,
-                    claim.task,
-                    client=client,
-                    alert_ctx=alert_ctx,
-                )
+        # Очередь называет не только профиль, но и конкретную сессию браузера, на
+        # которой подтверждена готовность. Без закрепления воркер шёл со своей
+        # текущей, а пустой session_id означает «выбери сам самую свежую»: между
+        # claim и первым RPC предпочитаемая сессия менялась (перезапуск
+        # observer'а, восстановление), и пауза уходила в другой сессии — это и не
+        # остановленный слив, и вмешательство в чужую рекламу. Смена сессии
+        # посреди задачи теперь отказ ДО отправки: сверяет её сам клиент на
+        # предполёте каждой money-операции.
+        claimed_session_id = str(claim.browser_session_id or "").strip()
+        if not claimed_session_id:
+            raise RuntimeError("browser-ready claim returned no browser session")
+        previous_session_id = client.session_id
+        client.session_id = claimed_session_id
+        try:
+            with client.operation_authority(
+                caller=_BROWSER_OPERATION_CALLER,
+                task_id=claim.task.id,
+                lease_owner=claim.task.lease_owner,
+                lease_token=claim.task.lease_token,
+                vision_profile_id=vision_profile_id,
+                browser_readiness_generation=claim.browser_readiness_generation,
+            ):
+                # Mutation может исполняться дольше poll_stale_after_seconds (upload,
+                # медленный Meta). Периодический тик доказывает «воркер занят
+                # настоящей работой» (review issue #176 Б2).
+                async with poll_heartbeat_while_running(engine, WORKER_NAME):
+                    await process_one_task(
+                        engine,
+                        claim.task,
+                        client=client,
+                        alert_ctx=alert_ctx,
+                    )
+        finally:
+            # Закрепление живёт ровно столько, сколько задача: между задачами
+            # клиент общий, и чужая сессия не должна пережить свой claim.
+            client.session_id = previous_session_id
 
 
 # ====================== entrypoint ======================
