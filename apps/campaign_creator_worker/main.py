@@ -79,6 +79,7 @@ from core.meta_api.errors import (
     LoginRequiredError,
     MetaApiError,
     PreDispatchRejectedError,
+    unretryable_browser_rejection,
 )
 from core.meta_api.upload import MediaUploader
 from core.metrics import record_campaign_upload_storage
@@ -485,6 +486,7 @@ def _campaign_rejected_result(
     run_id: str,
     reason: str,
     failed_step: str | None = None,
+    pre_dispatch_reason_code: str | None = None,
     exc: BaseException | None = None,
 ) -> dict[str, Any]:
     """Результат доказанного отказа: побочного эффекта нет, причина названа.
@@ -492,6 +494,10 @@ def _campaign_rejected_result(
     ``operator_reason`` пишется здесь же, а не выводится потом из состояния:
     отказ по исчерпанному дедлайну и отказ по недоступному браузеру — разные
     события, и оператор должен видеть разный текст.
+
+    ``pre_dispatch_reason_code`` — код отказа, названного самим браузером. Без
+    него оператор узнает, что залив отвергнут до отправки, но не узнает, что
+    именно отвергли (чужой кабинет, неверная подпись, неавторизованный вызов).
     """
     result: dict[str, Any] = {
         "outcome": "REJECTED",
@@ -502,10 +508,14 @@ def _campaign_rejected_result(
     operator_reason = _operator_failure_reason(
         reason_code=reason,
         failed_step=failed_step,
+        pre_dispatch_reason_code=pre_dispatch_reason_code,
         exc=exc,
     )
     if operator_reason:
         result["operator_reason"] = operator_reason
+    if pre_dispatch_reason_code:
+        result["pre_dispatch"] = True
+        result["pre_dispatch_reason_code"] = pre_dispatch_reason_code
     return result
 
 
@@ -1341,6 +1351,42 @@ async def _execute_run(
                     "reason": "external_result_ambiguous",
                 },
             )
+            return
+        # Исход разобран выше и здесь не пересматривается: доказанный отказ до
+        # отправки — это REJECTED. Ниже решается только политика повтора, и
+        # решает её код причины, названный браузером, а не класс исключения:
+        # истёкший грант лечится следующей попыткой, чужой кабинет и неверная
+        # подпись — нет, и вечный requeue прячет поломку вместо того, чтобы её
+        # показать.
+        unretryable_rejection = unretryable_browser_rejection(exc)
+        if unretryable_rejection is not None:
+            # exc_info: наружу едет только код причины из закрытого словаря,
+            # сырой текст отказа остаётся в логе воркера.
+            logger.error(
+                "campaign_create: task id=%s → rejected before send, retry cannot "
+                "fix it (reason=%s step=%s)",
+                task.id,
+                unretryable_rejection.reason_code,
+                last_stage,
+                exc_info=True,
+            )
+            await finalize_run_failed(
+                engine,
+                run_id,
+                task=task,
+                error=(
+                    "browser rejected the request before send and a retry cannot "
+                    f"fix it: {unretryable_rejection.reason_code}"
+                ),
+                task_result=_campaign_rejected_result(
+                    run_id=run_id,
+                    reason="browser_rejection_not_retryable",
+                    failed_step=last_stage,
+                    pre_dispatch_reason_code=unretryable_rejection.reason_code,
+                    exc=exc,
+                ),
+            )
+            # Концепты НЕ чистим — их переиспользует повторный залив тем же config.
             return
         kind = classify_execution_error(exc)
         if kind == "transient":

@@ -14,6 +14,8 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 Маршрутизация ошибок:
 - PermanentError / TokenInvalidError / NotFoundError / PermissionError → mark_failed (retry бесполезен)
 - RateLimitedError / TemporaryError / SessionUnavailableError → requeue_for_retry
+- BrowserOperationRejectedError с причиной из BROWSER_OPERATION_PERMANENT_REJECTIONS →
+  mark_failed с исходом REJECTED: отправки не было, но повтор той же задачи не лечит
 - NotImplementedError (новый mutation_kind без handler) → mark_failed
 - MutationValidationError (осознанная валидационная ошибка в handler'е) → mark_failed
 - голый ValueError (неожиданный, баг в коде) → requeue (защитный retry, логируется как аномалия)
@@ -60,6 +62,7 @@ from core.meta_api.errors import (
     SessionUnavailableError,
     TemporaryError,
     TokenInvalidError,
+    unretryable_browser_rejection,
 )
 from core.meta_api.errors import (
     PermissionError as MetaPermissionError,
@@ -102,6 +105,7 @@ from core.observer.enable_grace import (
     prepare_enable_grace,
 )
 from core.observer.queries import load_scanning_enabled
+from core.tasks.action_reason import browser_rejection_not_retryable_reason
 from core.tasks.queue import (
     Task,
     defer_unknown_reconciliation,
@@ -1820,8 +1824,16 @@ async def process_one_task(
         # FAILED_PRECONDITION, browser-agent without a token). Other transient
         # failures may have crossed the Meta boundary and are never replayed for
         # an irreversible duplicate operation.
+        # Три независимых вопроса об одной ошибке, и склеивать их нельзя:
+        #   1. каков исход — known_not_committed отвечает «отправки не было»;
+        #   2. тратить ли попытку — readiness_rejected отвечает «нет»;
+        #   3. поможет ли повтор вообще — unretryable_rejection отвечает по коду
+        #      причины, названному browser-agent'ом.
+        # Ответ на (1) от ответа на (3) не зависит: неисправимый отказ остаётся
+        # доказанным REJECTED, меняется только то, вернётся ли задача в очередь.
         readiness_rejected = isinstance(exc, BrowserReadinessRejectedError)
         known_not_committed = isinstance(exc, SessionUnavailableError)
+        unretryable_rejection = unretryable_browser_rejection(exc)
         if external_boundary_crossed and not known_not_committed:
             if payload.mutation_kind in {
                 "pause_ad",
@@ -1861,6 +1873,59 @@ async def process_one_task(
             return
         if payload.mutation_kind in _IRREVERSIBLE_KINDS and not known_not_committed:
             await _fail_irreversible(engine, task, payload, exc, reason="temporary")
+            return
+        if unretryable_rejection is not None:
+            # Запрос собран неверно или вызывающему не разрешено это делать:
+            # повтор той же задачи вернёт тот же отказ. Исход прежний —
+            # REJECTED, отправки не было и сверять нечего, — но задача
+            # закрывается сразу, а не крутится до исчерпания попыток, пряча
+            # поломку вызывающего под видом недоступного канала.
+            # Причина названа кодом из закрытого словаря: сырой текст отказа
+            # наружу не выносится, детали остаются в логе рядом с exc_info.
+            logger.error(
+                "meta_api: task id=%s → rejected before send, retry cannot fix it "
+                "(kind=%s reason=%s)",
+                task.id,
+                payload.mutation_kind,
+                unretryable_rejection.reason_code,
+                exc_info=True,
+            )
+            rejected_result: dict[str, Any] = {
+                "outcome": "REJECTED",
+                "reason": "browser_rejection_not_retryable",
+                "pre_dispatch": True,
+                "pre_dispatch_reason_code": unretryable_rejection.reason_code,
+            }
+            operator_reason = browser_rejection_not_retryable_reason(
+                unretryable_rejection.reason_code
+            )
+            if operator_reason:
+                rejected_result["operator_reason"] = operator_reason
+            applied = await mark_task_failed(
+                engine,
+                task_id=task.id,
+                error=(
+                    "browser rejected the request before send and a retry cannot "
+                    f"fix it: {unretryable_rejection.reason_code}"
+                ),
+                result=rejected_result,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
+            if not applied:
+                logger.warning(
+                    "meta_api: task id=%s mark_failed (unretryable rejection) "
+                    "не применился — гонка с другим воркером",
+                    task.id,
+                )
+            # Повторов больше не будет, а объявление продолжает тратить бюджет:
+            # money-сигнал «команда не дошла до кабинета» нужен здесь тем более.
+            if alert_ctx is not None and task.requested_by == _AUTO_STOP_REQUESTED_BY:
+                await maybe_alert_autostop_channel_down(
+                    exc=exc,
+                    fb_ad_id=payload.target_id,
+                    engine=alert_ctx.engine,
+                )
             return
         if readiness_rejected:
             pre_send_status = await release_task_after_browser_readiness_rejection(

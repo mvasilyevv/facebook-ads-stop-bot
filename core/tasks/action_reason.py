@@ -44,6 +44,13 @@ CAMPAIGN_STEP_LABELS: dict[str, str] = {
     "creating": "создание объектов кампании",
 }
 
+# Отказ браузера до отправки называется оператору одинаково в любой полосе:
+# и у залива, и у паузы это одно и то же событие с одним словарём причин.
+_BROWSER_REJECTION_PREFIX = "Браузер отказал до отправки"
+# Политика повтора — отдельная фраза, потому что это отдельный факт: причина
+# отказа названа выше, а здесь сказано, что ждать повтора бессмысленно.
+_NOT_RETRYABLE_CAUSE = "Повтор той же задачи не поможет"
+
 # Машинный код причины финализации → та же причина словами оператора. Словарь
 # закрытый: незнакомый код НЕ пробрасывается как есть — внутренний код в
 # карточке оператора запрещён каноном.
@@ -55,6 +62,7 @@ CAMPAIGN_REASON_CAUSES: dict[str, str] = {
     "ack_lost_nothing_confirmed": (
         "Ответ Meta потерян после отправки кампании, подтверждённых объектов нет"
     ),
+    "browser_rejection_not_retryable": _NOT_RETRYABLE_CAUSE,
     "cancel_requested": "Залив остановлен по запросу отмены",
     "creator_dependencies_unavailable": "Сервисы залива недоступны",
     "deadline_exceeded": "Истёк отведённый заливу срок",
@@ -132,10 +140,28 @@ def campaign_operator_reason(
     if cause:
         parts.append(cause)
     if rejection:
-        parts.append(f"Браузер отказал до отправки: {rejection}")
+        parts.append(f"{_BROWSER_REJECTION_PREFIX}: {rejection}")
     if meta:
         parts.append(f"Ответ Meta: {meta.rstrip('.')}")
     return sanitize_operator_reason(". ".join(parts) + ".")
+
+
+def browser_rejection_not_retryable_reason(reason_code: str | None) -> str | None:
+    """Неисправимый отказ браузера словами оператора — для задачи любой полосы.
+
+    Залив собирает свою причину из нескольких частей (шаг, причина, ответ Meta),
+    а мутации кабинета — нет: у паузы и активации шага нет, и вся причина
+    состоит из названного отказа и того, что повтор его не вылечит.
+
+    Незнакомый код возвращает ``None``: «неизвестно» остаётся неизвестным, а
+    внутренний код в карточку оператора не уезжает.
+    """
+    rejection = BROWSER_OPERATION_REJECTION_REASONS.get(str(reason_code or "").strip())
+    if not rejection:
+        return None
+    return sanitize_operator_reason(
+        f"{_BROWSER_REJECTION_PREFIX}: {rejection}. {_NOT_RETRYABLE_CAUSE}."
+    )
 
 
 def operator_reason_from_result(result: Mapping[str, Any] | None) -> str | None:
@@ -154,6 +180,7 @@ __all__ = [
     "CAMPAIGN_REASON_CAUSES",
     "CAMPAIGN_STEP_LABELS",
     "OPERATOR_REASON_MAX_LEN",
+    "browser_rejection_not_retryable_reason",
     "campaign_operator_reason",
     "operator_reason_from_result",
     "sanitize_operator_reason",
