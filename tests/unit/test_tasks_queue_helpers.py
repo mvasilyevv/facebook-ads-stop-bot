@@ -406,3 +406,91 @@ async def test_open_gate_and_empty_queue_explain_nothing() -> None:
             )
             is None
         )
+
+
+# #197: раньше проекция инцидента «нужен повторный вход» гейтилась task_type ==
+# 'meta_api_mutation', и для campaign_create — того же money-пути с той же живой
+# пробой и тем же pre-send контуром — не срабатывала никогда. Оператор узнавал о
+# разлогине только из отдельного пятиминутного цикла пробы observer'а, без связи
+# с конкретным упавшим заливом.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", sorted(BROWSER_READY_CLAIM_TASK_TYPES))
+async def test_facebook_login_incident_projects_for_every_money_task_type(
+    task_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.observer.login_required as login_required_module
+
+    captured: dict[str, object] = {}
+
+    async def fake_notify(conn, *, ad_account_id):
+        captured["conn"] = conn
+        captured["ad_account_id"] = ad_account_id
+
+    monkeypatch.setattr(
+        login_required_module,
+        "notify_login_required_incident_in_transaction",
+        fake_notify,
+    )
+
+    conn = object()
+    await task_queue._project_facebook_login_incident_in_transaction(  # noqa: SLF001
+        conn,
+        task_type=task_type,
+        payload={"ad_account_id": "act_555"},
+        result={"requires_facebook_login": True},
+    )
+
+    assert captured["conn"] is conn
+    assert captured["ad_account_id"] == "act_555"
+
+
+# Парный кейс: без доказанного признака login инцидент не создаётся — ни для
+# meta_api_mutation, ни для campaign_create.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", sorted(BROWSER_READY_CLAIM_TASK_TYPES))
+async def test_facebook_login_incident_skips_without_the_login_flag(
+    task_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.observer.login_required as login_required_module
+
+    fake_notify = AsyncMock()
+    monkeypatch.setattr(
+        login_required_module,
+        "notify_login_required_incident_in_transaction",
+        fake_notify,
+    )
+
+    await task_queue._project_facebook_login_incident_in_transaction(  # noqa: SLF001
+        object(),
+        task_type=task_type,
+        payload={"ad_account_id": "act_555"},
+        result={},
+    )
+
+    fake_notify.assert_not_awaited()
+
+
+# Не money-путь (например tracker_event_process) не проецирует инцидент, даже
+# если чей-то результат ошибочно несёт признак login: гейт остаётся fail-closed
+# по классификации money-пути, а не открывается для всех task_type подряд.
+@pytest.mark.asyncio
+async def test_facebook_login_incident_stays_gated_outside_money_task_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.observer.login_required as login_required_module
+
+    fake_notify = AsyncMock()
+    monkeypatch.setattr(
+        login_required_module,
+        "notify_login_required_incident_in_transaction",
+        fake_notify,
+    )
+
+    await task_queue._project_facebook_login_incident_in_transaction(  # noqa: SLF001
+        object(),
+        task_type="tracker_event_process",
+        payload={"ad_account_id": "act_555"},
+        result={"requires_facebook_login": True},
+    )
+
+    fake_notify.assert_not_awaited()

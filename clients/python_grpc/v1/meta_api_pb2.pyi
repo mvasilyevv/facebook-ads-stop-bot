@@ -74,16 +74,18 @@ class GraphApiError(_message.Message):
     def __init__(self, code: _Optional[int] = ..., subcode: _Optional[int] = ..., type: _Optional[str] = ..., message: _Optional[str] = ..., fbtrace_id: _Optional[str] = ...) -> None: ...
 
 class CheckMetaApiHealthRequest(_message.Message):
-    __slots__ = ("session_id", "full_probe", "expected_vision_profile_id", "ad_account_id")
+    __slots__ = ("session_id", "full_probe", "expected_vision_profile_id", "ad_account_id", "operation_role")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FULL_PROBE_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_VISION_PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
     AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ROLE_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     full_probe: bool
     expected_vision_profile_id: str
     ad_account_id: str
-    def __init__(self, session_id: _Optional[str] = ..., full_probe: bool = ..., expected_vision_profile_id: _Optional[str] = ..., ad_account_id: _Optional[str] = ...) -> None: ...
+    operation_role: str
+    def __init__(self, session_id: _Optional[str] = ..., full_probe: bool = ..., expected_vision_profile_id: _Optional[str] = ..., ad_account_id: _Optional[str] = ..., operation_role: _Optional[str] = ...) -> None: ...
 
 class CheckMetaApiHealthResponse(_message.Message):
     __slots__ = ("healthy", "current_url", "token_present", "token_length", "detail", "probe_performed", "probe_ok", "probe_status_code", "probe_duration_ms", "probe_detail", "browser_contract_version", "session_id", "vision_profile_id")

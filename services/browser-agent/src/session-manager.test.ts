@@ -1802,6 +1802,59 @@ test("mapped login/wrong-origin page is rejected and replaced with a confirmed c
   assert.equal(canonicalUrl, adsManagerUrlForAct("111"));
 });
 
+// #196: URL совпадения (isConfirmedAdsManagerPage: pathname + act) недостаточно
+// для money-роли — сессия внутри страницы может умереть без видимой навигации.
+// Кэшированная control-страница обязана пройти ту же проверку аутентификации,
+// что и реальная проба (checkMetaApiHealth), а не быть отданной под мутацию
+// молча только по адресу.
+test("mapped control page whose live probe answers a login sign is not handed out silently", async () => {
+  const manager = new SessionManager();
+  const mappedUrl =
+    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111";
+  let probeCalls = 0;
+  const staleMapped = {
+    isClosed: () => false,
+    url: () => mappedUrl,
+    // Тот же признак, что checkMetaApiHealth: EAA-токен в DOM. URL совпадает
+    // с кабинетом, но токена больше нет — сессия внутри страницы мертва.
+    evaluate: async () => {
+      probeCalls += 1;
+      return { present: false };
+    },
+  };
+  let replacementUrl = "about:blank";
+  let newPageCalls = 0;
+  const replacement = {
+    isClosed: () => false,
+    url: () => replacementUrl,
+    goto: async () => {
+      // Свежая навигация реально доходит до Facebook под тем же профилем:
+      // сессия мертва → Facebook уводит на вход.
+      replacementUrl = "https://www.facebook.com/login.php?next=x";
+    },
+    close: async () => undefined,
+  };
+  const context = {
+    pages: () => [staleMapped],
+    newPage: async () => {
+      newPageCalls += 1;
+      return replacement;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: staleMapped });
+  session.controlPages.set("111", staleMapped as any);
+
+  await assert.rejects(
+    manager.ensureControlPage(session, { actId: "111" }),
+    /cabinet_login_required/,
+  );
+
+  assert.equal(probeCalls, 1, "мутация обязана проверить живой признак, не только URL");
+  assert.equal(newPageCalls, 1, "молчаливая отдача кэшированной control-страницы запрещена");
+  assert.equal(session.controlPages.has("111"), false);
+});
+
 test("concurrent missing scan and control create distinct agent-owned pages", async () => {
   const manager = new SessionManager();
   let blankGoto = 0;

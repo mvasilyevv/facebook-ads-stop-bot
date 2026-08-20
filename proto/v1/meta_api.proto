@@ -132,6 +132,15 @@ message CheckMetaApiHealthRequest {
   // Пусто = переиспользовать любую уже открытую вкладку Ads Manager и НЕ
   // открывать новую: адрес текущей вкладки не является account identity.
   string ad_account_id = 4;
+
+  // Роль страницы, которую понесёт последующая операция вызывающего:
+  // "control" — money-путь (та же control-страница, на которой затем пойдёт
+  // ExecuteGraphCallV5 под тем же page-lock); любое другое значение, включая
+  // пустое, — "interactive" (health_watchdog, диагностика, дефолт как раньше).
+  // Проба на interactive-странице ничего не говорит про control-страницу: до
+  // этого поля money-предполёт проверял не ту вкладку, через которую уходил
+  // необратимый POST.
+  string operation_role = 5;
 }
 
 message CheckMetaApiHealthResponse {

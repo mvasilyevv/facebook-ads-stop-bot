@@ -37,7 +37,9 @@ from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 from core.deadlines import remaining_deadline_seconds
 from core.meta_api.budget_limits import checked_daily_budget_minor_units
 from core.meta_api.errors import (
+    BROWSER_OPERATION_REJECTION_REASONS,
     AmbiguousResultError,
+    BrowserOperationRejectedError,
     BrowserReadinessRejectedError,
     MetaApiError,
     PermanentError,
@@ -62,6 +64,78 @@ _LIVE_PROBE_REJECT_VERDICTS = frozenset(
     {"login_required", "probe_token_invalid", "probe_network_down"}
 )
 _OPERATION_AUTHORITY_DB_TIMEOUT_SECONDS = 2.0
+
+# Трейлер gRPC с кодом причины отказа собственной авторизации операции.
+# `details()` наружу не читается: свободный текст, изредка с токеном из
+# Graph-ответа. Трейлер несёт значение из закрытого словаря
+# BROWSER_OPERATION_REJECTION_REASONS (core/meta_api/errors.py).
+BROWSER_OPERATION_REJECTION_METADATA_KEY = "x-browser-operation-rejection"
+
+# Причины, которые повтором той же задачи не лечатся: запрос собран неверно или
+# вызывающему просто не разрешено это делать. Исход у них тот же — REJECTED,
+# отправки не было, — но повторять их бессмысленно, а вечный requeue money-задачи
+# скрывает поломку вместо того, чтобы её показать. Исход операции и политика
+# повтора — два разных вопроса, и семья pre-send отказов отвечает только на первый.
+BROWSER_OPERATION_PERMANENT_REJECTIONS: frozenset[str] = frozenset(
+    {
+        "capability_contract_incompatible",
+        "capability_cabinet_mismatch",
+        "caller_not_authorized",
+        "capability_task_binding_invalid",
+        "capability_lease_binding_invalid",
+        "capability_malformed",
+        "capability_signature_invalid",
+        "ownership_preflight_rejected",
+        "graph_method_override",
+        "graph_method_semantics",
+        "graph_get_body",
+        "graph_endpoint_query",
+    }
+)
+
+
+def _browser_operation_rejection_reason(exc: grpc.RpcError) -> str | None:
+    """Достать код причины из трейлера, если он из известного словаря."""
+    trailers = exc.trailing_metadata() if hasattr(exc, "trailing_metadata") else None
+    for key, value in trailers or ():
+        if str(key).lower() != BROWSER_OPERATION_REJECTION_METADATA_KEY:
+            continue
+        reason = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+        if reason in BROWSER_OPERATION_REJECTION_REASONS:
+            return reason
+        # Код из более нового browser-agent: назвать причину нечем, а
+        # выдать чужой код за доказанный pre-send отказ нельзя.
+        logger.warning("unknown browser operation rejection reason=%s", reason)
+        return None
+    return None
+
+
+def browser_operation_rejection_error(
+    exc: grpc.RpcError,
+    *,
+    endpoint: str,
+) -> BrowserOperationRejectedError | None:
+    """Отказ собственной авторизации браузера — с названной причиной.
+
+    Все предикаты, дающие PERMISSION_DENIED, проверяются до первого fetch в
+    Meta, поэтому код причины одновременно доказывает, что наружу ничего не
+    ушло. Без кода доказательства нет: тогда возвращается None и вызывающий
+    остаётся на прежней, более осторожной классификации.
+    """
+    code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
+    if code != grpc.StatusCode.PERMISSION_DENIED:
+        return None
+    reason = _browser_operation_rejection_reason(exc)
+    if reason is None:
+        return None
+    return BrowserOperationRejectedError(
+        "browser-agent отверг операцию до отправки в Meta: "
+        f"{BROWSER_OPERATION_REJECTION_REASONS[reason]}",
+        reason_code=reason,
+        endpoint=endpoint,
+    )
+
+
 # v5 removes URL-backed image upload and accepts only capability-bound bytes.
 # Older agents must fail contract health rather than retain the broader path.
 BROWSER_CONTRACT_VERSION = 5
@@ -2291,12 +2365,18 @@ class MetaApiClient:
             # произвольную живую вкладку любого кабинета и лочил чужой
             # interactive: проба money-операции адресовала не тот кабинет,
             # в котором операция будет работать.
+            #
+            # Роль страницы называется тоже. Мутация уходит с control-страницы;
+            # проба без роли уходила на interactive, и «токен жив» на одной
+            # вкладке ничего не говорил о второй — доказательство относилось не
+            # к той странице, которая отправит POST.
             identity = await self._stub.CheckMetaApiHealth(
                 meta_api_pb2.CheckMetaApiHealthRequest(
                     session_id=self.session_id,
                     full_probe=True,
                     expected_vision_profile_id=authority.vision_profile_id,
                     ad_account_id=str(account_id or "").replace("act_", "").strip(),
+                    operation_role="control",
                 ),
                 timeout=timeout,
             )
@@ -3118,8 +3198,12 @@ class MetaApiClient:
         - DEADLINE_EXCEEDED → таймаут
 
         `details()` — сырой текст от browser-agent (может содержать токен или URL
-        с секретом из Graph-ответа); наружу уходит только машинный код gRPC status.
+        с секретом из Graph-ответа); наружу уходит только машинный код gRPC status
+        и код причины из трейлера.
         """
+        rejection = browser_operation_rejection_error(exc, endpoint=endpoint)
+        if rejection is not None:
+            return rejection
         code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
         code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
 

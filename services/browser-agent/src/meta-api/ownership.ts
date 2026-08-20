@@ -64,6 +64,9 @@ const LOCAL_READ_FAILURE_REASONS: ReadonlyMap<number, string> = new Map([
   [-1, 'session_token_absent'],
   [-2, 'channel_unreachable'],
   [-3, 'page_context_lost'],
+  // Отмена опередила вызов fetch: доказано, что запрос не уходил. Причина обязана
+  // отличаться от 'channel_result_unknown' — там сверять нечего, а тут неизвестность.
+  [-4, 'request_cancelled_before_send'],
 ]);
 
 function graphReadFailed(result: GraphApiCallResult): boolean {

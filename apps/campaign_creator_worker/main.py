@@ -32,6 +32,7 @@ import os
 import shutil
 import signal
 import time
+from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
@@ -44,6 +45,7 @@ from apps.campaign_creator_worker import (
     _resolve_creo_dir,
     load_run,
     parse_run_config,
+    referenced_creo_roots,
     resolve_concepts_from_config,
     set_run_status,
 )
@@ -72,8 +74,14 @@ from core.campaign_builder.execute import (
 from core.db import WORKER_ENGINE_KWARGS
 from core.deadlines import bind_absolute_deadline
 from core.meta_api.client import MetaApiClient
-from core.meta_api.errors import BrowserReadinessRejectedError
+from core.meta_api.errors import (
+    BrowserReadinessRejectedError,
+    LoginRequiredError,
+    PreDispatchRejectedError,
+)
 from core.meta_api.upload import MediaUploader
+from core.metrics import record_campaign_upload_storage
+from core.observer.login_required import notify_login_required_incident_in_transaction
 from core.tasks.irreversible_control import (
     CreatorTaskControl,
     CreatorTaskControlAbort,
@@ -93,6 +101,8 @@ from core.tasks.queue import (
 from core.tasks.queue import (
     mark_succeeded as _queue_mark_succeeded,
 )
+from core.telegram.worker_notify import notify_recurring_incident, resolve_recurring_incident
+from core.wording import human_bytes_ru
 from core.worker_metrics import (
     mark_worker_heartbeat,
     record_irreversible_safety_event,
@@ -104,6 +114,27 @@ logger = logging.getLogger("campaign_creator_worker")
 WORKER_NAME = "campaign_creator"
 _METRICS_INTERVAL_SECONDS = 15.0
 IDLE_SLEEP_SECONDS = 5
+
+# ------------------- upload-store retention (issues #190, #192) -------------------
+
+# Возраст, после которого upload-папка подметается, если не занята активным/
+# повторяемым прогоном. Переопределимо на хосте — там, где размер набора
+# крупнее обычного, ретеншн можно ослабить без релиза.
+_UPLOAD_MAX_AGE_DAYS_ENV = "CAMPAIGN_UPLOAD_MAX_AGE_DAYS"
+_DEFAULT_UPLOAD_MAX_AGE_DAYS = 7.0
+
+# Предел суммарного объёма CAMPAIGN_UPLOAD_ROOT. При превышении подметаются
+# самые старые НЕзанятые наборы, пока объём не уложится в предел (issue #190).
+_UPLOAD_MAX_TOTAL_BYTES_ENV = "CAMPAIGN_UPLOAD_MAX_TOTAL_BYTES"
+_DEFAULT_UPLOAD_MAX_TOTAL_BYTES = 5 * 1024**3  # 5 GiB
+# Набор моложе этого возраста предел по объёму не трогает: папка появляется на диске
+# в POST /upload раньше строки campaign_run, поэтому «на набор никто не ссылается» в
+# первые минуты означает «его прямо сейчас загружают», а не «он ничей». Час с запасом
+# перекрывает загрузку 500 МБ на медленном канале.
+_UPLOAD_CAP_MIN_AGE_SECONDS = 3600.0
+
+_UPLOAD_STORAGE_CHECK_INTERVAL_SECONDS = 15 * 60.0
+CAMPAIGN_UPLOAD_STORAGE_INCIDENT_KEY = "storage:campaign-upload"
 
 _PROCESS_STARTED_AT: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "campaign_creator_process_started_at",
@@ -152,6 +183,7 @@ async def finalize_run_failed(
     created_meta_ids: dict[str, Any] | None = None,
     task_result: dict[str, Any] | None = None,
     progress: dict[str, Any] | None = None,
+    login_required_ad_account_id: str | None = None,
 ) -> bool:
     applied = await _finalize_run_failed(
         engine,
@@ -161,6 +193,7 @@ async def finalize_run_failed(
         created_meta_ids=created_meta_ids,
         task_result=task_result,
         progress=progress,
+        login_required_ad_account_id=login_required_ad_account_id,
     )
     if applied:
         outcome = "UNKNOWN" if (task_result or {}).get("outcome") == "UNKNOWN" else "REJECTED"
@@ -281,6 +314,7 @@ async def _persist_partial_created_ids(
     created_ids: dict[str, Any],
     failed_step: str,
     pre_dispatch: bool | None = None,
+    pre_dispatch_reason_code: str | None = None,
 ) -> bool:
     """created_ids partial-провала — в task_queue.result, не только в логи/campaign_run.
 
@@ -428,6 +462,74 @@ def _browser_readiness_rejection(
         seen.add(id(current))
         current = current.__cause__
     return None
+
+
+def _proven_pre_dispatch_rejection(exc: BaseException) -> PreDispatchRejectedError | None:
+    """Найти в цепочке причин доказанный отказ ДО отправки запроса в Meta (#200).
+
+    ``PreDispatchRejectedError`` — единственная семья, где известно наверняка, что
+    конкретный внешний вызов не ушёл: execute.py заворачивает такую причину в
+    ``CampaignExecutionError`` через ``__cause__``, поэтому обходим цепочку, а не
+    проверяем только сам ``exc``.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, PreDispatchRejectedError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
+def _has_any_created_ids(created: dict[str, list[str]]) -> bool:
+    return any(created.get(kind) for kind in created)
+
+
+# Вердикт живой пробы предполёта (см. MetaApiClient._LIVE_PROBE_REJECT_VERDICTS),
+# зашитый в текст BrowserReadinessRejectedError.
+_LOGIN_REQUIRED_READINESS_VERDICT = "login_required"
+
+
+def _is_proven_pre_dispatch(exc: BaseException) -> bool:
+    """True когда в цепочке причин есть доказанный отказ ДО отправки запроса (#200).
+
+    Обход именно цепочки, а не верхнего исключения: залив заворачивает причину в
+    CampaignExecutionError, и проверка по типу верхнего объекта всегда давала бы
+    False. Один цикл с защитой от петли — тот же приём, что в
+    ``_requires_facebook_login``.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, PreDispatchRejectedError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _requires_facebook_login(exc: BaseException) -> bool:
+    """True когда доказанная причина отказа — нужен повторный вход в Facebook (#197).
+
+    Две ветки одной классификации (commit 2d4e02b7): предполёт — вердикт живой
+    пробы внутри BrowserReadinessRejectedError; post-dispatch — Graph уже ответил
+    кодом разлогина (LoginRequiredError). Оба — money-путь наравне с
+    meta_api_mutation, но до фикса ни один из них не проецировал инцидент
+    «нужен повторный вход» для campaign_create.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, LoginRequiredError):
+            return True
+        if isinstance(
+            current, BrowserReadinessRejectedError
+        ) and _LOGIN_REQUIRED_READINESS_VERDICT in str(current):
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
 
 
 async def _finalize_campaign_control_abort(
@@ -729,7 +831,7 @@ async def _execute_run(
                 run_id=run_id, reason="run_cancelled_before_external_call"
             ),
         )
-        _cleanup_upload_dir(cfg.creo_root)
+        await _cleanup_upload_dir(engine, cfg.creo_root, run_id=run_id)
         return
 
     # Последняя стадия, о которой отчитался execute. Нужна, когда исход придётся
@@ -872,14 +974,39 @@ async def _execute_run(
             )
         return
     except PartialCreateError as exc:
-        # Часть объектов уже в Meta — НЕ ретраим (дубли). run=failed + осиротевшие id.
-        logger.error(
-            "campaign_create: task id=%s PARTIAL FAIL — осиротевшие объекты в Meta, "
-            "нужна ручная чистка! created_ids=%s step=%s",
-            task.id,
-            exc.created_ids,
-            exc.failed_step,
-        )
+        # #198: created пуст (ack-lost) — подтверждённых объектов НЕТ, а не «часть
+        # создана». Раньше оба исхода печатали один текст «осиротевшие объекты,
+        # нужна ручная чистка» и один machine reason (partial_or_ack_lost) — 19.08
+        # это отправило оператора искать объекты, которых не существует.
+        has_created_ids = any(exc.created_ids.get(kind) for kind in exc.created_ids)
+        login_required_account_id = cfg.account.act_id if _requires_facebook_login(exc) else None
+        if has_created_ids:
+            # Часть объектов уже в Meta — НЕ ретраим (дубли). run=failed + осиротевшие id.
+            reason = "partial_confirmed"
+            logger.error(
+                "campaign_create: task id=%s PARTIAL FAIL — осиротевшие объекты в Meta, "
+                "нужна ручная чистка! created_ids=%s step=%s",
+                task.id,
+                exc.created_ids,
+                exc.failed_step,
+            )
+            error = f"partial_fail (step={exc.failed_step}): проверь Meta вручную: {exc!r}"
+        else:
+            # POST campaign инициирован, ответ Meta потерян: ни одного id не
+            # подтверждено. Чистить нечего, но повтор всё равно запрещён — объект
+            # мог реально родиться в Meta без дошедшего ответа.
+            reason = "ack_lost_nothing_confirmed"
+            logger.error(
+                "campaign_create: task id=%s ACK LOST — ответ Meta потерян после "
+                "POST кампании, подтверждённых объектов нет, нужна сверка, повтор "
+                "запрещён: step=%s",
+                task.id,
+                exc.failed_step,
+            )
+            error = (
+                f"ack_lost (step={exc.failed_step}): ответ Meta потерян после POST "
+                "кампании: чистить нечего, нужна сверка, повтор запрещён."
+            )
         await _persist_partial_created_ids(
             engine,
             task=task,
@@ -891,12 +1018,12 @@ async def _execute_run(
             engine,
             run_id,
             task=task,
-            error=f"partial_fail (step={exc.failed_step}): проверь Meta вручную: {exc!r}",
+            error=error,
             created_meta_ids=exc.created_ids,
             task_result=_campaign_unknown_result(
                 task,
                 run_id=run_id,
-                reason="partial_or_ack_lost",
+                reason=reason,
                 created_ids=exc.created_ids,
                 failed_step=exc.failed_step,
                 pre_dispatch=exc.pre_dispatch,
@@ -904,16 +1031,18 @@ async def _execute_run(
             progress={
                 "stage": "failed",
                 "outcome": "UNKNOWN",
-                "reason": "partial_or_ack_lost",
+                "reason": reason,
                 "failed_step": exc.failed_step,
             },
+            login_required_ad_account_id=login_required_account_id,
         )
         # Концепты НЕ чистим при ошибке — нужны для ретрая (повтор залива тем же config).
-        # Старые upload-папки подметает retention в cleanup_worker.
+        # Заброшенные/просроченные upload-папки подметает upload_storage_loop.
         return
     except Exception as exc:  # noqa: BLE001 — единая маршрутизация по classify
         readiness_rejection = _browser_readiness_rejection(exc)
         if readiness_rejection is not None:
+            login_required = _requires_facebook_login(readiness_rejection)
 
             async def reset_run_for_readiness(
                 conn,
@@ -942,6 +1071,16 @@ async def _execute_run(
                 )
                 if (updated.rowcount or 0) != 1:
                     raise RuntimeError("campaign run disappeared during readiness release")
+                if login_required:
+                    # Money-путь наравне с meta_api_mutation (#197): доказанный
+                    # login_required проецирует канонический per-cabinet
+                    # инцидент в ТОЙ ЖЕ транзакции, что закрывает эту попытку —
+                    # оператор узнаёт причину из самого провала, не дожидаясь
+                    # отдельного пятиминутного цикла пробы observer'а.
+                    await notify_login_required_incident_in_transaction(
+                        conn,
+                        ad_account_id=cfg.account.act_id,
+                    )
 
             released = await release_after_browser_readiness_rejection(
                 engine,
@@ -961,7 +1100,15 @@ async def _execute_run(
                     task.id,
                 )
             return
-        if control.external_started:
+        # #200: пересечённая ранее внешняя граница сама по себе НЕ делает исход
+        # неоднозначным. begin_external выставляется перед каждым внешним вызовом,
+        # начиная с загрузки креативов, поэтому проверка external_started ловила и
+        # те отказы, про которые доказано, что запрос не уходил: залив падал на
+        # исчерпанном дедлайне до POST, создавал ноль объектов — и оператор всё
+        # равно получал карточку ручной сверки. Доказанный отказ до отправки —
+        # это REJECTED, сколько бы успешных вызовов ему ни предшествовало: те
+        # завершились определённо, а этот не начинался.
+        if control.external_started and not _is_proven_pre_dispatch(exc):
             await finalize_run_failed(
                 engine,
                 run_id,
@@ -1033,6 +1180,9 @@ async def _execute_run(
             task_result=_campaign_rejected_result(
                 run_id=run_id, reason="permanent_pre_external_failure"
             ),
+            login_required_ad_account_id=(
+                cfg.account.act_id if _requires_facebook_login(exc) else None
+            ),
         )
         # Концепты НЕ чистим — оставляем для ретрая (retention подметёт старое).
         return
@@ -1053,7 +1203,7 @@ async def _execute_run(
         )
         return
     logger.info("campaign_create: task id=%s succeeded (run %s)", task.id, run_id)
-    _cleanup_upload_dir(cfg.creo_root)
+    await _cleanup_upload_dir(engine, cfg.creo_root, run_id=run_id)
 
 
 async def _safe_mark_failed(
@@ -1078,15 +1228,19 @@ async def _safe_mark_failed(
         )
 
 
-def _cleanup_upload_dir(creo_root: str | None) -> None:
+async def _cleanup_upload_dir(engine: AsyncEngine, creo_root: str | None, *, run_id: str) -> None:
     """Best-effort удаление папки загруженных концептов на УСПЕХЕ/ОТМЕНЕ прогона.
 
     Оригиналы фото/видео нужны до успешного залива (уникализированные байты уже ушли в
     Meta) ИЛИ для ретрая после ошибки. Поэтому при ошибке (partial/permanent/exhausted)
-    папку НЕ чистим — пользователь может «Повторить залив» тем же config; старые папки
-    подметает retention в cleanup_worker. Зовётся только при success и cancel-гонке.
-    Защита: upload ID резолвится только как подпапка внутри корня загрузок.
-    Сбой не роняет задачу.
+    папку НЕ чистим — пользователь может «Повторить залив» тем же config.
+
+    Money-safety (issue #192): набор адресуется общим ``creo_root`` — несколько
+    прогонов (multi-cabinet launch) могут смотреть на одну и ту же папку. Прежде
+    чем удалять, проверяем, не держит ли её ЕЩЁ ЖИВОЙ или ЕЩЁ ПОВТОРЯЕМЫЙ прогон
+    (``referenced_creo_roots``): успех одного прогона не имеет права унести
+    исходники, которыми ждёт «Повторить залив» другой. Защита: upload ID
+    резолвится только как подпапка внутри корня загрузок. Сбой не роняет задачу.
     """
     if not creo_root:
         return
@@ -1095,6 +1249,13 @@ def _cleanup_upload_dir(creo_root: str | None) -> None:
         root = _campaign_upload_root().resolve()
         if root not in target.parents:
             return  # путь вне корня загрузок — не наш, не трогаем
+        held = await referenced_creo_roots(engine, only_creo_root=creo_root, exclude_run_id=run_id)
+        if creo_root in held:
+            logger.info(
+                "campaign_create: upload-папка %s оставлена — набор нужен другому прогону",
+                creo_root,
+            )
+            return
         shutil.rmtree(target, ignore_errors=True)
         logger.info("campaign_create: upload-папка прогона очищена: %s", target)
     except Exception:  # noqa: BLE001 — best-effort, не роняет обработку задачи
@@ -1103,36 +1264,238 @@ def _cleanup_upload_dir(creo_root: str | None) -> None:
         )
 
 
-def _sweep_stale_upload_dirs(max_age_days: float = 7.0) -> None:
-    """Retention: подметает upload-папки старше max_age_days.
+async def _sweep_stale_upload_dirs(
+    engine: AsyncEngine, *, max_age_days: float = _DEFAULT_UPLOAD_MAX_AGE_DAYS
+) -> int:
+    """Retention по сроку: подметает upload-папки старше max_age_days.
 
     При ошибке залива папку концептов оставляем для «Повторить залив», поэтому без
-    подметания неуспешные/заброшенные папки копились бы. Зовётся при старте воркера
-    (он рестартится на деплоях — достаточно часто). Best-effort, не роняет старт.
+    подметания неуспешные/заброшенные папки копились бы. Вызывается периодически
+    из ``upload_storage_loop`` (issue #190 п.1) — не только на старте воркера,
+    иначе хранилище не убирается до перезапуска. Набор, на который ссылается
+    активный или ожидающий повтора прогон, не трогаем независимо от возраста
+    (issue #190 п.4) — источник истины тот же ``referenced_creo_roots``, что и у
+    точечного удаления на успехе. Best-effort, не роняет цикл.
     """
     root = _campaign_upload_root()
     if not root.exists():
-        return
+        return 0
+    try:
+        held = await referenced_creo_roots(engine)
+    except Exception:  # noqa: BLE001 — сбой чтения БД не должен ронять подметание
+        logger.warning(
+            "campaign_create: не удалось прочитать занятые creo_root — подметание по сроку пропущено",
+            exc_info=True,
+        )
+        return 0
     cutoff = time.time() - max_age_days * 86400.0
     removed = 0
     try:
-        for child in root.iterdir():
-            if not child.is_dir():
-                continue
-            try:
-                if child.stat().st_mtime < cutoff:
-                    shutil.rmtree(child, ignore_errors=True)
-                    removed += 1
-            except OSError:
-                continue
+        children = list(root.iterdir())
     except OSError:
-        return
+        return 0
+    for child in children:
+        if not child.is_dir() or child.name in held:
+            continue
+        try:
+            if child.stat().st_mtime < cutoff:
+                shutil.rmtree(child, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
     if removed:
         logger.info(
             "campaign_create: retention — удалено %d upload-папок старше %.0fд",
             removed,
             max_age_days,
         )
+    return removed
+
+
+def _upload_dir_size_bytes(path: Path) -> int:
+    """Суммарный размер файлов внутри одного upload-набора."""
+    total = 0
+    try:
+        for entry in path.rglob("*"):
+            if entry.is_file():
+                try:
+                    total += entry.stat().st_size
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return total
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+async def _enforce_upload_volume_cap(
+    engine: AsyncEngine, *, max_total_bytes: int = _DEFAULT_UPLOAD_MAX_TOTAL_BYTES
+) -> tuple[int, int]:
+    """Retention по объёму: держит CAMPAIGN_UPLOAD_ROOT в пределах max_total_bytes.
+
+    При превышении удаляет самые старые НЕзанятые наборы (issue #190 п.2), пока
+    объём не уложится в предел или свободных к удалению наборов не останется —
+    занятые (``referenced_creo_roots``) не трогаем даже если предел не достигнут
+    (issue #190 п.4). Возвращает (сколько наборов удалено, итоговый объём).
+
+    Набор без строки ``campaign_run`` НЕ означает «ничей»: папка появляется на
+    диске в ``POST /upload`` раньше, чем создаётся run, а частичная загрузка
+    вообще лежит в служебном каталоге ``.{id}.{hex}.uploading`` в этом же корне.
+    Поэтому кандидатами становятся только наборы старше
+    ``_UPLOAD_CAP_MIN_AGE_SECONDS``, и служебные каталоги не рассматриваются
+    вовсе — иначе предел снёс бы загрузку, которую оператор делает прямо сейчас.
+    """
+    root = _campaign_upload_root()
+    if not root.exists():
+        return 0, 0
+    try:
+        children = [
+            child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")
+        ]
+    except OSError:
+        return 0, 0
+    sizes = {child: _upload_dir_size_bytes(child) for child in children}
+    total = sum(sizes.values())
+    if total <= max_total_bytes:
+        return 0, total
+    try:
+        held = await referenced_creo_roots(engine)
+    except Exception:  # noqa: BLE001 — сбой чтения БД не должен ронять подметание
+        logger.warning(
+            "campaign_create: не удалось прочитать занятые creo_root — подметание по объёму пропущено",
+            exc_info=True,
+        )
+        return 0, total
+    fresh_cutoff = time.time() - _UPLOAD_CAP_MIN_AGE_SECONDS
+    candidates = sorted(
+        (
+            child
+            for child in children
+            if child.name not in held and _safe_mtime(child) < fresh_cutoff
+        ),
+        key=_safe_mtime,
+    )
+    removed = 0
+    for child in candidates:
+        if total <= max_total_bytes:
+            break
+        shutil.rmtree(child, ignore_errors=True)
+        total -= sizes.get(child, 0)
+        removed += 1
+    if removed:
+        logger.warning(
+            "campaign_create: превышен предел хранилища загрузок (%s) — удалено %d "
+            "старых наборов, осталось %s",
+            human_bytes_ru(max_total_bytes),
+            removed,
+            human_bytes_ru(max(0, total)),
+        )
+    return removed, max(0, total)
+
+
+async def _publish_upload_storage_health(
+    engine: AsyncEngine, *, used_bytes: int, max_total_bytes: int
+) -> None:
+    """Метрика занятого объёма + инцидент при устойчивом превышении (issue #190 п.3).
+
+    Тот же durable incident-plane, что уже держит место под PostgreSQL
+    (``apps.cleanup_worker.storage.publish_disk_health``): владелец узнаёт про
+    переполнение хранилища загрузок так же, как про нехватку места под БД.
+    """
+    record_campaign_upload_storage(used_bytes=used_bytes)
+    if used_bytes <= max_total_bytes:
+        await resolve_recurring_incident(
+            engine,
+            incident_key=CAMPAIGN_UPLOAD_STORAGE_INCIDENT_KEY,
+            audience="owners",
+            summary="Хранилище загруженных концептов снова в пределах нормы.",
+        )
+        return
+    percent = (used_bytes / max_total_bytes * 100) if max_total_bytes else 0.0
+    await notify_recurring_incident(
+        engine,
+        incident_key=CAMPAIGN_UPLOAD_STORAGE_INCIDENT_KEY,
+        audience="owners",
+        event_type="campaign_upload_storage_over_limit",
+        severity="warning",
+        title="Хранилище загруженных концептов переполнено",
+        summary=(
+            f"Занято {human_bytes_ru(used_bytes)} из предела "
+            f"{human_bytes_ru(max_total_bytes)} ({percent:.0f} %)."
+        ),
+        lines=(
+            "Что делать: проверить, нет ли зависших прогонов с «Повторить залив», "
+            "и при необходимости поднять предел CAMPAIGN_UPLOAD_MAX_TOTAL_BYTES.",
+        ),
+        risk="Диск воркера залива может закончиться — новые загрузки начнут падать.",
+        resource_type="storage",
+        resource_id="campaign-upload",
+    )
+
+
+def _upload_max_age_days() -> float:
+    raw = os.environ.get(_UPLOAD_MAX_AGE_DAYS_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_UPLOAD_MAX_AGE_DAYS
+    try:
+        return float(raw)
+    except ValueError:
+        return _DEFAULT_UPLOAD_MAX_AGE_DAYS
+
+
+def _upload_max_total_bytes() -> int:
+    raw = os.environ.get(_UPLOAD_MAX_TOTAL_BYTES_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_UPLOAD_MAX_TOTAL_BYTES
+    try:
+        return int(raw)
+    except ValueError:
+        return _DEFAULT_UPLOAD_MAX_TOTAL_BYTES
+
+
+async def _sweep_upload_storage_once(engine: AsyncEngine) -> None:
+    """Один цикл ретеншна upload-хранилища: срок → объём → метрика/инцидент.
+
+    Best-effort: сбой любого шага логируется и не роняет воркер (issue #190).
+    """
+    await _sweep_stale_upload_dirs(engine, max_age_days=_upload_max_age_days())
+    max_total_bytes = _upload_max_total_bytes()
+    try:
+        _removed, total_bytes = await _enforce_upload_volume_cap(
+            engine, max_total_bytes=max_total_bytes
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        logger.warning("campaign_create: подметание по объёму упало", exc_info=True)
+        return
+    try:
+        await _publish_upload_storage_health(
+            engine, used_bytes=total_bytes, max_total_bytes=max_total_bytes
+        )
+    except Exception:  # noqa: BLE001 — best-effort, метрика/инцидент не роняют воркер
+        logger.warning("campaign_create: публикация health хранилища загрузок упала", exc_info=True)
+
+
+async def upload_storage_loop(engine: AsyncEngine, stop: asyncio.Event) -> None:
+    """Периодическая уборка + наблюдаемость CAMPAIGN_UPLOAD_ROOT (issue #190).
+
+    Первый проход — сразу при старте (сохраняет прежнее поведение), дальше —
+    каждые ``_UPLOAD_STORAGE_CHECK_INTERVAL_SECONDS`` без перезапуска воркера.
+    """
+    while not stop.is_set():
+        try:
+            await _sweep_upload_storage_once(engine)
+        except Exception:  # noqa: BLE001 — цикл ретеншна не должен убивать воркер
+            logger.exception("campaign_create: цикл ретеншна upload-хранилища упал")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=_UPLOAD_STORAGE_CHECK_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _run_has_created_meta_ids(engine: AsyncEngine, run_id: str) -> bool:
@@ -1318,11 +1681,11 @@ async def main_loop(database_url: str | None = None) -> None:
             pass
 
     logger.info("campaign_creator_worker запущен (MetaApiClient ready)")
-    _sweep_stale_upload_dirs()  # retention старых upload-папок (концепты неуспешных заливов)
     try:
         await asyncio.gather(
             task_loop(engine, stop, client=meta_client, uploader=uploader),
             metrics_loop(stop),
+            upload_storage_loop(engine, stop),
         )
     finally:
         try:

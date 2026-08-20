@@ -218,6 +218,17 @@ describe('authoritative Meta object ownership preflight', () => {
         type: 'PageEvaluateError',
         message: 'Execution context was destroyed',
       },
+      // -4 CancelledBeforeSend — доказанный pre-send отказ (fetch() не стартовал).
+      // До фикса он проваливался в default 'channel_result_unknown' — верный класс
+      // исхода (локальный read провалился, не Meta), но неверная причина оператору:
+      // «результат канала неизвестен» там, где доказано, что запрос не уходил.
+      {
+        reason: 'request_cancelled_before_send',
+        statusCode: 0,
+        code: -4,
+        type: 'CancelledBeforeSend',
+        message: 'gRPC отменён до вызова fetch: запрос не покидал browser',
+      },
       {
         reason: 'meta_refused',
         statusCode: 400,
@@ -282,7 +293,7 @@ describe('authoritative Meta object ownership preflight', () => {
         assert.equal(graphReads, 1);
       }
     }
-    assert.equal(seenReasons.size, 3);
+    assert.equal(seenReasons.size, 4);
   });
 
   it('accepts a target already proven by the signed capability without any read', async () => {

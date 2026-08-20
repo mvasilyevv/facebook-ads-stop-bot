@@ -389,6 +389,53 @@ async def test_campaign_incident_without_proof_claims_nothing_about_dispatch(mon
     assert any("Ads Manager" in line for line in kwargs["lines"])
 
 
+# «Сорвалось до отправки» не отвечает на вопрос оператора «а что именно отвергли».
+# Причина обязана быть названа словами, и ровно теми, что лежат в закрытом словаре:
+# сырой текст browser-agent наружу не выносится (в нём бывает токен).
+@pytest.mark.asyncio
+async def test_campaign_incident_names_the_rejection_reason(monkeypatch) -> None:
+    from core.meta_api.errors import BROWSER_OPERATION_REJECTION_REASONS
+
+    kwargs = await _campaign_unknown_incident(
+        monkeypatch,
+        {
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "created_ids": {"campaigns": ["c1"], "adsets": ["s1"]},
+            "pre_dispatch": True,
+            "pre_dispatch_reason_code": "capability_expired",
+        },
+    )
+
+    reason = BROWSER_OPERATION_REJECTION_REASONS["capability_expired"]
+    assert any(reason in line for line in kwargs["lines"])
+    # Названная причина не отменяет ни сверки, ни риска дубля.
+    assert any("до отправки" in line.lower() for line in kwargs["lines"])
+    assert any("Ads Manager" in line for line in kwargs["lines"])
+    assert kwargs["severity"] == "critical"
+
+
+# Код из более нового browser-agent: назвать причину нечем. Карточка молчит про
+# причину и не показывает сам код — оператору он ничего не говорит.
+@pytest.mark.asyncio
+async def test_campaign_incident_stays_silent_about_an_unknown_reason(monkeypatch) -> None:
+    kwargs = await _campaign_unknown_incident(
+        monkeypatch,
+        {
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "created_ids": {"campaigns": ["c1"], "adsets": ["s1"]},
+            "pre_dispatch": True,
+            "pre_dispatch_reason_code": "reason_from_a_newer_agent",
+        },
+    )
+
+    card = " ".join([kwargs["title"], kwargs["summary"], *kwargs["lines"], kwargs["risk"]])
+    assert "reason_from_a_newer_agent" not in card
+    assert "Причина отказа" not in card
+    assert any("до отправки" in line.lower() for line in kwargs["lines"])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("finalizer", "result_payload", "expected_phase"),

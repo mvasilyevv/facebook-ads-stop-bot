@@ -26,7 +26,11 @@ import grpc
 
 from clients.python_grpc.v1 import meta_api_pb2
 from core.deadlines import bounded_timeout_seconds
-from core.meta_api.client import MetaApiClient, media_operation_binding
+from core.meta_api.client import (
+    MetaApiClient,
+    browser_operation_rejection_error,
+    media_operation_binding,
+)
 from core.meta_api.errors import (
     AmbiguousResultError,
     BrowserReadinessRejectedError,
@@ -572,8 +576,11 @@ class MediaUploader:
         """Преобразовать gRPC-ошибку upload-вызова в доменную.
 
         `details()` может содержать токен или URL с секретом из Graph-ответа;
-        наружу уходит только машинный код gRPC status, не сырой текст.
+        наружу уходит только машинный код gRPC status и код причины из трейлера.
         """
+        rejection = browser_operation_rejection_error(exc, endpoint=endpoint)
+        if rejection is not None:
+            return rejection
         code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
         code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
 

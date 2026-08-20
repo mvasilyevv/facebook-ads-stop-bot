@@ -114,6 +114,12 @@ class PartialCreateError(CampaignExecutionError):
     объекты никуда не делись, сверка обязательна. Признак нужен человеку и будущей
     автоматике, чтобы отличить «последний запрос до Meta не дошёл» от «ответ Meta
     потерян». False означает «не доказано», а НЕ «запрос точно ушёл».
+
+    pre_dispatch_reason_code — машинный код причины этого отказа из закрытого словаря
+    ``BROWSER_OPERATION_REJECTION_REASONS``, когда браузер её назвал. «Сорвалось до
+    отправки» не отвечает на вопрос оператора «что именно отвергли» — истёк грант,
+    чужой кабинет, неавторизованный вызывающий. None означает «причина не названа»:
+    отказ доказан, но назвать его нечем.
     """
 
     def __init__(
@@ -123,11 +129,13 @@ class PartialCreateError(CampaignExecutionError):
         created_ids: dict[str, list[str]],
         failed_step: str,
         pre_dispatch: bool = False,
+        pre_dispatch_reason_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.created_ids = created_ids
         self.failed_step = failed_step
         self.pre_dispatch = pre_dispatch
+        self.pre_dispatch_reason_code = pre_dispatch_reason_code
         # PartialCreateError по определению означает «необратимый шаг достигнут».
         self.irreversible_attempted = True
 
@@ -552,6 +560,9 @@ def _raise_for_failure(
     доказанный отказ до отправки — это вся семья (истёкший дедлайн до Graph-вызова,
     отказ выдачи одноразового гранта, отклонённая готовность канала). Листовой класс
     решает другой вопрос — тратить ли попытку — и остаётся у воркера.
+
+    Код причины берётся с того же объекта, что дал pre_dispatch: назвать причину умеет
+    только BrowserOperationRejectedError, и признак с названием не могут разойтись.
     """
     if _has_created(created):
         raise PartialCreateError(
@@ -559,6 +570,7 @@ def _raise_for_failure(
             created_ids=created,
             failed_step=failed_step,
             pre_dispatch=isinstance(cause, PreDispatchRejectedError),
+            pre_dispatch_reason_code=getattr(cause, "reason_code", None),
         ) from cause
     if isinstance(cause, PreDispatchRejectedError):
         err = CampaignExecutionError(f"rejected before Meta I/O on step {failed_step!r}")

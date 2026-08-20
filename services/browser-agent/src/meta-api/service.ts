@@ -41,6 +41,79 @@ import {
 // It retains exact task/query/body semantics for every controlled operation.
 export const BROWSER_CONTRACT_VERSION = BROWSER_OPERATION_CONTRACT_VERSION;
 
+// Трейлер с кодом причины отказа собственной авторизации операции.
+// details() наружу не читается: туда попадает свободный текст, изредка с
+// токеном из Graph-ответа. Трейлер несёт значение из закрытого словаря ниже.
+export const BROWSER_OPERATION_REJECTION_METADATA_KEY = 'x-browser-operation-rejection';
+
+// Каждый предикат, отвергающий операцию до отправки, имеет собственный код
+// причины. Пока вся семья схлопывалась в одну строку, инцидент не отвечал на
+// вопрос «что именно отвергнуто»: длинный залив отбивало, короткий проходил, и
+// отличить истёкший грант от чужого кабинета или неверной семантики было нечем.
+// Первое совпадение выигрывает, поэтому частные тексты стоят выше общих.
+// Зеркалит BROWSER_OPERATION_REJECTION_REASONS в core/meta_api/client.py.
+const OPERATION_REJECTION_PREDICATES: ReadonlyArray<readonly [string, string]> = [
+  ['capability authority is unavailable', 'capability_authority_unavailable'],
+  ['capability contract is incompatible', 'capability_contract_incompatible'],
+  ['capability secret is unavailable', 'capability_secret_unavailable'],
+  ['capability cabinet binding is invalid', 'capability_cabinet_mismatch'],
+  ['caller is not authorized', 'caller_not_authorized'],
+  ['task binding is invalid', 'capability_task_binding_invalid'],
+  ['lease binding is invalid', 'capability_lease_binding_invalid'],
+  ['capability is expired or unbounded', 'capability_expired'],
+  ['capability is malformed', 'capability_malformed'],
+  ['capability signature is invalid', 'capability_signature_invalid'],
+  ['operation capability', 'capability_invalid'],
+  ['ownership preflight rejected', 'ownership_preflight_rejected'],
+  ['graph method override', 'graph_method_override'],
+  ['graph request method semantics', 'graph_method_semantics'],
+  ['graph get body semantics', 'graph_get_body'],
+  ['graph endpoint query/fragment semantics', 'graph_endpoint_query'],
+];
+
+/**
+ * Код причины отказа авторизации операции, если отказ именно такой.
+ *
+ * Все предикаты срабатывают строго ДО первого fetch в Meta: подпись гранта,
+ * права вызывающего, владение целью и семантика Graph-запроса проверяются
+ * раньше, чем открывается внешняя граница. Поэтому наличие кода — это ещё и
+ * доказательство того, что наружу ничего не ушло.
+ */
+export function browserOperationRejectionReason(err: unknown): string | undefined {
+  const message = String((err as { message?: unknown })?.message ?? err ?? '').toLowerCase();
+  if (message.includes('capability consume was denied')) {
+    // Грант мог быть списан процессом, который умер за границей: это ручная
+    // сверка, а не доказанный отказ. Кода причины у него нет намеренно.
+    return undefined;
+  }
+  for (const [predicate, reason] of OPERATION_REJECTION_PREDICATES) {
+    if (message.includes(predicate)) return reason;
+  }
+  return undefined;
+}
+
+function operationRejectionMetadata(reason: string): grpc.Metadata {
+  const metadata = new grpc.Metadata();
+  metadata.set(BROWSER_OPERATION_REJECTION_METADATA_KEY, reason);
+  return metadata;
+}
+
+/** Ответ об ошибке с кодом причины в трейлере — единственный путь наружу. */
+export function grpcErrorForOperationFailure(err: unknown): {
+  code: number;
+  message: string;
+  metadata?: grpc.Metadata;
+} {
+  const code = grpcCodeForError(err);
+  const message = String((err as { message?: unknown })?.message ?? err);
+  const reason = browserOperationRejectionReason(err);
+  if (reason === undefined) return { code, message };
+  // Код причины — закрытый словарь без секретов и внутренних значений,
+  // поэтому он попадает и в лог: без него отказ не диагностируется вовсе.
+  console.warn(`[meta-api] operation authorization rejected reason=${reason}`);
+  return { code, message, metadata: operationRejectionMetadata(reason) };
+}
+
 export function grpcCodeForError(err: any): number {
   const message = String(err?.message || '').toLowerCase();
   if (message.includes('capability consume was denied')) {
@@ -49,15 +122,10 @@ export function grpcCodeForError(err: any): number {
     // convert this replay into a proven rejection.
     return grpc.status.ABORTED;
   }
-  if (
-    message.includes('operation capability')
-    || message.includes('caller is not authorized')
-    || message.includes('ownership preflight rejected')
-    || message.includes('graph method override')
-    || message.includes('graph request method semantics')
-    || message.includes('graph get body semantics')
-    || message.includes('graph endpoint query/fragment semantics')
-  ) {
+  if (browserOperationRejectionReason(err) !== undefined) {
+    // Вся семья проверяется до первого fetch в Meta. Отказ привязки задачи или
+    // lease раньше проваливался в INTERNAL, то есть в «ответ потерян»: наружу
+    // не уходило ни одного запроса, а оператор получал ручную сверку.
     return grpc.status.PERMISSION_DENIED;
   }
   if (message.includes('ownership preflight')) {
@@ -152,13 +220,15 @@ function bindGrpcAbort(call: any): {
 function grpcAbortError(signal: AbortSignal): {
   code: number;
   message: string;
+  metadata?: grpc.Metadata;
 } {
   const reason = String(signal.reason || 'grpc_cancelled');
   if (reason === 'capability_invalid') {
-    return {
-      code: grpc.status.PERMISSION_DENIED,
-      message: 'Browser operation capability is invalid',
-    };
+    // Отдельная ветка ответа — но причина у неё та же и называется так же,
+    // иначе это был бы восьмой безымянный PERMISSION_DENIED.
+    return grpcErrorForOperationFailure(
+      new Error('Browser operation capability is invalid'),
+    );
   }
   if (reason === 'capability_expired') {
     return {
@@ -600,10 +670,7 @@ export function createMetaApiServiceHandlers(
       });
     } catch (err: any) {
       if (grpcAbort.controller.signal.aborted) return;
-      responder.respond({
-        code: grpcCodeForError(err),
-        message: String(err?.message ?? err),
-      });
+      responder.respond(grpcErrorForOperationFailure(err));
     } finally {
       responder.dispose();
       grpcAbort.dispose();
@@ -627,7 +694,18 @@ export function createMetaApiServiceHandlers(
         throw new Error('ad_account_id must be 1..32 digits');
       }
       const fullProbe = Boolean(req.full_probe);
-      const reusablePage = requestedAct
+      // Роль страницы называет вызывающий явно. money-предполёт подписывает
+      // одноразовый грант под операцией, что уйдёт с control-страницы — проба
+      // на interactive-странице ничего не говорит про неё: «токен есть» на
+      // одной вкладке не доказывает, что вторая жива. Любое значение, кроме
+      // "control", остаётся interactive — прежнее поведение для health_watchdog
+      // и диагностики.
+      const operationRole: 'control' | 'interactive' =
+        String(req.operation_role || '').trim() === 'control' ? 'control' : 'interactive';
+      const getRolePage = operationRole === 'control' ? _getControlPage : _getInteractivePage;
+      // Money-роль никогда не усыновляет случайную живую вкладку: кабинет
+      // должен быть назван явно, как и при самой мутации.
+      const reusablePage = requestedAct || operationRole === 'control'
         ? null
         : findLiveAdsManagerPage(session.browser ?? null);
 
@@ -655,9 +733,12 @@ export function createMetaApiServiceHandlers(
 
       const lockAct = requestedAct || extractAdAccountId(reusablePage?.url?.()) || '';
 
-      const result = await withPageRoleLock(session.id, 'interactive', lockAct, async () => {
+      // Тот же page-lock (role + session + кабинет), что и последующая
+      // мутация: проба обязана взять ровно ту страницу, что понесёт операцию,
+      // а не рассуждать о ней издалека под чужим замком.
+      const result = await withPageRoleLock(session.id, operationRole, lockAct, async () => {
         const page = requestedAct
-          ? await _getInteractivePage(
+          ? await getRolePage(
             session,
             requestedAct,
             grpcAbort.controller.signal,
@@ -816,10 +897,7 @@ export function createMetaApiServiceHandlers(
       });
     } catch (err: any) {
       if (grpcAbort.controller.signal.aborted) return;
-      responder.respond({
-        code: grpcCodeForError(err),
-        message: String(err?.message ?? err),
-      });
+      responder.respond(grpcErrorForOperationFailure(err));
     } finally {
       responder.dispose();
       grpcAbort.dispose();
@@ -892,10 +970,7 @@ export function createMetaApiServiceHandlers(
       respondedOnce = true;
       grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
       grpcAbort.dispose();
-      callback({
-        code: grpcCodeForError(err),
-        message: String((err as { message?: unknown })?.message ?? err),
-      });
+      callback(grpcErrorForOperationFailure(err));
     }
 
     function respondSuccess(vid: string): void {

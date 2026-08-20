@@ -22,7 +22,10 @@ INSERT задачи упадёт по CHECK — это ожидаемая зав
 from __future__ import annotations
 
 import json
+import os
+import time
 import uuid
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -33,8 +36,15 @@ from apps.campaign_creator_worker import (
     finalize_run_cancelled,
     finalize_run_failed,
     finalize_run_succeeded,
+    referenced_creo_roots,
 )
-from apps.campaign_creator_worker.main import process_one_task
+from apps.campaign_creator_worker.main import (
+    _UPLOAD_CAP_MIN_AGE_SECONDS,
+    _enforce_upload_volume_cap,
+    _sweep_stale_upload_dirs,
+    process_one_task,
+)
+from core.commands.campaign_runs import resume_unavailable_reason
 from core.meta_api.browser_readiness import (
     BrowserReadinessObservation,
     load_vision_readiness_identity,
@@ -257,6 +267,42 @@ async def _seed_task(pg_engine, run_id: str, idem: str) -> int:
     )
     assert task_id is not None
     return task_id
+
+
+async def _seed_resumable_failed_run(pg_engine, config: dict, idem: str) -> tuple[str, int]:
+    """campaign_run(failed) + task_queue(failed, pre-external, resumable).
+
+    Тот же checkpoint, что делает «Повторить залив» доступным в
+    ``core.commands.campaign_runs.resume_unavailable_reason`` — сборка напрямую
+    через SQL, не через полный прогон воркера (независимость от transient-retry
+    машинерии, которая покрыта другими тестами этого файла).
+    """
+    run_id = await _seed_run(pg_engine, config, idem)
+    task_id = await _seed_task(pg_engine, run_id, idem)
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'failed',
+                    external_started_at = NULL,
+                    completed_at = clock_timestamp(),
+                    result = CAST(:result AS JSONB)
+                WHERE id = :task_id
+                """
+            ),
+            {
+                "task_id": task_id,
+                "result": json.dumps(
+                    {"outcome": "REJECTED", "reason": "pre_external_attempts_exhausted"}
+                ),
+            },
+        )
+        await conn.execute(
+            text("UPDATE campaign_run SET status = 'failed' WHERE id = :rid"),
+            {"rid": run_id},
+        )
+    return run_id, task_id
 
 
 # ---------------------- тесты ----------------------
@@ -826,3 +872,184 @@ async def test_expired_campaign_lease_cannot_finalize_run_or_task(
         ).one()
     assert row.run_status == "queued"
     assert row.task_status == "running"
+
+
+# ---------------------- upload-storage retention (issues #190, #192) ----------------------
+
+
+# #192: успех одного прогона не должен уносить набор, ещё нужный для «Повторить
+# залив» другого прогона, ссылающегося на тот же creo_root (multi-cabinet launch).
+@pytest.mark.asyncio
+async def test_success_keeps_upload_dir_referenced_by_resumable_sibling(
+    pg_engine, clean_campaigns, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+    creo_root = f"shared-{uuid.uuid4().hex[:8]}"
+    upload_dir = tmp_path / creo_root
+    upload_dir.mkdir()
+    (upload_dir / "c0.jpg").write_bytes(b"a")
+    (upload_dir / "c1.jpg").write_bytes(b"b")
+
+    config = _run_config()
+    config["creo_root"] = creo_root
+
+    failed_run_id, _ = await _seed_resumable_failed_run(
+        pg_engine, config, f"idem-{uuid.uuid4().hex[:8]}"
+    )
+
+    success_idem = f"idem-{uuid.uuid4().hex[:8]}"
+    success_run_id = await _seed_run(pg_engine, config, success_idem)
+    await _seed_task(pg_engine, success_run_id, success_idem)
+
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None
+    await process_one_task(pg_engine, claim.task, client=_FakeClient(), uploader=_FakeUploader())
+
+    async with pg_engine.connect() as conn:
+        success_status = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :rid"), {"rid": success_run_id}
+            )
+        ).scalar()
+    assert success_status == "succeeded"
+
+    # Набор ещё нужен упавшему прогону для «Повторить залив» — папка на месте.
+    assert upload_dir.is_dir()
+    assert (upload_dir / "c0.jpg").is_file()
+    assert (upload_dir / "c1.jpg").is_file()
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT run.config AS config, run.created_meta_ids AS created_meta_ids,
+                           run.status AS run_status, task.status AS task_status,
+                           task.external_started_at AS external_started_at,
+                           task.result AS task_result
+                    FROM campaign_run AS run
+                    JOIN task_queue AS task ON task.payload->>'run_id' = run.id::text
+                    WHERE run.id = :rid
+                    """
+                ),
+                {"rid": failed_run_id},
+            )
+        ).one()
+    config_value = row.config if isinstance(row.config, dict) else json.loads(row.config)
+    reason = resume_unavailable_reason(
+        run_status=row.run_status,
+        run_config=config_value,
+        created_meta_ids=row.created_meta_ids or {},
+        task={
+            "task_status": row.task_status,
+            "external_started_at": row.external_started_at,
+            "task_result": row.task_result,
+        },
+    )
+    assert reason is None  # «Повторить залив» по-прежнему доступен
+
+
+# Контроль: когда набор больше никем не используется, успех по-прежнему его убирает
+# (фикс #192 не должен превратиться в незаказанный предохранитель «никогда не удалять»).
+@pytest.mark.asyncio
+async def test_success_removes_upload_dir_when_not_shared(
+    pg_engine, clean_campaigns, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+    creo_root = f"solo-{uuid.uuid4().hex[:8]}"
+    upload_dir = tmp_path / creo_root
+    upload_dir.mkdir()
+    (upload_dir / "c0.jpg").write_bytes(b"a")
+
+    config = _run_config()
+    config["creo_root"] = creo_root
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, config, idem)
+    await _seed_task(pg_engine, run_id, idem)
+
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None
+    await process_one_task(pg_engine, claim.task, client=_FakeClient(), uploader=_FakeUploader())
+
+    assert not upload_dir.exists()
+
+
+# #190 п.1/п.4/п.5: подметание по сроку доступно вне старта воркера и не трогает
+# набор, ссылающийся на прогон, способный быть повторённым.
+@pytest.mark.asyncio
+async def test_sweep_by_age_keeps_dirs_referenced_by_resumable_run(
+    pg_engine, clean_campaigns, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+    stale_orphan = tmp_path / f"orphan-{uuid.uuid4().hex[:8]}"
+    stale_orphan.mkdir()
+    stale_held = tmp_path / f"held-{uuid.uuid4().hex[:8]}"
+    stale_held.mkdir()
+    # resume_unavailable_reason сверяет media-checkpoint по реальным concept_refs
+    # (_run_config: c0.jpg/c1.jpg) — без них набор сочли бы «неполным» и не held.
+    (stale_held / "c0.jpg").write_bytes(b"a")
+    (stale_held / "c1.jpg").write_bytes(b"b")
+    old_ts = time.time() - 10 * 86400.0
+    for directory in (stale_orphan, stale_held):
+        os.utime(directory, (old_ts, old_ts))
+
+    config = _run_config()
+    config["creo_root"] = stale_held.name
+    await _seed_resumable_failed_run(pg_engine, config, f"idem-{uuid.uuid4().hex[:8]}")
+
+    removed = await _sweep_stale_upload_dirs(pg_engine, max_age_days=7.0)
+
+    assert removed == 1
+    assert not stale_orphan.exists()
+    assert stale_held.is_dir()
+
+    referenced = await referenced_creo_roots(pg_engine)
+    assert stale_held.name in referenced
+    assert stale_orphan.name not in referenced
+
+
+# #190 п.2/п.4: предел по объёму убирает самые старые НЕиспользуемые наборы, пока
+# суммарный размер не уложится в лимит, и не трогает набор активного/повторяемого прогона.
+@pytest.mark.asyncio
+async def test_volume_cap_removes_oldest_unreferenced_dirs_first(
+    pg_engine, clean_campaigns, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+
+    def _make(name: str, *, size: int, age_seconds: float) -> Path:
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "f.bin").write_bytes(b"x" * size)
+        ts = time.time() - age_seconds
+        os.utime(directory, (ts, ts))
+        return directory
+
+    # Возраст отсчитывается от порога свежести: набор моложе него предел не
+    # трогает вовсе, потому что папка появляется на диске раньше строки
+    # campaign_run и «на неё никто не ссылается» означает «её грузят сейчас».
+    base = _UPLOAD_CAP_MIN_AGE_SECONDS
+    oldest = _make(f"oldest-{uuid.uuid4().hex[:8]}", size=100, age_seconds=base + 300)
+    middle = _make(f"middle-{uuid.uuid4().hex[:8]}", size=100, age_seconds=base + 200)
+    newest = _make(f"newest-{uuid.uuid4().hex[:8]}", size=100, age_seconds=base + 100)
+    held = _make(f"held-{uuid.uuid4().hex[:8]}", size=100, age_seconds=base + 400)
+    # resume_unavailable_reason сверяет media-checkpoint по реальным concept_refs
+    # (_run_config: c0.jpg/c1.jpg) — без них набор сочли бы «неполным» и не held.
+    # Дописывание файлов меняет mtime папки, поэтому возраст выставляем заново.
+    (held / "c0.jpg").write_bytes(b"a")
+    (held / "c1.jpg").write_bytes(b"b")
+    held_ts = time.time() - (base + 400)
+    os.utime(held, (held_ts, held_ts))
+    held_total_size = 100 + 1 + 1
+
+    config = _run_config()
+    config["creo_root"] = held.name
+    await _seed_resumable_failed_run(pg_engine, config, f"idem-{uuid.uuid4().hex[:8]}")
+
+    removed, total_bytes = await _enforce_upload_volume_cap(pg_engine, max_total_bytes=250)
+
+    assert removed == 2
+    assert not oldest.exists()
+    assert not middle.exists()
+    assert newest.is_dir()
+    assert held.is_dir()
+    assert total_bytes == 100 + held_total_size

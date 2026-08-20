@@ -672,6 +672,35 @@ async def test_money_preflight_requests_a_real_network_probe(
     assert request.full_probe is True
 
 
+# Мутация уходит с control-страницы. Проба, не назвавшая роль, доставалась
+# interactive-странице: «токен жив» на одной вкладке ничего не говорит о второй,
+# и доказательство относилось не к той странице, которая отправит POST.
+@pytest.mark.asyncio
+async def test_money_preflight_probes_the_control_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    client._stub.CheckMetaApiHealth = AsyncMock(return_value=_probe_identity())
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1843,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        await _prepare_campaign_graph(
+            client,
+            method="POST",
+            endpoint="/act_123/campaigns",
+            body=_valid_campaign_create_body("campaigns"),
+        )
+
+    request = client._stub.CheckMetaApiHealth.await_args.args[0]
+    assert request.operation_role == "control"
+
+
 # Ответ без выполненной пробы не доказывает достижимость Meta: capability не
 # подписывается, необратимый грант в БД не появляется.
 @pytest.mark.asyncio

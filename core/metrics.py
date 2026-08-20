@@ -149,6 +149,16 @@ DATABASE_DISK_LAST_CHECK_TIMESTAMP = Gauge(
     "Unix timestamp последней попытки проверить свободное место",
 )
 
+CAMPAIGN_UPLOAD_STORAGE_BYTES = Gauge(
+    "fb_agent_campaign_upload_storage_bytes",
+    "Суммарный размер каталога загруженных концептов кампаний (CAMPAIGN_UPLOAD_ROOT)",
+)
+
+CAMPAIGN_UPLOAD_STORAGE_LAST_SWEEP_TIMESTAMP = Gauge(
+    "fb_agent_campaign_upload_storage_last_sweep_timestamp_seconds",
+    "Unix timestamp последнего подметания upload-папок кампаний",
+)
+
 CLEANUP_ROWS_DELETED = Gauge(
     "fb_agent_cleanup_rows_deleted",
     "Строки, удалённые за последний cleanup-прогон",
@@ -237,6 +247,12 @@ def record_database_disk_unavailable() -> None:
     """Mark the latest disk measurement attempt as failed without inventing free bytes."""
     DATABASE_DISK_CHECK_SUCCESS.set(0)
     DATABASE_DISK_LAST_CHECK_TIMESTAMP.set(time.time())
+
+
+def record_campaign_upload_storage(*, used_bytes: int) -> None:
+    """Публикует занятый объём каталога загруженных концептов кампаний."""
+    CAMPAIGN_UPLOAD_STORAGE_BYTES.set(max(0, int(used_bytes)))
+    CAMPAIGN_UPLOAD_STORAGE_LAST_SWEEP_TIMESTAMP.set(time.time())
 
 
 def record_cleanup_run(

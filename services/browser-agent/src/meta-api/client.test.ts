@@ -11,6 +11,7 @@ import {
   checkMetaApiHealth,
   isLoginRequiredError,
   graphFetchInPage,
+  TOKEN_PATTERN_SOURCE,
 } from './client.js';
 
 // Мок Playwright Page: page.evaluate(fn, args) → вызываем evalImpl(args) (fn игнорируем).
@@ -313,6 +314,19 @@ describe('graphFetchInPage: pre-send классификация отмены (is
       globalThis.fetch = realFetch;
     }
   });
+
+  // Пять копий одного EAA-токен-паттерна расходились по client.ts/upload.ts.
+  // graphFetchInPage — единственное место, где паттерн ОБЯЗАН остаться литералом
+  // (функция сериализуется в page.evaluate и не может импортировать
+  // TOKEN_PATTERN_SOURCE), поэтому синхронизацию с каноническим источником
+  // проверяет тест на исходный текст функции, а не поведение.
+  it('литерал токен-паттерна внутри graphFetchInPage совпадает с TOKEN_PATTERN_SOURCE', () => {
+    assert.ok(
+      graphFetchInPage.toString().includes(TOKEN_PATTERN_SOURCE),
+      'graphFetchInPage сериализуется в page.evaluate и хранит литерал токен-паттерна ' +
+        'внутри тела — он разошёлся с каноническим TOKEN_PATTERN_SOURCE',
+    );
+  });
 });
 
 // Инцидент 2026-06-19: token-only health давал false-positive «healthy» при мёртвом
@@ -357,6 +371,37 @@ describe('checkMetaApiHealth full_probe (incident 2026-06-19)', () => {
     assert.equal(r.probeOk, false);
     assert.equal(r.probeDetail, 'probe_network_down');
     assert.equal(r.detail, 'probe_network_down');
+  });
+
+  // Регрессия: -4 (отмена до старта fetch) не был внесён в перечисление
+  // -1/-2/-3 и проваливался в ветку «прочие ошибки Meta → канал жив», из-за
+  // чего проба отвечала healthy=true на ДОКАЗАННОМ отказе до отправки —
+  // неклассифицированная ошибка деградировала в успех. Проверяется знак кода,
+  // поэтому следующий отрицательный код регрессию не повторит.
+  it('full_probe отменён до старта fetch (-4) → healthy=false, канал мёртв', async () => {
+    const body = JSON.stringify({
+      error: { code: -4, type: 'CancelledBeforeSend', message: 'не покидал browser' },
+    });
+    const { page } = mockHealthPage({
+      graph: () => ({ status_code: 0, response_json: body }),
+    });
+    const r = await checkMetaApiHealth(page, { fullProbe: true });
+    assert.equal(r.healthy, false);
+    assert.equal(r.probeOk, false);
+    assert.equal(r.probeDetail, 'probe_network_down');
+  });
+
+  // Любой будущий внутренний код тоже обязан считаться мёртвым каналом.
+  it('full_probe с неизвестным отрицательным кодом → healthy=false', async () => {
+    const body = JSON.stringify({
+      error: { code: -99, type: 'FutureInternalSignal', message: 'ещё не придуман' },
+    });
+    const { page } = mockHealthPage({
+      graph: () => ({ status_code: 0, response_json: body }),
+    });
+    const r = await checkMetaApiHealth(page, { fullProbe: true });
+    assert.equal(r.healthy, false);
+    assert.equal(r.probeDetail, 'probe_network_down');
   });
 
   // full_probe и Meta вернула 190 (протух токен) → канал мёртв для мутаций.
@@ -405,6 +450,29 @@ describe('checkMetaApiHealth full_probe (incident 2026-06-19)', () => {
     assert.equal(r.healthy, true);
     assert.equal(r.probeOk, false);
     assert.equal(r.probeDetail, 'meta_error:17');
+  });
+
+  // Регрессия: доказанный pre-send отказ (-4, CancelledBeforeSend — fetch() не
+  // стартовал, запрос НЕ покидал browser) не должен склеиваться с «прочие
+  // Meta-ошибки → fetch дошёл до Meta → канал жив». До фикса runNetworkProbe
+  // проверял только code===-1||-2||-3, -4 проваливался в default-ветку и проба
+  // отвечала healthy=true — неклассифицированный отказ деградировал в успех,
+  // а не в «канал недоступен», хотя доказательства живости канала вообще нет.
+  it('full_probe отменён до отправки (-4) → healthy=false, не «дошёл до Meta»', async () => {
+    const body = JSON.stringify({
+      error: {
+        code: -4,
+        type: 'CancelledBeforeSend',
+        message: 'gRPC отменён до вызова fetch: запрос не покидал browser',
+      },
+    });
+    const { page } = mockHealthPage({
+      graph: () => ({ status_code: 0, response_json: body }),
+    });
+    const r = await checkMetaApiHealth(page, { fullProbe: true });
+    assert.equal(r.healthy, false);
+    assert.equal(r.probeOk, false);
+    assert.notEqual(r.probeDetail, 'meta_error:-4');
   });
 
   // Кеш: два full_probe подряд в пределах TTL → реальный fetch ровно один раз.

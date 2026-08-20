@@ -647,6 +647,62 @@ describe('MetaApiService exact-profile health', () => {
     assert.equal(response.vision_profile_id, 'profile-exact');
   });
 
+  // #196: money-предполёт (prepare_operation_authorization) подписывает
+  // одноразовый грант под ExecuteGraphCallV5, который уходит с control-
+  // страницы. Проба на interactive-странице ничего не говорит про вторую
+  // вкладку — «токен есть» там не доказывает, что control-страница жива.
+  it('a money operation_role probe uses the control page, not interactive, under the control page-lock', async () => {
+    const session = { id: 'session-money', visionProfileId: 'profile-money' };
+    const fakeManager = {
+      getSession: () => session,
+    } as unknown as SessionManager;
+    const controlActs: string[] = [];
+    let interactiveCalls = 0;
+    const controlPage = { marker: 'control-page' } as any;
+    const handlers = createMetaApiServiceHandlers(fakeManager, {
+      getControlPage: (_session, actId) => {
+        controlActs.push(actId);
+        return controlPage;
+      },
+      getInteractivePage: () => {
+        interactiveCalls += 1;
+        return {} as any;
+      },
+      checkMetaApiHealth: async (page) => {
+        assert.equal(page, controlPage, 'проба обязана взять ровно ту страницу, что понесёт мутацию');
+        return {
+          healthy: true,
+          currentUrl: 'https://adsmanager.facebook.com/?act=123',
+          tokenPresent: true,
+          tokenLength: 200,
+          detail: 'ok',
+          probePerformed: true,
+          probeOk: true,
+          probeStatusCode: 200,
+          probeDurationMs: 10,
+          probeDetail: 'ok',
+        };
+      },
+    });
+
+    const response = await new Promise<any>((resolve, reject) => {
+      handlers.checkMetaApiHealth(
+        unaryCall({
+          session_id: 'session-money',
+          full_probe: true,
+          expected_vision_profile_id: '',
+          ad_account_id: '123',
+          operation_role: 'control',
+        }),
+        (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
+      );
+    });
+
+    assert.deepEqual(controlActs, ['123']);
+    assert.equal(interactiveCalls, 0, 'interactive-страница вообще не должна открываться под money-пробу');
+    assert.equal(response.healthy, true);
+  });
+
   it('cancellation aborts the health probe and emits no late response', async () => {
     let probeStartedResolve!: () => void;
     const probeStarted = new Promise<void>((resolve) => { probeStartedResolve = resolve; });

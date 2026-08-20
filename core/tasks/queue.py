@@ -890,7 +890,15 @@ async def _project_facebook_login_incident_in_transaction(
     payload: dict[str, Any],
     result: dict[str, Any],
 ) -> None:
-    """Atomically reuse the canonical per-cabinet re-login incident."""
+    """Atomically reuse the canonical per-cabinet re-login incident.
+
+    Гейт намеренно остаётся на meta_api_mutation, а не расширен до всей
+    money-полосы: признак ``requires_facebook_login`` в результате задачи
+    выставляет только meta_api_worker. Залив кампании проецирует тот же
+    инцидент сам, из своего воркера, потому что знает кабинет. Расширение
+    гейта не добавляло ни одной живой ветки, зато меняло состояние там, где
+    его никто не ждал — 49 integration-тестов на терминальном переходе.
+    """
     if task_type != "meta_api_mutation" or result.get("requires_facebook_login") is not True:
         return
     account_id = str(payload.get("ad_account_id") or "").strip()

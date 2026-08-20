@@ -14,6 +14,7 @@ import {
 } from "./am/am-columns-preset.js";
 import { raceWithAbort } from "./in-page-abort.js";
 import { withPageRoleLock } from "./page-lock.js";
+import { pageHasMetaApiToken } from "./meta-api/client.js";
 import type { BrowserPageRole, BrowserSession, HumanProfile } from "./types.js";
 
 const EXISTING_PROFILE_PORT_GRACE_SECONDS = 8;
@@ -1051,7 +1052,14 @@ export class SessionManager {
       !isPageClosed(mapped) &&
       !this.poisonedPages.has(mapped) &&
       mappedMatchesAct &&
-      !opposite.has(mapped)
+      !opposite.has(mapped) &&
+      // Money-роль не может судить о живой сессии по одному URL: кэшированная
+      // control-страница может умереть без видимой навигации, а
+      // isConfirmedAdsManagerPage сравнивает только pathname и act. Тот же
+      // признак, что использует реальная проба (checkMetaApiHealth), обязан
+      // подтвердить аутентификацию перед тем, как отдать закешированную
+      // страницу под мутацию — иначе она отдаётся молча.
+      (role !== "control" || (await pageHasMetaApiToken(mapped, opts.signal)))
     ) {
       page = mapped;
     } else {

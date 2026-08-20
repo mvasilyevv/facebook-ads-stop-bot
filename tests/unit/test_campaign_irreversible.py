@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import uuid
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
@@ -39,8 +40,11 @@ from core.campaign_builder.execute import (
     classify_execution_error,
 )
 from core.meta_api.errors import (
+    BrowserOperationRejectedError,
     BrowserReadinessRejectedError,
+    LoginRequiredError,
     PermanentError,
+    PreDispatchRejectedError,
     TemporaryError,
 )
 from core.tasks.irreversible_control import CreatorTaskControlAbort
@@ -289,6 +293,46 @@ def test_partial_without_proof_of_pre_dispatch_is_not_marked() -> None:
     assert classify_execution_error(raised.value) == "partial"
 
 
+# Отказ собственной авторизации браузера несёт код причины — и он обязан дожить
+# до PartialCreateError: иначе оператор узнает «сорвалось до отправки», но не узнает,
+# что именно отвергли (истёк грант, чужой кабинет, неавторизованный вызывающий).
+def test_browser_rejection_after_confirmed_create_carries_its_reason_code() -> None:
+    cause = BrowserOperationRejectedError(
+        "browser-agent отверг операцию до отправки в Meta: "
+        "срок действия разрешения на операцию истёк",
+        reason_code="capability_expired",
+        endpoint="/act_1/ads",
+    )
+    created = {"campaigns": ["campaign-1"], "adsets": ["adset-1"], "creatives": [], "ads": []}
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="creating_ads",
+            campaign_create_attempted=True,
+        )
+
+    assert raised.value.pre_dispatch is True
+    assert raised.value.pre_dispatch_reason_code == "capability_expired"
+
+
+# Причина известна только у отказа с кодом. Прочие pre-send отказы её не выдумывают.
+def test_partial_without_a_named_reason_carries_no_reason_code() -> None:
+    created = {"campaigns": ["campaign-1"], "adsets": [], "creatives": [], "ads": []}
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            BrowserReadinessRejectedError("upload rejected before its Meta dispatch"),
+            failed_step="uploading",
+            campaign_create_attempted=True,
+        )
+
+    assert raised.value.pre_dispatch is True
+    assert raised.value.pre_dispatch_reason_code is None
+
+
 # ack-lost (created пуст, POST campaign инициирован) — отказ заведомо ПОСЛЕ отправки.
 def test_ack_lost_partial_is_not_marked_pre_dispatch() -> None:
     cause = TemporaryError("meta answer lost")
@@ -339,6 +383,46 @@ def test_partial_branch_forwards_pre_dispatch_marker() -> None:
     src = inspect.getsource(worker._execute_run)  # noqa: SLF001
     branch = src.split("except PartialCreateError")[1].split("except Exception")[0]
     assert branch.count("pre_dispatch=exc.pre_dispatch") == 2
+
+
+# Причина отказа доезжает до оператора только вместе с признаком — в обоих местах,
+# куда воркер пишет result: карточку строит task_queue.result, а не campaign_run.
+def test_partial_branch_forwards_the_named_reason() -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    src = inspect.getsource(worker._execute_run)  # noqa: SLF001
+    branch = src.split("except PartialCreateError")[1].split("except Exception")[0]
+    assert branch.count("pre_dispatch_reason_code=exc.pre_dispatch_reason_code") == 2
+
+
+# Результат задачи несёт код причины; без причины ключа нет — «неизвестно» остаётся
+# неизвестным, а не превращается в пустую строку в карточке.
+def test_task_result_carries_the_named_reason_code() -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    named = worker._campaign_unknown_result(  # noqa: SLF001
+        _make_task(),
+        run_id="run-1",
+        reason="partial_confirmed",
+        created_ids={"campaigns": ["campaign-1"]},
+        failed_step="creating_ads",
+        pre_dispatch=True,
+        pre_dispatch_reason_code="capability_expired",
+    )
+
+    assert named["outcome"] == "UNKNOWN"
+    assert named["pre_dispatch"] is True
+    assert named["pre_dispatch_reason_code"] == "capability_expired"
+
+    unnamed = worker._campaign_unknown_result(  # noqa: SLF001
+        _make_task(),
+        run_id="run-1",
+        reason="partial_confirmed",
+        created_ids={"campaigns": ["campaign-1"]},
+        failed_step="creating_ads",
+        pre_dispatch=True,
+    )
+    assert "pre_dispatch_reason_code" not in unnamed
 
 
 async def _deadline_exhausted_graph_error() -> BaseException:
@@ -720,6 +804,57 @@ async def test_transient_after_campaign_boundary_is_unknown_not_retried(monkeypa
     assert result["manual_review_required"] is True
 
 
+# issue #200: доказанный pre-send отказ (PreDispatchRejectedError) обязан остаться
+# REJECTED/retry даже когда control.external_started уже True — begin_external
+# выставляет флаг ПЕРЕД самим RPC, поэтому флаг сам по себе ничего не доказывает
+# про исход ЭТОГО конкретного вызова. Прод-случай 19.08: дедлайн исчерпан до
+# первого POST, создано ноль объектов, но карточка всё равно требовала сверки.
+@pytest.mark.asyncio
+async def test_proven_pre_dispatch_rejection_after_boundary_is_not_unknown(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    class _StartedControl(_UnitControl):
+        async def begin_external(self, _operation: str) -> None:
+            self.external_started = True
+
+    async def _execute(*_args, client, **_kwargs):
+        await client.execute_graph_call(method="POST", endpoint="/act_1/campaigns")
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    delegate = AsyncMock()
+    delegate.execute_graph_call.side_effect = PreDispatchRejectedError(
+        "channel rejected before send"
+    )
+    control = _StartedControl()
+    task = _make_task()
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: SimpleNamespace())
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+    failed = AsyncMock(return_value=True)
+    retry = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "finalize_run_failed", failed)
+    monkeypatch.setattr(worker, "requeue_for_retry", retry)
+
+    await worker._execute_run(
+        object(),
+        task,
+        run_id="run-1",
+        config={},
+        client=delegate,
+        uploader=AsyncMock(),
+        control=control,
+    )
+
+    # Доказанный pre-send отказ — безопасно повторить, не ambiguous manual review.
+    retry.assert_awaited_once()
+    failed.assert_not_awaited()
+
+
 class _StartedControl(_UnitControl):
     async def begin_external(self, _operation: str) -> None:
         self.external_started = True
@@ -841,3 +976,187 @@ async def test_control_abort_after_boundary_keeps_itemized_created_ids(monkeypat
     assert result["outcome"] == "UNKNOWN"
     assert result["created_ids"]["campaigns"] == ["120001"]
     persist.assert_awaited_once()
+
+
+# ====================== #198: PARTIAL FAIL не утверждает объектов, которых нет ==========
+
+
+async def _run_partial_create_error(monkeypatch, worker, *, created_ids, failed_step, cause=None):
+    """Гоняет _execute_run до PartialCreateError, ловит finalize_run_failed/persist."""
+
+    async def _execute(*_args, **_kwargs):
+        exc = PartialCreateError("boom", created_ids=created_ids, failed_step=failed_step)
+        if cause is not None:
+            raise exc from cause
+        raise exc
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    cfg = SimpleNamespace(account=SimpleNamespace(act_id="act_321"))
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: cfg)
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+    failed = AsyncMock(return_value=True)
+    persist = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "finalize_run_failed", failed)
+    monkeypatch.setattr(worker, "_persist_partial_created_ids", persist)
+
+    await worker._execute_run(
+        object(),
+        _make_task(),
+        run_id="run-1",
+        config={},
+        client=AsyncMock(),
+        uploader=AsyncMock(),
+        control=_UnitControl(),
+    )
+    return failed
+
+
+# Непустой created: существующий текст «осиротевшие объекты» и existующий machine
+# reason сохраняются без изменений — этот исход подтверждён, чистка нужна реально.
+@pytest.mark.asyncio
+async def test_partial_fail_with_created_ids_keeps_orphan_language(monkeypatch, caplog) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    with caplog.at_level(logging.ERROR):
+        failed = await _run_partial_create_error(
+            monkeypatch,
+            worker,
+            created_ids={"campaigns": ["120001"], "adsets": [], "creatives": [], "ads": []},
+            failed_step="creating_ads",
+        )
+
+    assert "осиротевш" in caplog.text
+    assert "чистка" in caplog.text
+    result = failed.await_args.kwargs["task_result"]
+    assert result["reason"] == "partial_confirmed"
+    assert failed.await_args.kwargs["progress"]["reason"] == "partial_confirmed"
+
+
+# Пустой created (ack-lost): 19.08 залив упал при НУЛЕ созданных объектов, а
+# оператор увидел «осиротевшие объекты, нужна ручная чистка» — искать было нечего.
+# Красное на текущем коде: и слова в логе, и machine reason должны разойтись с
+# подтверждённым partial.
+@pytest.mark.asyncio
+async def test_partial_fail_with_empty_created_ids_does_not_claim_orphans(
+    monkeypatch, caplog
+) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    with caplog.at_level(logging.ERROR):
+        failed = await _run_partial_create_error(
+            monkeypatch,
+            worker,
+            created_ids={"campaigns": [], "adsets": [], "creatives": [], "ads": []},
+            failed_step="creating",
+        )
+
+    assert "осиротевш" not in caplog.text
+    assert "чистка" not in caplog.text
+    result = failed.await_args.kwargs["task_result"]
+    assert result["reason"] == "ack_lost_nothing_confirmed"
+    assert result["reason"] != "partial_confirmed"
+    assert failed.await_args.kwargs["progress"]["reason"] == "ack_lost_nothing_confirmed"
+    error_text = failed.await_args.kwargs["error"]
+    assert "чистить нечего" in error_text
+    # #198: операторский текст не несёт сырое исключение.
+    assert "boom" not in error_text
+
+
+# ====================== #197: login_required money-путь любого типа ======================
+
+
+# Предполёт с вердиктом live-пробы login_required заводит канонический инцидент
+# в той же транзакции, что закрывает попытку — раньше про разлогин узнавали
+# только из отдельного пятиминутного цикла пробы observer'а.
+@pytest.mark.asyncio
+async def test_readiness_login_verdict_projects_login_incident(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    cause = BrowserReadinessRejectedError(
+        "exact browser session/profile is not ready for a money operation (login_required)"
+    )
+
+    async def _execute(*_args, **_kwargs):
+        raise cause
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    cfg = SimpleNamespace(account=SimpleNamespace(act_id="act_777"))
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: cfg)
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+
+    captured: dict[str, object] = {}
+
+    async def fake_release(engine, *, task, error, transactional_effect=None, **_kw):
+        captured["effect"] = transactional_effect
+        return "failed"
+
+    monkeypatch.setattr(worker, "release_after_browser_readiness_rejection", fake_release)
+    notify = AsyncMock()
+    monkeypatch.setattr(worker, "notify_login_required_incident_in_transaction", notify)
+
+    class _FakeConn:
+        async def execute(self, *_a, **_kw):
+            return SimpleNamespace(rowcount=1)
+
+    await worker._execute_run(
+        object(),
+        _make_task(),
+        run_id="run-1",
+        config={},
+        client=AsyncMock(),
+        uploader=AsyncMock(),
+        control=_UnitControl(),
+    )
+
+    effect = captured["effect"]
+    await effect(_FakeConn(), "failed")
+
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["ad_account_id"] == "act_777"
+
+
+# Тот же признак, обнаруженный после подтверждённого/ack-lost partial (созданное
+# на предыдущем шаге не отменяет отказ более позднего предполёта), доходит до
+# finalize_run_failed вместо того, чтобы молча потеряться в PartialCreateError.
+@pytest.mark.asyncio
+async def test_partial_ack_lost_with_login_cause_projects_login_incident(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    cause = LoginRequiredError("Meta: session expired")
+    failed = await _run_partial_create_error(
+        monkeypatch,
+        worker,
+        created_ids={"campaigns": [], "adsets": [], "creatives": [], "ads": []},
+        failed_step="creating",
+        cause=cause,
+    )
+
+    assert failed.await_args.kwargs["login_required_ad_account_id"] == "act_321"
+
+
+# Отказ БЕЗ доказанного login_required не проецирует инцидент — признак остаётся
+# доказанным, а не «на всякий случай» для любого partial-провала.
+@pytest.mark.asyncio
+async def test_partial_without_login_cause_skips_login_incident(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    failed = await _run_partial_create_error(
+        monkeypatch,
+        worker,
+        created_ids={"campaigns": ["120001"], "adsets": [], "creatives": [], "ads": []},
+        failed_step="creating_ads",
+    )
+
+    assert failed.await_args.kwargs["login_required_ad_account_id"] is None

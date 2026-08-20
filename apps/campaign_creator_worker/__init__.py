@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.campaign_builder.config import CampaignConfig
 from core.campaign_builder.uniquify import ConceptInput
+from core.commands.campaign_runs import resume_unavailable_reason
 from core.tasks.queue import (
     Task,
     TaskClaim,
@@ -261,11 +262,19 @@ async def finalize_run_failed(
     created_meta_ids: dict[str, Any] | None = None,
     task_result: dict[str, Any] | None = None,
     progress: dict[str, Any] | None = None,
+    login_required_ad_account_id: str | None = None,
 ) -> bool:
     """Финал: status=failed + текст ошибки (+ опц. осиротевшие created_meta_ids).
 
     created_meta_ids пишется при partial-create для fenced reconciliation и
     обязательной ручной сверки до повторного запуска.
+
+    login_required_ad_account_id — доказанный признак «нужен повторный вход»
+    (см. commit 2d4e02b7: живая проба предполёта/pre-send отказ). Проецирует
+    канонический per-cabinet инцидент в ТОЙ ЖЕ транзакции, что закрывает
+    задачу: campaign_create — money-путь наравне с meta_api_mutation, а до
+    #197 про разлогин узнавали только из отдельного цикла пробы observer'а,
+    без связи с конкретным упавшим заливом.
     """
     params: dict[str, Any] = {
         "rid": run_id,
@@ -344,6 +353,15 @@ async def finalize_run_failed(
                 lane=task.lane,
                 task_type=task.task_type,
             )
+            if login_required_ad_account_id:
+                from core.observer.login_required import (
+                    notify_login_required_incident_in_transaction,
+                )
+
+                await notify_login_required_incident_in_transaction(
+                    conn,
+                    ad_account_id=login_required_ad_account_id,
+                )
     except _CampaignFinalizeFenceLost:
         return False
     return True
@@ -461,6 +479,124 @@ def _resolve_creo_dir(creo_root: str) -> Path:
     return _campaign_upload_root() / upload_id
 
 
+def _run_holds_creo_root(
+    *,
+    run_status: str,
+    run_config: dict[str, Any],
+    created_meta_ids: dict[str, Any],
+    task: dict[str, Any] | None,
+) -> bool:
+    """True, если этот прогон ещё нуждается в своём upload-наборе на диске.
+
+    Активный прогон (не succeeded/failed/cancelled) ещё не дочитал файлы —
+    держит набор независимо от деталей. Успешный прогон больше не читает
+    оригиналы (issue #190/#192: удалять можно). Failed/cancelled держит набор
+    ровно пока для него доступно «Повторить залив» — тот же критерий, что
+    показывается оператору в ``RunControlsOut.resume`` (единый источник:
+    ``core.commands.campaign_runs.resume_unavailable_reason``).
+    """
+    if run_status not in {"succeeded", "failed", "cancelled"}:
+        return True
+    if run_status == "succeeded":
+        return False
+    return (
+        resume_unavailable_reason(
+            run_status=run_status,
+            run_config=run_config,
+            created_meta_ids=created_meta_ids,
+            task=task,
+        )
+        is None
+    )
+
+
+async def referenced_creo_roots(
+    engine: AsyncEngine,
+    *,
+    only_creo_root: str | None = None,
+    exclude_run_id: str | None = None,
+) -> set[str]:
+    """creo_root-наборы, которые ещё нельзя удалять (issue #190 п.4, #192 п.1).
+
+    Набор входит в результат, пока хоть один campaign_run на него ссылается и
+    либо ещё активен, либо терминален, но для него доступно «Повторить залив».
+    Опциональные фильтры сужают запрос: ``only_creo_root`` — для точечной
+    проверки перед удалением одной папки (``_cleanup_upload_dir``),
+    ``exclude_run_id`` — чтобы прогон, который САМ только что завершился
+    успехом, не голосовал за сохранение собственного набора.
+    """
+    conditions = ["COALESCE(run.config->>'creo_root', '') <> ''"]
+    params: dict[str, Any] = {}
+    if only_creo_root is not None:
+        conditions.append("run.config->>'creo_root' = :creo_root")
+        params["creo_root"] = only_creo_root
+    if exclude_run_id is not None:
+        conditions.append("run.id <> CAST(:exclude_run_id AS UUID)")
+        params["exclude_run_id"] = exclude_run_id
+    where_clause = " AND ".join(conditions)
+    async with engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        f"""
+                    SELECT run.config AS run_config,
+                           run.status AS run_status,
+                           run.created_meta_ids AS created_meta_ids,
+                           task.status AS task_status,
+                           task.external_started_at AS external_started_at,
+                           task.result AS task_result
+                    FROM campaign_run AS run
+                    LEFT JOIN LATERAL (
+                        SELECT status, external_started_at, result
+                        FROM task_queue
+                        WHERE task_type = 'campaign_create'
+                          AND payload->>'run_id' = run.id::text
+                        ORDER BY id DESC
+                        LIMIT 1
+                    ) AS task ON TRUE
+                    WHERE {where_clause}
+                    """
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    referenced: set[str] = set()
+    for row in rows:
+        config = row["run_config"]
+        if isinstance(config, str):
+            config = json.loads(config)
+        config = config or {}
+        creo_root = str(config.get("creo_root") or "").strip()
+        if not creo_root:
+            continue
+        created_meta_ids = row["created_meta_ids"]
+        if isinstance(created_meta_ids, str):
+            created_meta_ids = json.loads(created_meta_ids)
+        task: dict[str, Any] | None = None
+        if row["task_status"] is not None:
+            task_result = row["task_result"]
+            if isinstance(task_result, str):
+                task_result = json.loads(task_result)
+            task = {
+                "task_status": row["task_status"],
+                "external_started_at": row["external_started_at"],
+                "task_result": task_result or {},
+            }
+        if _run_holds_creo_root(
+            run_status=str(row["run_status"]),
+            run_config=config,
+            created_meta_ids=created_meta_ids or {},
+            task=task,
+        ):
+            referenced.add(creo_root)
+    return referenced
+
+
 def resolve_concepts_from_config(cfg: CampaignConfig) -> dict[str, list[ConceptInput]]:
     """Резолвит концепты каждого блока по ЕДИНОМУ источнику — block.concept_refs.
 
@@ -513,6 +649,7 @@ __all__ = [
     "finalize_run_succeeded",
     "load_run",
     "parse_run_config",
+    "referenced_creo_roots",
     "set_run_status",
     "update_run_progress",
 ]

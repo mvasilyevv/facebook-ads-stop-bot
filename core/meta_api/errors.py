@@ -129,6 +129,60 @@ class PreDispatchRejectedError(SessionUnavailableError):
     """
 
 
+# Код причины → та же причина человеческим языком. Зеркалит
+# OPERATION_REJECTION_PREDICATES в services/browser-agent/src/meta-api/service.ts:
+# разошедшийся словарь молча вернёт отказ в путь «часть изменений принята».
+#
+# Словарь закрытый и живёт здесь, рядом с исключением, а не в транспортном клиенте:
+# читает его и карточка инцидента оператора, которой gRPC-слой ни к чему. Причина
+# доезжает до оператора только отсюда — сырой ``details()`` от browser-agent наружу
+# не выносится, в нём изредка лежит токен из Graph-ответа.
+BROWSER_OPERATION_REJECTION_REASONS: dict[str, str] = {
+    "capability_authority_unavailable": "сервис выдачи разрешений на операцию недоступен",
+    "capability_contract_incompatible": "версия контракта браузера не совпадает",
+    "capability_secret_unavailable": "ключ подписи разрешения недоступен в браузере",
+    "capability_cabinet_mismatch": "разрешение выдано на другой рекламный кабинет",
+    "caller_not_authorized": "операция не разрешена вызывающему сервису",
+    "capability_task_binding_invalid": "разрешение не привязано к задаче",
+    "capability_lease_binding_invalid": "разрешение не привязано к аренде задачи",
+    "capability_expired": "срок действия разрешения на операцию истёк",
+    "capability_malformed": "разрешение на операцию повреждено",
+    "capability_signature_invalid": "подпись разрешения на операцию не сошлась",
+    "capability_invalid": "разрешение на операцию недействительно",
+    "ownership_preflight_rejected": "цель операции не принадлежит этому кабинету",
+    "graph_method_override": "подмена HTTP-метода запроса не разрешена",
+    "graph_method_semantics": "метод запроса задан неоднозначно",
+    "graph_get_body": "запрос на чтение пришёл с телом",
+    "graph_endpoint_query": "адрес запроса содержит недопустимые параметры",
+}
+
+
+class BrowserOperationRejectedError(PreDispatchRejectedError):
+    """Собственная авторизация browser-agent отвергла операцию до отправки в Meta.
+
+    Каждый предикат этой семьи (недействительный или истёкший грант, чужой
+    кабинет, неавторизованный вызывающий, отказ ownership-preflight, нарушенная
+    семантика Graph-запроса) срабатывает раньше, чем открывается внешняя
+    граница. Значит исход — REJECTED: побочного эффекта нет, перечень уже
+    созданного не пополнился, и оператору нечего сверять по этому запросу.
+
+    ``reason_code`` — машинный код причины из закрытого словаря
+    ``BROWSER_OPERATION_REJECTION_REASONS``; текст исключения — та же причина
+    человеческим языком. Сырой ``details()`` от browser-agent не переносится:
+    он свободный и изредка содержит токен из Graph-ответа.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        endpoint: str | None = None,
+    ) -> None:
+        self.reason_code = reason_code
+        super().__init__(message, endpoint=endpoint)
+
+
 class BrowserReadinessRejectedError(PreDispatchRejectedError):
     """Exact live v5/profile/session check rejected before the controlled RPC.
 

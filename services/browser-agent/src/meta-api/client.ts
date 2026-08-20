@@ -18,6 +18,19 @@ import { assertCanonicalGraphMethodSemantics } from './operation-capability.js';
 // При обновлении (раз в год) — синхронизировать с настройками в core/config.py.
 export const META_API_VERSION = 'v22.0';
 
+// Единственный источник шаблона EAA access_token в DOM Ads Manager. Раньше
+// один и тот же литерал жил пятью независимыми копиями (по одной на каждый
+// page.evaluate/waitForFunction, читающий токен) и расходился без предупреждения.
+// Каждая новая точка чтения токена обязана ссылаться на эту константу.
+//
+// Исключение — graphFetchInPage ниже: функция сериализуется в браузер через
+// page.evaluate и не может ссылаться ни на что из модульной области, поэтому
+// хранит тот же паттерн литералом внутри тела. Синхронизация проверена тестом
+// (client.test.ts, "литерал токен-паттерна внутри graphFetchInPage совпадает
+// с TOKEN_PATTERN_SOURCE") — следующий рефакторинг, меняющий паттерн только
+// здесь, не сломает бой незамеченным.
+export const TOKEN_PATTERN_SOURCE = 'EAA[A-Za-z0-9_-]{100,}';
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export interface GraphApiCallParams {
@@ -270,7 +283,8 @@ export async function executeGraphCall(
     try {
       await raceWithAbort(
         page.waitForFunction(
-          () => /EAA[A-Za-z0-9_-]{100,}/.test(document.documentElement.innerHTML),
+          (pattern) => new RegExp(pattern).test(document.documentElement.innerHTML),
+          TOKEN_PATTERN_SOURCE,
           { timeout: 10_000 },
         ),
         options.signal,
@@ -376,6 +390,38 @@ function preSendCancelledGraphResult(startedAt: number, message: string): GraphA
       fbtraceId: '',
     },
   };
+}
+
+/**
+ * Дешёвая DOM-проверка живого EAA-токена на странице — без сети, тот же
+ * признак, что использует token-only ветка checkMetaApiHealth ниже.
+ *
+ * Экспортирована для session-manager: страница, отданная под money-роль ИЗ
+ * КЕША (mapped), подтверждается только сравнением pathname/act
+ * (isConfirmedAdsManagerPage), а сессия внутри неё может умереть без видимой
+ * навигации. Один и тот же признак должен решать оба вопроса — «жив ли канал»
+ * и «можно ли отдать эту конкретную страницу под мутацию», иначе «токен есть»
+ * на одной проверке ничего не говорит о другой.
+ */
+export async function pageHasMetaApiToken(
+  page: Page,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    if (page.isClosed()) return false;
+    const tokenInfo = await raceWithAbort(
+      page.evaluate(
+        (pattern) => ({
+          present: new RegExp(pattern).test(document.documentElement.innerHTML),
+        }),
+        TOKEN_PATTERN_SOURCE,
+      ),
+      signal,
+    );
+    return tokenInfo.present;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -526,8 +572,14 @@ async function runNetworkProbe(
 
   if (result.error) {
     const code = result.error.code;
-    // -1 token-not-found, -2 Failed to fetch, -3 page-evaluate — канал/сеть мертвы.
-    if (code === -1 || code === -2 || code === -3) {
+    // Отрицательные коды — внутренние сигналы этого слоя (реальные Graph-коды
+    // положительные): -1 token-not-found, -2 Failed to fetch, -3 page-evaluate,
+    // -4 отмена до старта fetch. Ни один из них не доказывает, что запрос дошёл
+    // до Meta, поэтому проба обязана считать канал мёртвым.
+    // Проверяется знак, а не перечисление: перечисление уже дало регрессию —
+    // добавленный -4 проваливался в ветку «прочие ошибки Meta → канал жив» и
+    // проба отвечала healthy=true на доказанном отказе до отправки.
+    if (code < 0) {
       return { ...base, probeOk: false, probeDetail: 'probe_network_down', channelDown: true };
     }
     // 190 OAuth — токен протух ИЛИ профиль разлогинен. Разлогин/чекпоинт (нужен ре-логин
