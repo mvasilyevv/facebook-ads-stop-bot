@@ -1,6 +1,6 @@
 import { formatSpend } from "../format/number";
 import { formatZonedDateTime } from "../format/time";
-import { operatorActionStateReason } from "./actionLabels";
+import { operatorActionReason } from "./actionLabels";
 import type {
   OperatorActionItem,
   OperatorAttentionItem,
@@ -192,9 +192,9 @@ export interface CollapsedOperatorAction {
  *
  * «Одинаковость» — это то, что оператор реально видит в строке: заголовок,
  * конкретная цель (иначе разные объявления с одним типом команды слились бы
- * в одну ложную запись) и состояние. Текст причины сверяется отдельно, хотя
- * сегодня он однозначно определяется состоянием — так группировка не сломается
- * молча, если текст когда-нибудь станет зависеть от чего-то ещё.
+ * в одну ложную запись), состояние и текст причины. Причина теперь приходит из
+ * события, а не из состояния: два отказа с разными причинами — это две записи,
+ * иначе свёртка спрячет вторую причину за «×2».
  *
  * Живёт в shared, а не в оболочке: web и TMA показывают одну и ту же ленту,
  * и две копии стратегии свёртки неизбежно разошлись бы.
@@ -223,7 +223,7 @@ function isSameOperatorActionRow(
     a.title === b.title &&
     a.target_label === b.target_label &&
     a.state === b.state &&
-    operatorActionStateReason(a.state) === operatorActionStateReason(b.state)
+    operatorActionReason(a) === operatorActionReason(b)
   );
 }
 

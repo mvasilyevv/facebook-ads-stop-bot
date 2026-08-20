@@ -83,6 +83,7 @@ from core.meta_api.errors import (
 from core.meta_api.upload import MediaUploader
 from core.metrics import record_campaign_upload_storage
 from core.observer.login_required import notify_login_required_incident_in_transaction
+from core.tasks.action_reason import campaign_operator_reason
 from core.tasks.irreversible_control import (
     CreatorTaskControl,
     CreatorTaskControlAbort,
@@ -316,6 +317,7 @@ async def _persist_partial_created_ids(
     failed_step: str,
     pre_dispatch: bool | None = None,
     pre_dispatch_reason_code: str | None = None,
+    operator_reason: str | None = None,
 ) -> bool:
     """created_ids partial-провала — в task_queue.result, не только в логи/campaign_run.
 
@@ -339,6 +341,11 @@ async def _persist_partial_created_ids(
         payload["pre_dispatch"] = bool(pre_dispatch)
     if pre_dispatch_reason_code:
         payload["pre_dispatch_reason_code"] = pre_dispatch_reason_code
+    # Промежуточная запись живёт до finalize_run_failed, но оператор может
+    # открыть очередь именно в этот момент. Без причины он увидит «неизвестна»
+    # там, где она уже известна.
+    if operator_reason:
+        payload["operator_reason"] = operator_reason
     try:
         async with engine.begin() as conn:
             result = await conn.execute(
@@ -422,6 +429,7 @@ def _campaign_unknown_result(
     pre_dispatch: bool | None = None,
     pre_dispatch_reason_code: str | None = None,
     diagnostics: dict[str, Any] | None = None,
+    exc: BaseException | None = None,
 ) -> dict[str, Any]:
     """Результат неизвестного исхода: сверка обязательна, признаки — только доказанные.
 
@@ -435,6 +443,10 @@ def _campaign_unknown_result(
     diagnostics — структурная причина отказа из ``_failure_diagnostics`` (закрытый
     набор безопасных полей, без Graph-текста/fbtrace_id). Идёт в ``task_queue.result``
     рядом с ``reason``, чтобы разбор задачи не требовал чтения исходников.
+
+    exc — исключение, из цепочки которого берётся санитизированный текст отказа
+    Meta для операторской причины. Без него у оператора остаётся код вида
+    «100/1885316», по которому причину не установить.
     """
     result: dict[str, Any] = {
         "outcome": "UNKNOWN",
@@ -444,6 +456,15 @@ def _campaign_unknown_result(
         "run_id": run_id,
         "reason": reason,
     }
+    operator_reason = _operator_failure_reason(
+        reason_code=reason,
+        failed_step=failed_step,
+        diagnostics=diagnostics,
+        pre_dispatch_reason_code=pre_dispatch_reason_code,
+        exc=exc,
+    )
+    if operator_reason:
+        result["operator_reason"] = operator_reason
     if created_ids is not None:
         result["created_ids"] = created_ids
     if failed_step is not None:
@@ -459,13 +480,33 @@ def _campaign_unknown_result(
     return result
 
 
-def _campaign_rejected_result(*, run_id: str, reason: str) -> dict[str, Any]:
-    return {
+def _campaign_rejected_result(
+    *,
+    run_id: str,
+    reason: str,
+    failed_step: str | None = None,
+    exc: BaseException | None = None,
+) -> dict[str, Any]:
+    """Результат доказанного отказа: побочного эффекта нет, причина названа.
+
+    ``operator_reason`` пишется здесь же, а не выводится потом из состояния:
+    отказ по исчерпанному дедлайну и отказ по недоступному браузеру — разные
+    события, и оператор должен видеть разный текст.
+    """
+    result: dict[str, Any] = {
         "outcome": "REJECTED",
         "operation": "campaign_create",
         "run_id": run_id,
         "reason": reason,
     }
+    operator_reason = _operator_failure_reason(
+        reason_code=reason,
+        failed_step=failed_step,
+        exc=exc,
+    )
+    if operator_reason:
+        result["operator_reason"] = operator_reason
+    return result
 
 
 def _browser_readiness_rejection(
@@ -558,13 +599,16 @@ def _failure_diagnostics(
     return diagnostics
 
 
-def _meta_reason_for_log(exc: BaseException) -> str | None:
-    """Санитизированный текст отказа Meta из цепочки причин — ТОЛЬКО для лога.
+def _meta_reason(exc: BaseException) -> str | None:
+    """Санитизированный текст отказа Meta из цепочки причин.
 
-    Намеренно не входит в ``_failure_diagnostics``: тот набор едет в
-    ``task_queue.result`` и в карточку оператора, а Graph-текст остаётся
-    внутренней диагностикой. Без него код вида «100/1885316» — это всё, что
-    остаётся, когда залив встаёт (живая находка 20.08.2026).
+    ``MetaApiError.meta_message`` уже прошёл ``redact_sensitive_text``: токены,
+    Bearer, UUID и содержимое query-строк из него вырезаны, а ``fbtrace_id`` в
+    него не кладётся. Поэтому текст едет и в лог, и в операторскую причину — в
+    отличие от ``str(exc)``/``repr(exc)``, которые несут Graph-сырьё.
+
+    Без него код вида «100/1885316» — это всё, что остаётся оператору, когда
+    залив встаёт (живая находка 20.08.2026).
     """
     current: BaseException | None = exc
     seen: set[int] = set()
@@ -575,6 +619,29 @@ def _meta_reason_for_log(exc: BaseException) -> str | None:
             return str(message)
         current = current.__cause__
     return None
+
+
+def _operator_failure_reason(
+    *,
+    reason_code: str,
+    failed_step: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
+    pre_dispatch_reason_code: str | None = None,
+    exc: BaseException | None = None,
+) -> str | None:
+    """Причина отказа залива словами оператора — из события, а не из состояния.
+
+    Шаг берётся из ``failed_step``, а если его нет — из стадии, которую уже
+    собрал ``_failure_diagnostics``: обе ветки называют одно и то же место
+    залива, и терять его из-за формы вызова нельзя.
+    """
+    facts = diagnostics or {}
+    return campaign_operator_reason(
+        reason_code=reason_code,
+        failed_step=failed_step or facts.get("failed_step") or facts.get("stage"),
+        rejection_reason_code=pre_dispatch_reason_code or facts.get("reason_code"),
+        meta_message=_meta_reason(exc) if exc is not None else None,
+    )
 
 
 def _has_any_created_ids(created: dict[str, list[str]]) -> bool:
@@ -895,7 +962,11 @@ async def _execute_run(
             run_id,
             task=task,
             error=f"invalid config: {exc!r}",
-            task_result=_campaign_rejected_result(run_id=run_id, reason="invalid_config"),
+            task_result=_campaign_rejected_result(
+                run_id=run_id,
+                reason="invalid_config",
+                failed_step="validate",
+            ),
         )
         return
 
@@ -1076,6 +1147,7 @@ async def _execute_run(
                 task_result=_campaign_rejected_result(
                     run_id=run_id,
                     reason="absolute_deadline_exceeded_before_external_call",
+                    failed_step=last_stage,
                 ),
             )
         return
@@ -1120,7 +1192,7 @@ async def _execute_run(
                 task.id,
                 exc.failed_step,
                 diagnostics,
-                _meta_reason_for_log(exc),
+                _meta_reason(exc),
                 exc_info=True,
             )
             error = (
@@ -1134,6 +1206,13 @@ async def _execute_run(
             failed_step=exc.failed_step,
             pre_dispatch=exc.pre_dispatch,
             pre_dispatch_reason_code=exc.pre_dispatch_reason_code,
+            operator_reason=_operator_failure_reason(
+                reason_code=reason,
+                failed_step=exc.failed_step,
+                diagnostics=diagnostics,
+                pre_dispatch_reason_code=exc.pre_dispatch_reason_code,
+                exc=exc,
+            ),
         )
         await finalize_run_failed(
             engine,
@@ -1150,6 +1229,7 @@ async def _execute_run(
                 pre_dispatch=exc.pre_dispatch,
                 pre_dispatch_reason_code=exc.pre_dispatch_reason_code,
                 diagnostics=diagnostics,
+                exc=exc,
             ),
             progress={
                 "stage": "failed",
@@ -1253,6 +1333,7 @@ async def _execute_run(
                     run_id=run_id,
                     reason="external_result_ambiguous",
                     diagnostics=diagnostics,
+                    exc=exc,
                 ),
                 progress={
                     "stage": "failed",
@@ -1275,7 +1356,10 @@ async def _execute_run(
                     task=task,
                     error=f"transient exhausted before external call: {exc!r}",
                     task_result=_campaign_rejected_result(
-                        run_id=run_id, reason="pre_external_attempts_exhausted"
+                        run_id=run_id,
+                        reason="pre_external_attempts_exhausted",
+                        failed_step=last_stage,
+                        exc=exc,
                     ),
                 )
                 return
@@ -1315,7 +1399,7 @@ async def _execute_run(
             "campaign_create: task id=%s → permanent fail: %r meta_reason=%r",
             task.id,
             exc,
-            _meta_reason_for_log(exc),
+            _meta_reason(exc),
             exc_info=True,
         )
         await finalize_run_failed(
@@ -1324,7 +1408,10 @@ async def _execute_run(
             task=task,
             error=f"permanent before external call: {exc!r}",
             task_result=_campaign_rejected_result(
-                run_id=run_id, reason="permanent_pre_external_failure"
+                run_id=run_id,
+                reason="permanent_pre_external_failure",
+                failed_step=last_stage,
+                exc=exc,
             ),
             login_required_ad_account_id=(
                 cfg.account.act_id if _requires_facebook_login(exc) else None

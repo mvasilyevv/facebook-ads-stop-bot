@@ -16,8 +16,12 @@ _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
 # Graph-токен в тексте ответа Meta приходит и без имени поля («Session for EAA… is
 # invalid»), поэтому _NAMED_SECRET_RE его не ловит.
 _META_ACCESS_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])EAA[A-Za-z0-9_-]{16,}")
+# fbtrace_id — идентификатор запроса Meta, а не секрет, но канон запрещает ему
+# путь в интерфейс оператора наравне с токеном: он опознаёт конкретный запрос в
+# чужой системе и ничего не говорит оператору.
 _NAMED_SECRET_RE = re.compile(
-    r"(?i)\b(?P<name>access_token|api[_-]?key|x-token|token|password|secret)"
+    r"(?i)\b(?P<name>access_token|api[_-]?key|x-token|token|password|secret"
+    r"|fbtrace[_-]?id)"
     r"(?P<separator>\s*[:=]\s*)[^\s&;,]+"
 )
 _CAPABILITY_RE = re.compile(
@@ -64,7 +68,7 @@ def safe_exception_diagnostic(exc: BaseException) -> str:
 
 
 def redact_sensitive_text(value: object) -> str:
-    """Redact common credentials, capabilities, UUIDs and URL query contents."""
+    """Redact credentials, capabilities, request identifiers, UUIDs and URL queries."""
 
     text = str(value or "")
     text = _URL_QUERY_RE.sub(r"\g<base>?<redacted>", text)

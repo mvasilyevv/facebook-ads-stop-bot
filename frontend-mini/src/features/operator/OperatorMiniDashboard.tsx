@@ -25,7 +25,7 @@ import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { OPERATOR_ADS_STOP_PROXIMITY_SORT } from "@fb/shared/operator/routeFilters";
-import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
+import { operatorActionReason } from "@fb/shared/operator/actionLabels";
 import {
   completeOperatorCommandIntent,
   getOrCreateOperatorCommandIntent,
@@ -762,7 +762,7 @@ function MiniActionJournal({
                     {ACTION_STATE_LABEL[item.state]}
                   </span>
                 </div>
-                <p>{operatorActionStateReason(item.state)}</p>
+                <p>{operatorActionReason(item)}</p>
                 {isActiveAction(item) ? (
                   <div
                     className="mini-action-journal__progress"

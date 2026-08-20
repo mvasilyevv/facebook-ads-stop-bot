@@ -7,8 +7,8 @@ import {
 } from "@fb/shared/operator/viewModel";
 import {
   operatorActionKindLabel,
+  operatorActionReason,
   operatorActionRecovery,
-  operatorActionStateReason,
 } from "@fb/shared/operator/actionLabels";
 import {
   formatZonedDateTime,
@@ -119,10 +119,8 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
           )}
         />
         <Row label="Инициатор" value={action.requested_by ?? "не указан"} />
-        <Row
-          label="Состояние команды"
-          value={operatorActionStateReason(action.state)}
-        />
+        {/* Состояние уже названо чипом выше; здесь — причина исхода из события. */}
+        <Row label="Причина" value={operatorActionReason(action)} />
       </dl>
       {recovery?.destination === "target" && action.target_id ? (
         <Link

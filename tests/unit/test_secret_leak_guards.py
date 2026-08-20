@@ -20,6 +20,7 @@ import core.meta_api.audit as meta_audit
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import PermanentError, classify_graph_error
 from core.meta_api.upload import MediaUploader
+from core.operator.queries import task_action_reason
 from core.public_identifiers import parse_public_uuid, public_uuid
 from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 from core.telegram.command_replies import DurableTelegramUpdateClient
@@ -387,3 +388,68 @@ def test_vision_public_diagnostics_ignore_raw_probe_and_configuration_details() 
         settings_vision._public_vision_configuration_message(VisionConfigurationError(raw))
         == "Vision configuration is unavailable"
     )
+
+
+def test_action_reason_projection_drops_task_internals_from_operator_text() -> None:
+    """Причина в снимке действий не несёт traceback, UUID и внутренний код (#206).
+
+    Результат задачи специально враждебный: рядом с операторской причиной лежат
+    и машинный код, и traceback, и секрет. Наружу едет только причина, и та —
+    санитизированная.
+    """
+    hostile_result = {
+        "outcome": "UNKNOWN",
+        "reason": "ack_lost_nothing_confirmed",
+        "error": (
+            "Traceback (most recent call last):\n"
+            '  File "/app/core/campaign_builder/execute.py", line 512, in _create\n'
+            f"PermanentError: access_token={_SECRET} {_UUID}"
+        ),
+        "diagnostics": {
+            "exception_class": "PermanentError",
+            "code": 100,
+            "subcode": 1885316,
+            "endpoint": f"https://graph.facebook.example/v23.0/act_1/ads?access_token={_SECRET}",
+        },
+        "operator_reason": (
+            f"Шаг: создание объектов кампании. Ответ Meta: отказ {_UUID} "
+            f"fbtrace_id=AbCdEfGhIjKlMnOpQrS access_token={_SECRET}"
+        ),
+    }
+
+    projected = task_action_reason(hostile_result)
+
+    assert projected is not None
+    assert _SECRET not in projected
+    assert _UUID not in projected
+    assert "AbCdEfGhIjKlMnOpQrS" not in projected
+    assert "Traceback" not in projected
+    assert "ack_lost_nothing_confirmed" not in projected
+    assert "graph.facebook.example" not in projected
+    assert "PermanentError" not in projected
+
+
+def test_action_reason_projection_refuses_a_traceback_shaped_reason() -> None:
+    """Причина формы «внутренности Python» не показывается вовсе (#206).
+
+    Обрезанный traceback в карточке оператора хуже честного «причина не
+    записана»: он выглядит как объяснение, ничего не объясняя.
+    """
+    assert (
+        task_action_reason(
+            {
+                "operator_reason": (
+                    "Traceback (most recent call last): "
+                    '  File "/app/apps/campaign_creator_worker/main.py", line 1204, in run'
+                )
+            }
+        )
+        is None
+    )
+
+
+def test_action_reason_is_null_when_no_reason_was_recorded() -> None:
+    """Отсутствие причины — null, а не пустая строка и не бодрая константа (#206)."""
+    assert task_action_reason({"outcome": "UNKNOWN", "reason": "external_result_ambiguous"}) is None
+    assert task_action_reason({"operator_reason": "   "}) is None
+    assert task_action_reason(None) is None

@@ -392,7 +392,13 @@ def test_partial_branch_forwards_the_named_reason() -> None:
 
     src = inspect.getsource(worker._execute_run)  # noqa: SLF001
     branch = src.split("except PartialCreateError")[1].split("except Exception")[0]
-    assert branch.count("pre_dispatch_reason_code=exc.pre_dispatch_reason_code") == 2
+    # Проверяется место вызова, а не число совпадений: у обоих вызовов свой набор
+    # аргументов, и счётчик ломался бы от каждого нового поля результата.
+    named = "pre_dispatch_reason_code=exc.pre_dispatch_reason_code"
+    persist_at = branch.index("_persist_partial_created_ids(")
+    finalize_at = branch.index("_campaign_unknown_result(")
+    assert named in branch[persist_at:finalize_at]
+    assert named in branch[finalize_at:]
 
 
 # Результат задачи несёт код причины; без причины ключа нет — «неизвестно» остаётся

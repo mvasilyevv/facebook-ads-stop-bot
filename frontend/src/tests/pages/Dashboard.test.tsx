@@ -251,6 +251,30 @@ describe("operator dashboard", () => {
     expect(screen.queryByText(/Traceback|secret-host|token=unsafe/)).not.toBeInTheDocument();
   });
 
+  it("shows the recorded failure reason in the action ledger", () => {
+    const snapshot = makeOperatorSnapshot();
+    const first = snapshot.actions.data!.items[0]!;
+    first.state = "failed";
+    first.reason = "Шаг: создание объектов кампании. Meta отказала до создания объектов.";
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    expect(
+      screen.getByText("Шаг: создание объектов кампании. Meta отказала до создания объектов."),
+    ).toBeInTheDocument();
+    // Константа по состоянию больше не подменяет причину отказа.
+    expect(
+      screen.queryByText("Команда завершилась ошибкой. Проверьте состояние перед повтором."),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses the selected cabinet timezone on the cabinet route", () => {
     render(
       <OperatorRealtimeStatusProvider status="connected">

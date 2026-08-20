@@ -12,8 +12,8 @@ import {
 import { ACTION_STATE_LABEL, actionForRealtimeState } from "@fb/shared/operator/viewModel";
 import {
   operatorActionKindLabel,
+  operatorActionReason,
   operatorActionRecovery,
-  operatorActionStateReason,
 } from "@fb/shared/operator/actionLabels";
 import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
 import type { OperatorActionItem } from "@fb/shared/operator/contracts";
@@ -168,10 +168,12 @@ function ActionDetailPage() {
         </dl>
         <div className="mt-4 rounded-[var(--radius-2)] bg-bg-2 p-4">
           <div className="text-[12px] font-semibold uppercase tracking-[.06em] text-bg-8">
-            Состояние команды
+            Причина
           </div>
+          {/* Состояние уже названо чипом и дорожкой жизненного цикла выше;
+              здесь — причина исхода из события, а не пересказ состояния. */}
           <p className="m-0 mt-2 break-words text-[14px] leading-6 text-bg-10">
-            {operatorActionStateReason(action.state)}
+            {operatorActionReason(action)}
           </p>
           {recovery?.destination === "target" && action.target_id ? (
             <Link

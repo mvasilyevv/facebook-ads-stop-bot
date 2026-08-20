@@ -23,6 +23,7 @@ from core.scanner.status import (
     DELIVERY_REJECTED_STATUSES,
     normalized_delivery_status,
 )
+from core.tasks.action_reason import operator_reason_from_result
 from core.tasks.channel import disable_channel_sql, enable_channel_sql, target_id_sql
 
 
@@ -55,19 +56,18 @@ def task_action_state(status: str, result: Any) -> str:
     return "failed"
 
 
-def task_action_reason(state: str) -> str:
-    """Return deterministic operator copy without exposing task diagnostics."""
-    return {
-        "queued": "Команда принята и ожидает выполнения.",
-        "running": "Команда выполняется; итог ещё не подтверждён.",
-        "confirmed": "Результат команды подтверждён.",
-        "failed": "Команда завершилась ошибкой. Проверьте состояние перед повтором.",
-        "cancelled": "Команда отменена.",
-        "unknown": "Результат команды требует сверки. Не повторяйте действие вслепую.",
-    }.get(
-        state,
-        "Состояние команды требует сверки. Не повторяйте действие вслепую.",
-    )
+def task_action_reason(result: Any) -> str | None:
+    """Причина исхода, записанная при завершении задачи, — или ``None``.
+
+    Причина не выводится из состояния: 20.08.2026 пять заливов, упавших по пяти
+    разным причинам, читались в очереди действий одной константой. Здесь
+    читается ровно то, что записал воркер, а «не записана» остаётся ``None`` —
+    не пустой строкой и не текстом про успешный исход.
+
+    Соседние поля результата (машинный ``reason``, ``diagnostics``, ``error``)
+    наружу не идут: в них живут внутренние коды и диагностика.
+    """
+    return operator_reason_from_result(_json(result))
 
 
 def task_action_kind(task_type: str, payload: Any) -> str:
@@ -143,7 +143,7 @@ def _task_item(row: Any) -> dict[str, Any]:
         "requested_at": row.created_at,
         "updated_at": row.updated_at,
         "requested_by": str(row.requested_by) if row.requested_by else None,
-        "reason": task_action_reason(state),
+        "reason": task_action_reason(result),
         "correlation_id": str(row.correlation_id),
         "account_id": (
             str(payload.get("account_id") or payload.get("ad_account_id"))
