@@ -1217,6 +1217,14 @@ def _campaign_run_failure_class(
         return "invalid_config"
     if resume_reason in _INVALID_MEDIA_CONTROL_REASONS:
         return "invalid_media"
+    if task_reason == "browser_rejection_not_retryable":
+        # Воркер уже доказал, что повтор той же задачи вернёт тот же отказ:
+        # запрос собран неверно или вызывающему не разрешено это делать.
+        # Класс не выводится из наличия контрольной точки — иначе кнопка
+        # «Безопасно повторить» встала бы рядом с записанной причиной «Повтор
+        # той же задачи не поможет». Отдельного состояния карточке не нужно:
+        # «безопасный повтор недоступен» — это ровно оно и есть.
+        return "unavailable"
     if resume.available:
         return "safe_retry"
     return "unavailable"

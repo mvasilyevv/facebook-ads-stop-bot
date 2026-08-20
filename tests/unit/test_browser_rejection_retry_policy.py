@@ -34,8 +34,13 @@ from core.meta_api.errors import (
     BROWSER_OPERATION_REJECTION_REASONS,
     BrowserOperationRejectedError,
     BrowserReadinessRejectedError,
+    unretryable_browser_rejection,
 )
-from core.tasks.action_reason import operator_reason_from_result
+from core.tasks.action_reason import (
+    browser_rejection_not_retryable_reason,
+    campaign_operator_reason,
+    operator_reason_from_result,
+)
 from core.tasks.queue import Task
 
 # Причина, которую повтор не лечит: подпись разрешения не сошлась.
@@ -223,6 +228,78 @@ async def test_money_task_with_readiness_rejection_is_released_without_burn(
     money_worker.requeue_pre_send.assert_not_awaited()
 
 
+# Порядок вопросов, а не совпадение gRPC-статусов: сегодня отказ готовности и
+# неисправимый отказ операции приходят на разных статусах и не пересекаются.
+# Стоит одному завернуть другой в ``__cause__`` — и задача, которую полагается
+# вернуть в очередь без сгорания попытки, финализировалась бы отказом.
+@pytest.mark.asyncio
+async def test_money_readiness_rejection_wins_over_unretryable_cause(
+    monkeypatch, money_worker
+) -> None:
+    readiness = BrowserReadinessRejectedError("channel is not ready")
+    readiness.__cause__ = _rejection(_UNRETRYABLE_REASON)
+    # Ровно та коллизия, которой сегодня не бывает: обе семьи узнают себя в
+    # одной ошибке, и решает порядок вопросов, а не то, что коды разошлись.
+    assert unretryable_browser_rejection(readiness) is not None
+    monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=readiness))
+
+    await meta.process_one_task(
+        object(),
+        _money_task(),
+        client=AsyncMock(),
+        alert_ctx=meta.AutostopAlertContext(engine=object()),
+    )
+
+    money_worker.release_readiness.assert_awaited_once()
+    money_worker.failed.assert_not_awaited()
+    money_worker.requeue_pre_send.assert_not_awaited()
+
+
+# Самый дорогой маршрут через новую ветку: необратимая мутация создаёт объекты в
+# кабинете, и отсутствие подтверждения по умолчанию становится UNKNOWN с ручной
+# сверкой. Но отказ ДО отправки доказан браузером: дубля нет и сверять нечего,
+# поэтому исход обязан остаться REJECTED, а не уехать в _fail_irreversible.
+@pytest.mark.asyncio
+async def test_money_irreversible_duplicate_with_unretryable_rejection_stays_rejected(
+    monkeypatch, money_worker
+) -> None:
+    monkeypatch.setattr(
+        meta,
+        "authorize_duplicate_execution_boundary",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(side_effect=_rejection(_UNRETRYABLE_REASON)),
+    )
+
+    await meta.process_one_task(
+        object(),
+        _money_task(
+            id=213,
+            idempotency_key="meta:duplicate_adset_structure:213",
+            payload={
+                "mutation_kind": "duplicate_adset_structure",
+                "target_id": "555",
+                "ad_account_id": "456",
+            },
+            lane="bulk",
+            requested_by="operator",
+        ),
+        client=AsyncMock(),
+    )
+
+    money_worker.failed.assert_awaited_once()
+    result = money_worker.failed.await_args.kwargs["result"]
+    assert result["outcome"] == "REJECTED"
+    # Признаки пути необратимого UNKNOWN: их здесь быть не должно — оператора
+    # нельзя звать сверять кабинет, в который ничего не отправляли.
+    assert result.get("reconcile_required") is not True
+    assert result.get("manual_review_required") is not True
+    assert operator_reason_from_result(result) is not None
+
+
 # ====================== bulk-полоса: apps/campaign_creator_worker ======================
 
 
@@ -265,7 +342,12 @@ def _creator_task() -> Task:
     )
 
 
-async def _run_creator_until_rejection(monkeypatch, *, reason_code: str):
+async def _run_creator_until_rejection(
+    monkeypatch,
+    *,
+    reason_code: str,
+    external_started: bool = False,
+):
     """Гоняет залив до отказа браузера, завёрнутого ровно как в бою."""
     import apps.campaign_creator_worker.main as worker
 
@@ -296,6 +378,11 @@ async def _run_creator_until_rejection(monkeypatch, *, reason_code: str):
     monkeypatch.setattr(worker, "finalize_run_failed", spies.failed)
     monkeypatch.setattr(worker, "requeue_for_retry", spies.retry)
 
+    control = _UnitControl()
+    # begin_external выставляется перед КАЖДЫМ внешним вызовом, начиная с
+    # загрузки креативов, поэтому флаг сам по себе ничего не говорит про исход
+    # того вызова, на котором залив упал.
+    control.external_started = external_started
     await worker._execute_run(  # noqa: SLF001
         object(),
         _creator_task(),
@@ -303,7 +390,7 @@ async def _run_creator_until_rejection(monkeypatch, *, reason_code: str):
         config={},
         client=AsyncMock(),
         uploader=AsyncMock(),
-        control=_UnitControl(),
+        control=control,
     )
     return spies
 
@@ -328,3 +415,96 @@ async def test_creator_task_with_retryable_rejection_returns_to_queue(monkeypatc
 
     spies.retry.assert_awaited_once()
     spies.failed.assert_not_awaited()
+
+
+# Боевой случай: креативы уже загружены, значит внешняя граница пересекалась —
+# и следующий вызов отвергнут браузером до отправки. Прошлые вызовы завершились
+# определённо, этот не начинался: исход остаётся REJECTED, а не превращается в
+# ручную сверку пустого кабинета.
+@pytest.mark.asyncio
+async def test_creator_task_rejected_after_uploads_is_still_rejected(monkeypatch) -> None:
+    spies = await _run_creator_until_rejection(
+        monkeypatch,
+        reason_code=_UNRETRYABLE_REASON,
+        external_started=True,
+    )
+
+    spies.retry.assert_not_awaited()
+    spies.failed.assert_awaited_once()
+    result = spies.failed.await_args.kwargs["task_result"]
+    assert result["outcome"] == "REJECTED"
+    assert result.get("reconcile_required") is not True
+    assert result.get("manual_review_required") is not True
+    assert operator_reason_from_result(result) is not None
+
+
+# ====================== язык оператора: сначала причина, потом вывод ======================
+
+
+# Одно и то же событие в двух полосах должно читаться одинаково. Порядок
+# «Повтор не поможет. Браузер отказал…» ставил вывод раньше факта, и залив
+# рассказывал ту же историю задом наперёд относительно паузы.
+def test_both_lanes_name_the_cause_before_the_retry_policy() -> None:
+    named = BROWSER_OPERATION_REJECTION_REASONS[_UNRETRYABLE_REASON]
+    campaign_text = campaign_operator_reason(
+        reason_code="browser_rejection_not_retryable",
+        failed_step="uploading",
+        rejection_reason_code=_UNRETRYABLE_REASON,
+    )
+    money_text = browser_rejection_not_retryable_reason(_UNRETRYABLE_REASON)
+
+    for text in (campaign_text, money_text):
+        assert text is not None
+        assert named in text
+        assert text.index(named) < text.index("Повтор той же задачи не поможет")
+        assert text.rstrip(".").endswith("Повтор той же задачи не поможет")
+
+
+# ====================== карточка CRITICAL: куда идти чинить ======================
+
+
+async def _autostop_card(monkeypatch, exc: BaseException) -> dict:
+    """Карточка, которую увидит оператор по одному недоставленному авто-стопу."""
+    import core.meta_api.autostop_alert as autostop_alert
+
+    spy_notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(autostop_alert, "notify_recurring_incident", spy_notify)
+    created = await autostop_alert.maybe_alert_autostop_channel_down(
+        exc=exc,
+        fb_ad_id="123",
+        engine=object(),
+    )
+    # Money-сигнал не зависит от формулировки: объявление продолжает тратить
+    # бюджет в обоих случаях, поэтому инцидент обязан создаваться всегда.
+    assert created is True
+    spy_notify.assert_awaited_once()
+    return spy_notify.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_dead_channel_incident_still_sends_operator_to_the_channel(monkeypatch) -> None:
+    from core.meta_api.errors import TemporaryError
+
+    card = await _autostop_card(monkeypatch, TemporaryError("Failed to fetch", code=-2))
+
+    assert card["severity"] == "critical"
+    assert any("Vision" in line for line in card["lines"])
+
+
+# Браузер ответил и отказал сам — канал жив. Отправлять оператора чинить
+# browser-agent и профиль Vision значит увести его от настоящей поломки.
+@pytest.mark.asyncio
+async def test_caller_rejection_incident_does_not_send_operator_to_fix_the_channel(
+    monkeypatch,
+) -> None:
+    card = await _autostop_card(monkeypatch, _rejection(_UNRETRYABLE_REASON))
+
+    assert card["severity"] == "critical"
+    assert card["risk"]
+    assert not any("Проверь browser-agent" in line for line in card["lines"])
+    # Ручное выключение объявления остаётся: деньги идут в обоих случаях.
+    assert any("вручную" in line for line in card["lines"])
+    # Причина названа словами оператора, а не машинным кодом.
+    text = f"{card['title']} {card['summary']} " + " ".join(card["lines"])
+    assert BROWSER_OPERATION_REJECTION_REASONS[_UNRETRYABLE_REASON] in text
+    assert _UNRETRYABLE_REASON not in text

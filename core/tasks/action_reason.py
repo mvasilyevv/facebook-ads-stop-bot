@@ -51,6 +51,13 @@ _BROWSER_REJECTION_PREFIX = "Браузер отказал до отправки
 # отказа названа выше, а здесь сказано, что ждать повтора бессмысленно.
 _NOT_RETRYABLE_CAUSE = "Повтор той же задачи не поможет"
 
+# Коды финализации, которые называют не событие, а вывод из него. Такая фраза
+# ставится в конец строки: сначала оператор читает, что произошло, и только
+# потом — что это значит. Порядок «следствие раньше причины» уже разъезжался
+# между полосами: залив говорил «Повтор не поможет. Браузер отказал…», а пауза
+# ровно наоборот, и одно и то же событие читалось как два разных.
+_RETRY_POLICY_REASON_CODES: frozenset[str] = frozenset({"browser_rejection_not_retryable"})
+
 # Машинный код причины финализации → та же причина словами оператора. Словарь
 # закрытый: незнакомый код НЕ пробрасывается как есть — внутренний код в
 # карточке оператора запрещён каноном.
@@ -126,12 +133,17 @@ def campaign_operator_reason(
     и ответа Meta возвращается ``None``, а не строка «Шаг: …».
     """
     code = str(reason_code or "").strip()
-    cause = CAMPAIGN_REASON_CAUSES.get(code)
-    if cause is None and code.startswith(_RUN_ALREADY_PREFIX):
-        cause = _RUN_ALREADY_CAUSE
+    named = CAMPAIGN_REASON_CAUSES.get(code)
+    if named is None and code.startswith(_RUN_ALREADY_PREFIX):
+        named = _RUN_ALREADY_CAUSE
+    # Вывод о повторе — не событие, поэтому он уезжает в хвост строки, а причина
+    # отказа остаётся на своём месте. Порядок тот же, что в money-полосе (см.
+    # ``browser_rejection_not_retryable_reason``).
+    policy = named if code in _RETRY_POLICY_REASON_CODES else None
+    cause = None if policy else named
     rejection = BROWSER_OPERATION_REJECTION_REASONS.get(str(rejection_reason_code or "").strip())
     meta = sanitize_operator_reason(meta_message)
-    if not (cause or rejection or meta):
+    if not (cause or policy or rejection or meta):
         return None
     parts: list[str] = []
     step = CAMPAIGN_STEP_LABELS.get(str(failed_step or "").strip())
@@ -143,6 +155,8 @@ def campaign_operator_reason(
         parts.append(f"{_BROWSER_REJECTION_PREFIX}: {rejection}")
     if meta:
         parts.append(f"Ответ Meta: {meta.rstrip('.')}")
+    if policy:
+        parts.append(policy)
     return sanitize_operator_reason(". ".join(parts) + ".")
 
 

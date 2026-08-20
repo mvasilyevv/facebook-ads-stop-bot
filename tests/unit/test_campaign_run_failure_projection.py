@@ -119,6 +119,24 @@ def test_public_progress_projects_the_real_worker_snapshot_shape() -> None:
     }
 
 
+# Воркер уже доказал, что повтор той же задачи вернёт тот же отказ, и записал
+# это оператору словами. Карточка «Доступен безопасный повтор» рядом с такой
+# причиной противоречит сама себе, поэтому класс не выводится из наличия
+# контрольной точки: контрольная точка взята нарочно доступной.
+def test_proven_unretryable_rejection_never_offers_a_safe_retry() -> None:
+    assert (
+        _campaign_run_failure_class(
+            run_status="failed",
+            task_outcome="REJECTED",
+            task_state="failed",
+            task_reason="browser_rejection_not_retryable",
+            external_started=False,
+            controls=_controls(available=True, reason="pre_external_checkpoint_available"),
+        )
+        == "unavailable"
+    )
+
+
 def test_missing_campaign_task_is_unavailable_not_a_false_manual_result() -> None:
     assert (
         _campaign_run_failure_class(
