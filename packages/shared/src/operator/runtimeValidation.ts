@@ -597,6 +597,15 @@ function actionsData(value: unknown, endpoint: string, field: string): void {
   );
 }
 
+function workerState(value: unknown, endpoint: string, field: string): void {
+  const worker = record(value, endpoint, field);
+  string(worker.id, endpoint, `${field}.id`);
+  string(worker.label, endpoint, `${field}.label`);
+  enumValue(worker.severity, SEVERITIES, endpoint, `${field}.severity`);
+  string(worker.status, endpoint, `${field}.status`);
+  nullableIsoDate(worker.last_activity_at, endpoint, `${field}.last_activity_at`);
+}
+
 function systemData(value: unknown, endpoint: string, field: string): void {
   const data = record(value, endpoint, field);
   enumValue(data.severity, SEVERITIES, endpoint, `${field}.severity`);
@@ -607,19 +616,20 @@ function systemData(value: unknown, endpoint: string, field: string): void {
   );
   nullableIsoDate(data.last_scan_at, endpoint, `${field}.last_scan_at`);
   nullableIsoDate(data.next_scan_at, endpoint, `${field}.next_scan_at`);
-  array(data.workers, endpoint, `${field}.workers`).forEach((value, index) => {
-    const workerField = `${field}.workers[${index}]`;
-    const worker = record(value, endpoint, workerField);
-    string(worker.id, endpoint, `${workerField}.id`);
-    string(worker.label, endpoint, `${workerField}.label`);
-    enumValue(worker.severity, SEVERITIES, endpoint, `${workerField}.severity`);
-    string(worker.status, endpoint, `${workerField}.status`);
-    nullableIsoDate(
-      worker.last_activity_at,
-      endpoint,
-      `${workerField}.last_activity_at`,
-    );
-  });
+  array(data.workers, endpoint, `${field}.workers`).forEach((value, index) =>
+    workerState(value, endpoint, `${field}.workers[${index}]`),
+  );
+  // issue #176: одиннадцать фоновых воркеров — обязательное поле контракта,
+  // отдельное от per-cabinet scan actors выше. Отсутствие/порча этого поля
+  // не имеет права дойти до system.background_workers.map(...) на фронте
+  // необработанным TypeError — снимок обязан провалиться здесь, штатно.
+  array(
+    data.background_workers,
+    endpoint,
+    `${field}.background_workers`,
+  ).forEach((value, index) =>
+    workerState(value, endpoint, `${field}.background_workers[${index}]`),
+  );
 }
 
 function snapshot(value: unknown, endpoint: string): void {

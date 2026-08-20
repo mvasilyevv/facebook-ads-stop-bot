@@ -48,6 +48,7 @@ from core.telegram.outbound_authority import hold_telegram_outbound_authority
 from core.telegram.service import load_telegram_config
 from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
 from core.telegram.webhook_configuration import process_one_webhook_configuration
+from core.worker_liveness import HEARTBEAT_INTERVAL_SECONDS, record_worker_heartbeat
 from core.worker_metrics import (
     mark_worker_heartbeat,
     record_notification_delivery_transition,
@@ -434,10 +435,22 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
     next_webhook_configuration = 0.0
     next_reconcile = 0.0
     next_metrics_refresh = 0.0
+    # Throttled independently of loop speed: an idle/misconfigured pass can
+    # spin every 0.5s, and an unthrottled upsert per iteration is needless
+    # load. Marked BEFORE the auth-gate below (not only after a successful
+    # delivery/reply): webhook config + lease reconcile + metrics refresh
+    # above are this worker's real recurring DB-touching duty, and an
+    # unconfigured Telegram bot token is a separate, already-surfaced state —
+    # it must not also make this worker look "not processing its queue"
+    # forever (review issue #176 Л1).
+    next_liveness_write_at = 0.0
     try:
         while not shutdown.is_set():
             mark_worker_heartbeat(WORKER_NAME)
             now = loop.time()
+            if now >= next_liveness_write_at:
+                await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
+                next_liveness_write_at = now + HEARTBEAT_INTERVAL_SECONDS
             if now >= next_webhook_configuration:
                 try:
                     webhook_processed = await process_one_webhook_configuration(

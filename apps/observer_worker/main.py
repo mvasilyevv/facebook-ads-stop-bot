@@ -89,6 +89,7 @@ from core.telegram.worker_notify import (
     resolve_recurring_incident,
 )
 from core.wording import times_ru
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import SNAPSHOT_AGE, mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
@@ -246,12 +247,22 @@ async def _finish_scan_run(
 async def metrics_loop(
     stop: asyncio.Event,
     *,
+    engine: AsyncEngine,
     snapshot_age_provider: Callable[[], float | None] | None = None,
 ) -> None:
-    """Refresh process-local Prometheus liveness and snapshot age."""
+    """Refresh process-local Prometheus liveness and snapshot age.
+
+    Fine-grained per-cabinet liveness already lives in ``cabinet_runtime``
+    (exposed to the operator snapshot as ``observer:<account>`` actors); this
+    is the durable "the dispatcher process itself is up" signal for the
+    generic background-worker list (issue #176). ``poll_success=True`` here
+    is a deliberate simplification: this loop has no separate, decoupled
+    work-loop to distinguish from, unlike campaign_creator or meta_api.
+    """
     interval = 15.0
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
         snapshot_age = None if snapshot_age_provider is None else snapshot_age_provider()
         SNAPSHOT_AGE.labels(source="observer_ads").set(
             float("inf") if snapshot_age is None else max(0.0, snapshot_age)
@@ -1140,6 +1151,7 @@ async def main_loop(
         metrics_task = asyncio.create_task(
             metrics_loop(
                 shutdown_event,
+                engine=engine,
                 snapshot_age_provider=lambda: (
                     None
                     if state.last_complete_snapshot_at is None

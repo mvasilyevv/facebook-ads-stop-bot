@@ -773,6 +773,7 @@ async def test_campaign_worker_uses_durable_gate_without_preclaim_rpc(
 
     monkeypatch.setattr(worker, "_claim", claim)
     monkeypatch.setattr(worker, "process_one_task", process)
+    monkeypatch.setattr(worker, "record_worker_heartbeat", AsyncMock())
     client = MagicMock()
     client.operation_authority.return_value = nullcontext()
 
@@ -804,6 +805,54 @@ async def test_campaign_worker_uses_durable_gate_without_preclaim_rpc(
         vision_profile_id="campaign-profile-1",
         browser_readiness_generation=4,
     )
+
+
+@pytest.mark.asyncio
+async def test_task_loop_survives_a_liveness_write_failure_and_still_runs_the_claimed_task(
+    monkeypatch,
+) -> None:
+    """Review issue #176 Б1: monitoring code must not kill what it monitors.
+
+    A raw connection failure (no DBAPI/SQLAlchemy wrapping — reproduced against
+    real asyncpg by the review) from record_worker_heartbeat must not stop
+    task_loop from running an already-claimed, leased task. This fails on
+    8fe0696e, where the poll_success call sat outside any try/except and an
+    unhandled exception there propagated out of task_loop entirely — a task
+    already claimed as 'running' would then sit unexecuted until its lease and
+    deadline expired (the literal 18.08 incident this feature exists to catch).
+    """
+    import apps.campaign_creator_worker.main as worker
+
+    stop = asyncio.Event()
+    task = _make_task()
+    claim = AsyncMock(
+        return_value=SimpleNamespace(
+            queue_empty=False,
+            task=task,
+            browser_profile_id="campaign-profile-1",
+            browser_session_id="campaign-session-1",
+            browser_readiness_generation=4,
+        )
+    )
+    monkeypatch.setattr(worker, "_claim", claim)
+    monkeypatch.setattr(
+        worker,
+        "record_worker_heartbeat",
+        AsyncMock(side_effect=ConnectionRefusedError("connection refused")),
+    )
+    processed: list[int] = []
+
+    async def process(*_args, **_kwargs) -> None:
+        processed.append(task.id)
+        stop.set()
+
+    monkeypatch.setattr(worker, "process_one_task", process)
+    client = MagicMock()
+    client.operation_authority.return_value = nullcontext()
+
+    await worker.task_loop(object(), stop, client=client, uploader=object())
+
+    assert processed == [task.id]
 
 
 @pytest.mark.asyncio

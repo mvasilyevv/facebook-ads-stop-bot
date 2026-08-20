@@ -117,6 +117,7 @@ from core.tasks.queue import (
     touch_task_running,
 )
 from core.tasks.wakeup import TaskQueueWakeup
+from core.worker_liveness import poll_heartbeat_while_running, record_worker_heartbeat
 from core.worker_metrics import (
     mark_worker_db_poll_success,
     mark_worker_heartbeat,
@@ -2047,11 +2048,12 @@ async def process_one_task(
 
 
 async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine | None = None) -> None:
-    """Refresh Prometheus process and queue metrics."""
+    """Refresh Prometheus process and queue metrics, plus their durable twin."""
     interval = 15.0
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
         if engine is not None:
+            await record_worker_heartbeat(engine, WORKER_NAME)
             try:
                 await refresh_task_queue_metrics(engine)
             except Exception:  # noqa: BLE001
@@ -2093,6 +2095,15 @@ async def task_loop(
             continue
 
         mark_worker_db_poll_success(WORKER_NAME)
+        # record_worker_heartbeat уже не пробрасывает ничего, кроме
+        # CancelledError, но на money-полосе (autopause) это единственный
+        # неограниченный await между claim и исполнением на тридцатисекундном
+        # окне аренды — локальный guard как defense in depth
+        # (review issue #176 Б1).
+        try:
+            await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
+        except Exception:  # noqa: BLE001
+            logger.warning("worker heartbeat write failed in task_loop", exc_info=True)
         if claim.queue_empty or claim.task is None:
             # Refresh durable IANA names outside the money path. The schedule is
             # process-local only; PostgreSQL remains the sole timezone authority.
@@ -2140,12 +2151,16 @@ async def task_loop(
             vision_profile_id=vision_profile_id,
             browser_readiness_generation=claim.browser_readiness_generation,
         ):
-            await process_one_task(
-                engine,
-                claim.task,
-                client=client,
-                alert_ctx=alert_ctx,
-            )
+            # Mutation может исполняться дольше poll_stale_after_seconds (upload,
+            # медленный Meta). Периодический тик доказывает «воркер занят
+            # настоящей работой» (review issue #176 Б2).
+            async with poll_heartbeat_while_running(engine, WORKER_NAME):
+                await process_one_task(
+                    engine,
+                    claim.task,
+                    client=client,
+                    alert_ctx=alert_ctx,
+                )
 
 
 # ====================== entrypoint ======================

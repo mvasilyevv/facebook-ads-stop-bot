@@ -119,8 +119,33 @@ function OperatorSystemSourcesPage() {
               />
             </dl>
 
-            <div role="list" aria-label="Воркеры" className="grid sm:grid-cols-2 xl:grid-cols-3">
+            <h2 className="border-b border-[var(--color-hairline)] p-4 text-[13px] font-semibold uppercase tracking-[.08em] text-bg-9">
+              Сканирование кабинетов
+            </h2>
+            <div
+              role="list"
+              aria-label="Сканирование кабинетов"
+              className="grid sm:grid-cols-2 xl:grid-cols-3"
+            >
               {system.workers.map((worker) => (
+                <WorkerCard
+                  key={worker.id}
+                  worker={worker}
+                  sectionState={snapshot.system.state}
+                  trusted={stateTrusted}
+                />
+              ))}
+            </div>
+
+            <h2 className="border-b border-t border-[var(--color-hairline)] p-4 text-[13px] font-semibold uppercase tracking-[.08em] text-bg-9">
+              Фоновые воркеры
+            </h2>
+            <div
+              role="list"
+              aria-label="Фоновые воркеры"
+              className="grid sm:grid-cols-2 xl:grid-cols-3"
+            >
+              {system.background_workers.map((worker) => (
                 <WorkerCard
                   key={worker.id}
                   worker={worker}

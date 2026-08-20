@@ -63,12 +63,30 @@ describe("web operator system sources", () => {
     expect(screen.getByText("Включён")).toBeInTheDocument();
   });
 
+  it("renders the eleven background workers separately from scan actors (issue #176)", () => {
+    render(<SystemSourcesPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "Сканирование кабинетов" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Фоновые воркеры" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Фоновые воркеры" })).toBeInTheDocument();
+    expect(screen.getByText("Создание кампаний")).toBeInTheDocument();
+    // Простаивающий воркер (heartbeat жив, очередь пуста) выглядит здоровым,
+    // как и здоровый scan actor — оба статуса совпадают на "В работе".
+    expect(screen.getAllByText("В работе").length).toBeGreaterThanOrEqual(1);
+    // ...а зависший (heartbeat жив, но опрос очереди устарел) — отдельным,
+    // явно тревожным статусом, не таким же зелёным.
+    expect(screen.getByText("Сверка задач")).toBeInTheDocument();
+    expect(screen.getByText("Не разбирает очередь")).toBeInTheDocument();
+  });
+
   it("never leaks green worker state during reconciliation", () => {
     mockRealtimeStatus.mockReturnValue("reconnecting");
 
     render(<SystemSourcesPage />);
 
-    expect(screen.getAllByText("Состояние не подтверждено").length).toBe(2);
+    expect(screen.getAllByText("Состояние не подтверждено").length).toBe(4);
     expect(screen.queryByText("В работе")).not.toBeInTheDocument();
     expect(screen.getByText("Live-связь восстанавливается")).toBeInTheDocument();
   });

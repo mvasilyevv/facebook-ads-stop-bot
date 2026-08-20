@@ -68,6 +68,7 @@ from core.telegram.worker_notify import (
 )
 from core.vision.token_refresh import refresh_vision_token_if_needed
 from core.wording import ads_ru, commands_ru
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("health_watchdog")
@@ -1342,11 +1343,12 @@ async def run_one_check(*, engine: AsyncEngine) -> None:
 # ====================== loops ======================
 
 
-async def metrics_loop(stop: asyncio.Event) -> None:
+async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine) -> None:
     """Refresh process metrics without publishing a second liveness authority."""
     interval = 15.0
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        await record_worker_heartbeat(engine, WORKER_NAME)
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -1506,6 +1508,9 @@ async def check_loop(
             await run_one_check(engine=engine)
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в цикле проверок")
+        # run_one_check уже поймал и залогировал свою ошибку — дойти досюда
+        # значит цикл проверок жив и реально трогает БД (issue #176).
+        await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
         try:
             await asyncio.wait_for(stop.wait(), timeout=CHECK_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -1727,7 +1732,7 @@ async def main_loop(database_url: str | None = None) -> None:
         # Каждый цикл под _supervised + return_exceptions: упавший цикл
         # перезапускается, а не гасит воркер молча (инцидент 01.07).
         loops = [
-            _supervised("metrics_loop", lambda: metrics_loop(stop), stop),
+            _supervised("metrics_loop", lambda: metrics_loop(stop, engine), stop),
             _supervised(
                 "browser_readiness_loop",
                 lambda: browser_readiness_loop(

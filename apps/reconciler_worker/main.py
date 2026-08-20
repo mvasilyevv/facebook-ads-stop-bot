@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from apps.reconciler_worker.worker import run_once
 from core.db import WORKER_ENGINE_KWARGS
 from core.tasks.queue import refresh_task_queue_metrics
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger("reconciler_worker")
@@ -28,6 +29,7 @@ async def metrics_loop(stop: asyncio.Event, engine=None) -> None:
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
         if engine is not None:
+            await record_worker_heartbeat(engine, WORKER_NAME)
             try:
                 await refresh_task_queue_metrics(engine)
             except Exception:  # noqa: BLE001
@@ -62,6 +64,9 @@ async def main_loop(database_url: str) -> None:
                 await run_once(engine)
             except Exception as exc:
                 logger.exception("run_once упал: %s", exc)
+            # run_once уже поймал и залогировал свою ошибку — дойти досюда
+            # значит рабочий цикл жив и реально трогает БД (issue #176).
+            await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=_INTERVAL_SEC)
                 break

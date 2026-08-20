@@ -31,6 +31,7 @@ from core.telegram.update_inbox import (
     retire_stale_telegram_update_claim,
     telegram_update_claim_is_authoritative,
 )
+from core.worker_liveness import HEARTBEAT_INTERVAL_SECONDS, record_worker_heartbeat
 from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
@@ -132,10 +133,21 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
     active_generation = 0
     next_config_refresh = 0.0
     next_reconcile = 0.0
+    # Throttled independently of loop speed: an idle/misconfigured pass can
+    # spin every 0.25s, and an unthrottled upsert per iteration is needless
+    # load. Marked BEFORE the auth-gate below (not only after a successful
+    # process_one_update): config load + lease reconcile above are this
+    # worker's real recurring DB-touching duty, and an unconfigured Telegram
+    # bot token is a separate, already-surfaced state — it must not also make
+    # this worker look "not processing its queue" forever (review issue #176 Л1).
+    next_liveness_write_at = 0.0
     try:
         while not shutdown.is_set():
             mark_worker_heartbeat(WORKER_NAME)
             now = loop.time()
+            if now >= next_liveness_write_at:
+                await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
+                next_liveness_write_at = now + HEARTBEAT_INTERVAL_SECONDS
             if gateway is None or now >= next_config_refresh:
                 config = await load_telegram_config(engine)
                 token = config.bot_token if config is not None else ""

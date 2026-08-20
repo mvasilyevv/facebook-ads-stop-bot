@@ -68,6 +68,9 @@ async def test_prometheus_liveness_is_refreshed_without_redis(monkeypatch) -> No
     stop = asyncio.Event()
     metric = Mock(side_effect=lambda _worker_name: stop.set())
     monkeypatch.setattr(campaign_worker, "mark_worker_heartbeat", metric)
-    await campaign_worker.metrics_loop(stop)
+    durable_heartbeat = AsyncMock()
+    monkeypatch.setattr(campaign_worker, "record_worker_heartbeat", durable_heartbeat)
+    await campaign_worker.metrics_loop(stop, object())
 
     metric.assert_called_once_with(campaign_worker.WORKER_NAME)
+    durable_heartbeat.assert_awaited_once()

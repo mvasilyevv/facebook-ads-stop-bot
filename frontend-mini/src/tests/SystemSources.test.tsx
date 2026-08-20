@@ -57,12 +57,22 @@ describe("TMA system sources route", () => {
     expect(screen.getByText("Включён")).toBeInTheDocument();
   });
 
+  it("renders the eleven background workers separately from scan actors (issue #176)", () => {
+    render(<SystemSourcesPage />);
+
+    expect(screen.getByRole("list", { name: "Фоновые воркеры" })).toBeInTheDocument();
+    expect(screen.getByText("Создание кампаний")).toBeInTheDocument();
+    expect(screen.getAllByText("В работе").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Сверка задач")).toBeInTheDocument();
+    expect(screen.getByText("Не разбирает очередь")).toBeInTheDocument();
+  });
+
   it("neutralizes cached worker state while realtime is reconnecting", () => {
     mockRealtimeStatus.mockReturnValue("reconnecting");
 
     render(<SystemSourcesPage />);
 
-    expect(screen.getAllByText("Состояние не подтверждено").length).toBe(2);
+    expect(screen.getAllByText("Состояние не подтверждено").length).toBe(4);
     expect(screen.getAllByText("Не подтверждено").length).toBeGreaterThan(0);
     expect(screen.queryByText("В работе")).not.toBeInTheDocument();
     expect(screen.getByText("Live-связь восстанавливается")).toBeInTheDocument();
