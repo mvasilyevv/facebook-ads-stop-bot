@@ -28,11 +28,30 @@ from dataclasses import dataclass
 class GraphDispatchRecord:
     """Отметка «запрос передан транспорту».
 
-    ``dispatched=False`` означает «отправки не было» — это доказательство, а не
-    незнание: отметку ставит сам транспортный слой непосредственно перед вызовом.
+    Два признака, а не один, потому что вопросов тоже два: «взял ли вызов на
+    себя настоящий клиент» и «дошло ли дело до транспорта». Ответ «отправки не
+    было» — доказательство, и выдаётся он только когда клиент действительно
+    отработал: ``observed and not dispatched``.
+
+    Один ``dispatched: bool`` этого различить не мог. Его значение по умолчанию
+    — ``False``, то есть любой, кто в протоколе не участвует (двойник в тесте,
+    будущая обёртка, ветка мимо клиента), молча читался как «доказано, что
+    запрос не уходил». На money-пути это отсутствие улики в роли улики: цена
+    ошибки здесь — не лишняя ручная сверка, а повторный залив и дубль кампании.
+    Незнание обязано читаться как незнание.
     """
 
+    observed: bool = False
     dispatched: bool = False
+
+    @property
+    def proven_not_dispatched(self) -> bool:
+        """True только когда доказано, что запрос НЕ уходил.
+
+        ``False`` покрывает и «ушёл», и «неизвестно» — обе ветки для
+        вызывающего означают одно: побочный эффект не исключён.
+        """
+        return self.observed and not self.dispatched
 
 
 _GRAPH_DISPATCH: ContextVar[GraphDispatchRecord | None] = ContextVar(
@@ -56,6 +75,19 @@ def observe_graph_dispatch() -> Iterator[GraphDispatchRecord]:
         _GRAPH_DISPATCH.reset(token)
 
 
+def mark_graph_call_observed() -> None:
+    """Отметить, что вызов взял на себя настоящий клиент Graph API.
+
+    Зовёт клиент на входе в ``execute_graph_call``, до любой своей проверки.
+    Только после этой отметки отсутствие ``dispatched`` становится
+    доказательством: между входом и транспортом лежит один известный путь, и
+    если он не дошёл до транспорта — значит запрос не уходил.
+    """
+    record = _GRAPH_DISPATCH.get()
+    if record is not None:
+        record.observed = True
+
+
 def mark_graph_dispatched() -> None:
     """Отметить, что запрос ушёл в транспорт.
 
@@ -64,4 +96,7 @@ def mark_graph_dispatched() -> None:
     """
     record = _GRAPH_DISPATCH.get()
     if record is not None:
+        # Отправка сама по себе доказывает, что клиент вызов вёл: отдельного
+        # порядка вызовов у этих двух отметок не требуется.
+        record.observed = True
         record.dispatched = True

@@ -535,6 +535,22 @@ async def test_capability_refusal_is_not_a_dispatch() -> None:
             )
 
     assert dispatch.dispatched is False
+    # Отказ доказан: клиент вызов вёл и до транспорта не дошёл.
+    assert dispatch.proven_not_dispatched is True
+
+
+# Никем не тронутая отметка — это НЕЗНАНИЕ, а не доказанный отказ до отправки.
+# Пока признак был один, значение по умолчанию (`dispatched=False`) читалось как
+# доказательство: любой, кто в протоколе не участвует, молча разрешал повторить
+# money-операцию. Цена ошибки здесь — дубль кампании, поэтому умолчание закрытое.
+def test_untouched_dispatch_record_proves_nothing() -> None:
+    from core.meta_api.dispatch import observe_graph_dispatch
+
+    with observe_graph_dispatch() as dispatch:
+        pass
+
+    assert dispatch.dispatched is False
+    assert dispatch.proven_not_dispatched is False
 
 
 # Открытый предохранитель отказывает РАНЬШЕ транспорта — это отказ до отправки,
