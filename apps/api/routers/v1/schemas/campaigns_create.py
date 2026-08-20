@@ -158,6 +158,24 @@ class CampaignConfigIn(BaseModel):
             raise ValueError("multi-value targeting fields must be unique")
         return values
 
+    @field_validator("campaigns")
+    @classmethod
+    def validate_unique_campaign_keys(
+        cls, values: list[CampaignStructureIn]
+    ) -> list[CampaignStructureIn]:
+        """Ключ кампании — её идентичность, поэтому он обязан быть уникальным.
+
+        Одна кампания — одна задача, и задача адресуется ключом идемпотентности,
+        в который входит ключ кампании. Два блока с одним ключом — это две
+        кампании с одной идентичностью: вторая молча слилась бы с первой, и
+        оператор получил бы на кампанию меньше, чем подтвердил в превью.
+        Отвергаем до создания чего-либо.
+        """
+        keys = [value.key for value in values]
+        if len(keys) != len(set(keys)):
+            raise ValueError("campaign keys must be unique")
+        return values
+
     @model_validator(mode="after")
     def validate_age_range(self) -> CampaignConfigIn:
         if self.age_min > self.age_max:
@@ -524,10 +542,16 @@ class LaunchIn(BaseModel):
         )
 
 
-class LaunchAccountOut(BaseModel):
-    """Результат постановки одного кабинета, не скрывающий соседние ошибки."""
+class LaunchCampaignOut(BaseModel):
+    """Результат постановки ОДНОЙ кампании плана.
 
-    account_id: str
+    Одна кампания — одна задача и один наблюдаемый прогон, поэтому receipt тоже
+    на кампанию: ``run_id`` заполнен, когда кампания поставлена в очередь, и
+    равен ``null``, когда она отвергнута до постановки (тогда причина в
+    ``error``). Отказ одной кампании не меняет receipt остальных.
+    """
+
+    campaign_key: str
     run_id: str | None = None
     task_id: int | None = None
     status: str
@@ -536,8 +560,31 @@ class LaunchAccountOut(BaseModel):
     replayed: bool = False
 
 
+class LaunchAccountOut(BaseModel):
+    """Результат постановки одного кабинета, не скрывающий соседние ошибки.
+
+    ``campaigns`` — единицы залива этого кабинета. ``run_id``/``task_id``/
+    ``idempotency_key`` заполнены только когда кампания в кабинете ровно одна:
+    сводить план из нескольких кампаний к первой значило бы показать исход
+    одной кампании как исход кабинета.
+    """
+
+    account_id: str
+    run_id: str | None = None
+    task_id: int | None = None
+    status: str
+    idempotency_key: str | None = None
+    error: str | None = None
+    replayed: bool = False
+    campaigns: list[LaunchCampaignOut] = Field(default_factory=list)
+
+
 class LaunchOut(BaseModel):
-    """Один operator request с независимым receipt по каждому кабинету."""
+    """Один operator request с независимым receipt по каждой кампании.
+
+    ``request_state`` считается по кампаниям, а не по кабинетам: единица залива
+    — кампания, и знаменатель «3 из 4» оператор видит именно по ним.
+    """
 
     # Legacy single-account fields remain populated for old clients. Multi-account
     # consumers use ``accounts`` and never infer an aggregate success from run_id.
