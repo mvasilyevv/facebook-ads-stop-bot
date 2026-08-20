@@ -117,6 +117,13 @@ def _validated_browser_readiness_schedule(
 )
 _BROWSER_READINESS_WRITER_INSTANCE = uuid.uuid4()
 
+# Каденция явной подготовки рабочего места. Она намеренно на два порядка реже
+# пробы готовности: подготовка открывает и навигирует вкладки, и повторяющийся
+# отказ кабинета не должен превращаться в цикл вкладок в живом профиле.
+BROWSER_WORKSPACE_INTERVAL_SECONDS = float(
+    os.environ.get("HEALTH_WATCHDOG_BROWSER_WORKSPACE_SEC", "60")
+)
+
 # ====================== канал авто-стопа (money-критичный мониторинг) ======================
 # Инцидент 2026-06-19: канал исполнения авто-стопа (Marketing API через Vision
 # page.evaluate(fetch)) лёг — fetch начал падать «Failed to fetch» (code=-2). Задачи
@@ -1358,6 +1365,84 @@ async def browser_readiness_loop(
             pass
 
 
+async def prepare_browser_workspace(
+    engine: AsyncEngine,
+    *,
+    open_cabinet_tabs: Callable[[list[str]], Awaitable[list[dict[str, Any]]]],
+) -> bool:
+    """Одна попытка подготовить рабочее место: вкладка Ads Manager каждому кабинету.
+
+    Возвращает True, если подготовка действительно выполнялась.
+
+    Кто открывает вкладку кабинета при выключенном сканировании — watchdog.
+    Observer делает это в своей фазе подготовки, но его цикл живёт задачами
+    `observer_scan`, а на паузе они не публикуются вовсе. Watchdog же и так
+    единственный владелец браузерного канала, не зависящий от тумблера: он
+    присоединяет сессию профиля и он же публикует готовность. Тот, кто видит
+    «вкладки нет», её и открывает — без передачи сигнала между воркерами.
+
+    Подготовка идёт ТОЛЬКО когда наблюдение говорит, что рабочего места нет: на
+    подтверждённом канале цикл не трогает браузер вообще. Отказ по кабинету не
+    превращается в цикл вкладок — следующая попытка не раньше следующего тика.
+    """
+    from core.meta_api.browser_readiness import browser_channel_ready_now
+    from core.observer.accounts import resolve_configured_ad_account_ids
+
+    if await browser_channel_ready_now(engine):
+        return False
+    accounts = await resolve_configured_ad_account_ids(engine)
+    if not accounts:
+        # Кабинета нет ни в одном активном оффере: открывать наугад нечего.
+        return False
+
+    try:
+        async with BrowserOperationFence(
+            engine,
+            operation_kind="browser_workspace_prepare",
+            target="cabinet_tabs",
+        ) as fence:
+            results = await open_cabinet_tabs(list(accounts))
+            await fence.assert_held()
+    except BrowserOperationBlocked:
+        logger.info("workspace: Vision maintenance active — подготовка отложена")
+        return False
+    except BrowserFenceLeaseLost:
+        logger.warning("workspace: browser-operation fence lost — подготовка отброшена")
+        return False
+    except Exception as exc:  # noqa: BLE001 — класс отказа браузера/gRPC не ограничен
+        # Причина называется безопасным диагностиком и повторяется следующим
+        # тиком: молчаливая тишина здесь неотличима от мёртвого воркера.
+        logger.warning(
+            "workspace: вкладки кабинетов открыть не удалось (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        return True
+
+    confirmed = sum(1 for result in results if result.get("opened"))
+    logger.info(
+        "workspace: подготовка рабочего места — подтверждено %d из %d кабинетов",
+        confirmed,
+        len(accounts),
+    )
+    return True
+
+
+async def browser_workspace_loop(
+    *,
+    stop: asyncio.Event,
+    engine: AsyncEngine,
+    open_cabinet_tabs: Callable[[list[str]], Awaitable[list[dict[str, Any]]]],
+    interval: float = BROWSER_WORKSPACE_INTERVAL_SECONDS,
+) -> None:
+    """Явная подготовка рабочего места, не зависящая от тумблера сканирования."""
+    while not stop.is_set():
+        await prepare_browser_workspace(engine, open_cabinet_tabs=open_cabinet_tabs)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=max(1.0, interval))
+        except asyncio.TimeoutError:
+            pass
+
+
 async def check_loop(
     *,
     stop: asyncio.Event,
@@ -1540,12 +1625,12 @@ async def main_loop(database_url: str | None = None) -> None:
     )
     await meta_client.start()
 
-    async def reattach_browser_session() -> None:
-        """Присоединить процесс-локальную сессию к уже живому Vision-профилю.
+    async def new_browser_agent_client():
+        """Клиент browser-agent на одну попытку.
 
-        Клиент создаётся на попытку: держать второй gRPC-канал ради события,
-        которого может не случиться неделями, незачем. Реквизиты Vision читаются
-        каждый раз — они меняются при обновлении токена.
+        Держать второй постоянный gRPC-канал ради редкого события незачем, а
+        реквизиты Vision читаются каждый раз — они меняются при обновлении
+        токена.
         """
         from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
         from core.config import get_settings
@@ -1564,8 +1649,26 @@ async def main_loop(database_url: str | None = None) -> None:
             )
         )
         await client.start()
+        return client
+
+    async def reattach_browser_session() -> None:
+        """Присоединить процесс-локальную сессию к уже живому Vision-профилю."""
+        client = await new_browser_agent_client()
         try:
             await client.start_browser()
+        finally:
+            await client.close()
+
+    async def open_cabinet_tabs(ad_account_ids: list[str]) -> list[dict[str, Any]]:
+        """Открыть вкладку Ads Manager каждому настроенному кабинету.
+
+        Тот же RPC, которым observer готовит рабочее место перед сканом:
+        идемпотентный, per-cabinet, отказ одного кабинета не валит остальные.
+        Сессию профиля вызов поднимает сам, если её не осталось.
+        """
+        client = await new_browser_agent_client()
+        try:
+            return await client.open_cabinet_tabs(ad_account_ids)
         finally:
             await client.close()
 
@@ -1589,6 +1692,15 @@ async def main_loop(database_url: str | None = None) -> None:
                     meta_client,
                     stop=stop,
                     engine=engine,
+                ),
+                stop,
+            ),
+            _supervised(
+                "browser_workspace_loop",
+                lambda: browser_workspace_loop(
+                    stop=stop,
+                    engine=engine,
+                    open_cabinet_tabs=open_cabinet_tabs,
                 ),
                 stop,
             ),

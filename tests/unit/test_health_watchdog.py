@@ -812,3 +812,103 @@ async def test_login_required_is_never_answered_by_reattaching(monkeypatch) -> N
     await hw.check_meta_api_channel(client, engine=object(), reattach_session=reattach)
 
     reattach.assert_not_awaited()
+
+
+# ====================== явная подготовка рабочего места (issue #189) ======================
+#
+# Проба готовности только наблюдает. Значит вкладку кабинета кто-то обязан
+# открыть явно — и делает это watchdog: observer'ский цикл живёт задачами
+# observer_scan, а при выключенном сканировании они не публикуются вовсе.
+
+
+def _workspace_fakes(monkeypatch, *, ready: bool, accounts: list[str]) -> AsyncMock:
+    """Общая обвязка: наблюдаемая готовность канала, набор кабинетов и RPC."""
+    from core.meta_api import browser_readiness
+    from core.observer import accounts as observer_accounts
+
+    monkeypatch.setattr(
+        browser_readiness,
+        "browser_channel_ready_now",
+        AsyncMock(return_value=ready),
+    )
+    monkeypatch.setattr(
+        observer_accounts,
+        "resolve_configured_ad_account_ids",
+        AsyncMock(return_value=list(accounts)),
+    )
+    return AsyncMock(
+        return_value=[
+            {"ad_account_id": account_id, "opened": True, "url": "", "error": ""}
+            for account_id in accounts
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmed_channel_never_touches_the_browser(monkeypatch) -> None:
+    """Готовность подтверждена наблюдением — готовить нечего и трогать нечего."""
+    open_tabs = _workspace_fakes(monkeypatch, ready=True, accounts=["100000000000001"])
+
+    prepared = await hw.prepare_browser_workspace(
+        SimpleNamespace(),
+        open_cabinet_tabs=open_tabs,
+    )
+
+    assert prepared is False
+    open_tabs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_opens_exactly_the_configured_cabinets(monkeypatch) -> None:
+    """Два кабинета в офферах — вкладки ровно этих двух, а не случайного третьего."""
+    accounts = ["100000000000001", "100000000000002"]
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=accounts)
+
+    prepared = await hw.prepare_browser_workspace(
+        SimpleNamespace(),
+        open_cabinet_tabs=open_tabs,
+    )
+
+    assert prepared is True
+    assert open_tabs.await_count == 1
+    assert open_tabs.await_args.args[0] == accounts
+
+
+@pytest.mark.asyncio
+async def test_workspace_without_configured_cabinets_opens_nothing(monkeypatch) -> None:
+    """Кабинета нет ни в одном активном оффере — открывать наугад нечего."""
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=[])
+
+    prepared = await hw.prepare_browser_workspace(
+        SimpleNamespace(),
+        open_cabinet_tabs=open_tabs,
+    )
+
+    assert prepared is False
+    open_tabs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_defers_to_vision_maintenance(monkeypatch) -> None:
+    """Пока идёт обслуживание профиля, подготовка не лезет в браузер."""
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=["100000000000001"])
+
+    class BlockedFence:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise hw.BrowserOperationBlocked("browser maintenance active")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(hw, "BrowserOperationFence", BlockedFence)
+
+    prepared = await hw.prepare_browser_workspace(
+        SimpleNamespace(),
+        open_cabinet_tabs=open_tabs,
+    )
+
+    assert prepared is False
+    open_tabs.assert_not_awaited()

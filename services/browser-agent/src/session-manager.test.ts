@@ -1271,6 +1271,51 @@ test("money page of one session is invisible to another session's scan", async (
   assert.equal(scan, secondCreated);
 });
 
+// Проба готовности идёт раз в две секунды и кабинет больше не называет: без
+// кабинета она смотрит на уже живую вкладку Ads Manager. Money-страница такой
+// вкладкой быть не может — на ней в этот момент идёт необратимая мутация под
+// другим page-lock.
+test("живая вкладка для пробы никогда не money-страница агента", async () => {
+  const manager = new SessionManager();
+  let createdUrl = "about:blank";
+  const created = {
+    isClosed: () => false,
+    url: () => createdUrl,
+    goto: async (url: string) => {
+      createdUrl = url;
+    },
+  };
+  const pages: any[] = [];
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      pages.push(created);
+      return created;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  const control = await manager.ensureControlPage(session, { actId: "444" });
+
+  assert.equal(control, created as any);
+  assert.equal(findLiveAdsManagerPage(browser as any), null);
+});
+
+// Обычная вкладка кабинета (её открывает подготовка рабочего места) пробе
+// доступна: отказ должен наступать из-за отсутствия вкладки, а не из-за того,
+// что helper перестал видеть вкладки вообще.
+test("живая вкладка для пробы — вкладка, за которую никто не отвечает деньгами", () => {
+  const scanPage = {
+    isClosed: () => false,
+    url: () =>
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=444",
+  };
+  const browser = { contexts: () => [{ pages: () => [scanPage] }] };
+
+  assert.equal(findLiveAdsManagerPage(browser as any), scanPage);
+});
+
 // Чужой/несуществующий кабинет и закрытые вкладки → null (вкладку откроет ensureScanPage).
 test("findAdsManagerPageByAct: нет вкладки → null, закрытая не считается", () => {
   const closedCab = {

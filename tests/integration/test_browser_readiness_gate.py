@@ -680,7 +680,9 @@ async def test_probe_writer_uses_token_only_exact_profile_and_db_time(
     pg_engine,
 ) -> None:
     identity = await _seed_config(pg_engine)
-    account_id = await _seed_offer_cabinet(pg_engine)
+    # Кабинет нужен как условие пробы, но в запрос он не уходит: названный
+    # кабинет для browser-agent — поручение открыть вкладку, а проба наблюдает.
+    await _seed_offer_cabinet(pg_engine)
 
     class Client:
         def __init__(self) -> None:
@@ -707,7 +709,6 @@ async def test_probe_writer_uses_token_only_exact_profile_and_db_time(
         {
             "full_probe": False,
             "expected_profile_id": identity.profile_id,
-            "ad_account_id": account_id,
         }
     ]
     async with pg_engine.connect() as conn:

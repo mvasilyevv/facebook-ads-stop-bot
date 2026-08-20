@@ -269,6 +269,11 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
  * Отличие от findPreferredPrimaryPage: здесь нет отката на первую попавшуюся
  * вкладку. Проба здоровья без явно названного кабинета должна честно ответить
  * «нет страницы», а не выдать за Ads Manager чужую вкладку оператора.
+ *
+ * Money-страница агента сюда не попадает. Проба ходит раз в две секунды и под
+ * своим page-lock: взяв control-страницу, она читала бы DOM вкладки, которая в
+ * этот момент несёт необратимую мутацию под ДРУГИМ замком. Наблюдать канал
+ * нужно на вкладке, за которую никто не отвечает деньгами.
  */
 export function findLiveAdsManagerPage(browser: Browser | null): Page | null {
   if (!browser) {
@@ -277,7 +282,7 @@ export function findLiveAdsManagerPage(browser: Browser | null): Page | null {
 
   for (const context of safeBrowserContexts(browser)) {
     for (const page of safeContextPages(context)) {
-      if (isPageClosed(page)) {
+      if (isPageClosed(page) || _agentMoneyPages.has(page)) {
         continue;
       }
       if (isAdsManagerUrl(safePageUrl(page))) {

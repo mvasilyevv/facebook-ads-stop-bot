@@ -445,7 +445,7 @@ async def persist_browser_readiness(
 
 
 async def resolve_readiness_ad_account_id(engine: AsyncEngine) -> str | None:
-    """Кабинет пробы готовности — первый кабинет активных офферов.
+    """Кабинет явной подготовки канала — первый кабинет активных офферов.
 
     Детерминированный выбор из конфигурации, а не из состояния браузера.
     None означает, что настроенного кабинета нет: подтверждать готовность
@@ -455,6 +455,33 @@ async def resolve_readiness_ad_account_id(engine: AsyncEngine) -> str | None:
     return accounts[0] if accounts else None
 
 
+async def browser_channel_ready_now(engine: AsyncEngine) -> bool:
+    """Подтверждена ли готовность канала прямо сейчас, по часам PostgreSQL.
+
+    Тот же признак свежести, что и у readiness-gated claim: истёкшая evidence —
+    это «не готов», а не «готов, но давно». Читатель нужен подготовке рабочего
+    места: она трогает браузер только тогда, когда наблюдение говорит, что
+    рабочего места нет.
+    """
+    async with engine.connect() as conn:
+        return bool(
+            await conn.scalar(
+                text(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1
+                      FROM browser_channel_readiness
+                      WHERE channel = :channel
+                        AND state = 'ready'
+                        AND readiness_expires_at > clock_timestamp()
+                    )
+                    """
+                ),
+                {"channel": BROWSER_READINESS_CHANNEL},
+            )
+        )
+
+
 async def probe_and_publish_browser_readiness(
     engine: AsyncEngine,
     client: BrowserReadinessProbeClient,
@@ -462,7 +489,12 @@ async def probe_and_publish_browser_readiness(
     writer_instance: uuid.UUID,
     ttl_seconds: int = BROWSER_READINESS_DEFAULT_TTL_SECONDS,
 ) -> bool:
-    """Probe once and publish bounded evidence without reading the Vision token."""
+    """Probe once and publish bounded evidence without reading the Vision token.
+
+    Наблюдение и только наблюдение: проба не создаёт вкладок и не навигирует.
+    Готовность канала подтверждается тем, что рабочее место уже есть, а не тем,
+    что проверка его по дороге приготовила.
+    """
     identity: VisionReadinessIdentity | None = None
     try:
         async with BrowserOperationFence(
@@ -478,8 +510,9 @@ async def probe_and_publish_browser_readiness(
                     reason_code="vision_config_unavailable",
                 )
                 return False
-            probe_account_id = await resolve_readiness_ad_account_id(engine)
-            if probe_account_id is None:
+            if not await resolve_configured_ad_account_ids(engine):
+                # Кабинета нет ни в одном активном оффере: подтверждать
+                # готовность money-канала не на чем.
                 await invalidate_browser_readiness(
                     engine,
                     writer_instance=writer_instance,
@@ -487,10 +520,16 @@ async def probe_and_publish_browser_readiness(
                 )
                 return False
             try:
+                # Кабинет НЕ называется намеренно. Названный кабинет — это для
+                # browser-agent поручение открыть и навигировать вкладку, а
+                # проверка здоровья рабочее место не готовит: повторяющийся отказ
+                # превращал пробу раз в две секунды в цикл вкладок. Без кабинета
+                # проба только смотрит на уже живую вкладку Ads Manager, а её
+                # отсутствие называет отказом. Вкладку открывает явная подготовка
+                # рабочего места (health_watchdog.browser_workspace_loop).
                 probe = await client.check_health(
                     full_probe=False,
                     expected_profile_id=identity.profile_id,
-                    ad_account_id=probe_account_id,
                 )
             except Exception as exc:  # noqa: BLE001 - fail closed and age out
                 observed_at = await _database_clock(engine)
@@ -545,6 +584,7 @@ __all__ = [
     "BROWSER_READINESS_DEFAULT_TTL_SECONDS",
     "BrowserReadinessObservation",
     "VisionReadinessIdentity",
+    "browser_channel_ready_now",
     "classify_browser_readiness",
     "invalidate_browser_readiness",
     "load_vision_readiness_identity",

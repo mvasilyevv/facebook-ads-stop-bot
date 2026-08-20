@@ -309,11 +309,17 @@ def _install_readiness_fakes(monkeypatch, *, accounts: list[str]) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_readiness_probe_uses_cabinet_from_active_offers(monkeypatch) -> None:
-    """Кабинет пробы — детерминированный первый кабинет активных офферов."""
-    published = _install_readiness_fakes(
-        monkeypatch, accounts=["2108857220005012", "3570379159805007"]
-    )
+async def test_readiness_probe_never_names_a_cabinet_and_so_opens_no_tab(
+    monkeypatch,
+) -> None:
+    """Проба не называет кабинет: названный кабинет — поручение открыть вкладку.
+
+    Названный кабинет ведёт browser-agent в ensureRolePage: нет живой вкладки —
+    создать и навигировать. Проверка здоровья, идущая раз в две секунды, так
+    готовила рабочее место, и повторяющийся отказ становился циклом вкладок.
+    Вкладку открывает явная подготовка рабочего места, а проба наблюдает.
+    """
+    published = _install_readiness_fakes(monkeypatch, accounts=["100000000000001"])
     client = _RecordingProbeClient()
 
     result = await readiness.probe_and_publish_browser_readiness(
@@ -324,7 +330,7 @@ async def test_readiness_probe_uses_cabinet_from_active_offers(monkeypatch) -> N
 
     assert result is True
     assert len(client.calls) == 1
-    assert client.calls[0]["ad_account_id"] == "2108857220005012"
+    assert "ad_account_id" not in client.calls[0]
     assert published == [{"kind": "persist", "state": "ready"}]
 
 
