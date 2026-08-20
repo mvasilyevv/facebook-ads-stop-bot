@@ -112,6 +112,52 @@ def test_upload_rejection_is_the_same_proven_pre_send_rejection() -> None:
     assert mapped.reason_code == "caller_not_authorized"
 
 
+# Отказы по ad_account_id приходят с INVALID_ARGUMENT: запрос собран неверно,
+# прав вызывающего это не касается. Отправки при этом не было — оба предиката
+# срабатывают до выбора страницы, до списания гранта и до первого fetch.
+_ARGUMENT_REJECTION_REASONS = ("ad_account_id_not_numeric", "ad_account_id_missing")
+
+
+@pytest.mark.parametrize("reason", _ARGUMENT_REJECTION_REASONS)
+def test_argument_rejection_is_a_proven_pre_send_rejection(reason: str) -> None:
+    assert reason in BROWSER_OPERATION_REJECTION_REASONS
+
+    mapped = MetaApiClient._grpc_to_meta_error(
+        _rpc(grpc.StatusCode.INVALID_ARGUMENT, reason=reason),
+        endpoint="/act_1/campaigns",
+    )
+
+    assert isinstance(mapped, BrowserOperationRejectedError)
+    assert isinstance(mapped, PreDispatchRejectedError)
+    assert not isinstance(mapped, AmbiguousResultError)
+    assert mapped.reason_code == reason
+    assert BROWSER_OPERATION_REJECTION_REASONS[reason] in str(mapped)
+
+
+@pytest.mark.parametrize("reason", _ARGUMENT_REJECTION_REASONS)
+def test_upload_argument_rejection_is_the_same_pre_send_rejection(reason: str) -> None:
+    mapped = MediaUploader._grpc_to_error(
+        _rpc(grpc.StatusCode.INVALID_ARGUMENT, reason=reason),
+        endpoint="/act_1/adimages",
+    )
+
+    assert isinstance(mapped, BrowserOperationRejectedError)
+    assert isinstance(mapped, PreDispatchRejectedError)
+    assert mapped.reason_code == reason
+
+
+def test_invalid_argument_without_a_reason_code_is_not_claimed_proven() -> None:
+    # Трейлера нет — доказательства pre-send отказа нет: старый, более
+    # осторожный PermanentError остаётся.
+    mapped = MetaApiClient._grpc_to_meta_error(
+        _rpc(grpc.StatusCode.INVALID_ARGUMENT),
+        endpoint="/act_1/campaigns",
+    )
+
+    assert isinstance(mapped, PermanentError)
+    assert not isinstance(mapped, PreDispatchRejectedError)
+
+
 def test_permission_denied_without_a_reason_code_is_not_claimed_proven() -> None:
     # Трейлера нет — значит доказательства pre-send отказа нет. Старое,
     # более осторожное поведение сохраняется: не выдаём догадку за факт.

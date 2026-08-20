@@ -69,7 +69,18 @@ const OPERATION_REJECTION_PREDICATES: ReadonlyArray<readonly [string, string]> =
   ['graph request method semantics', 'graph_method_semantics'],
   ['graph get body semantics', 'graph_get_body'],
   ['graph endpoint query/fragment semantics', 'graph_endpoint_query'],
+  ['ad_account_id must be an explicit numeric account id', 'ad_account_id_not_numeric'],
+  ['money graph call requires explicit ad_account_id', 'ad_account_id_missing'],
 ];
+
+// Причины, у которых виноват аргумент запроса, а не права вызывающего. Отказ
+// тот же — доказанный, до отправки, — но статус остаётся INVALID_ARGUMENT:
+// PERMISSION_DENIED увёл бы диагностику к грантам и правам, тогда как чинить
+// нужно сам вызов.
+const ARGUMENT_REJECTION_REASONS: ReadonlySet<string> = new Set([
+  'ad_account_id_not_numeric',
+  'ad_account_id_missing',
+]);
 
 /**
  * Код причины отказа авторизации операции, если отказ именно такой.
@@ -122,11 +133,14 @@ export function grpcCodeForError(err: any): number {
     // convert this replay into a proven rejection.
     return grpc.status.ABORTED;
   }
-  if (browserOperationRejectionReason(err) !== undefined) {
+  const rejectionReason = browserOperationRejectionReason(err);
+  if (rejectionReason !== undefined) {
     // Вся семья проверяется до первого fetch в Meta. Отказ привязки задачи или
     // lease раньше проваливался в INTERNAL, то есть в «ответ потерян»: наружу
     // не уходило ни одного запроса, а оператор получал ручную сверку.
-    return grpc.status.PERMISSION_DENIED;
+    return ARGUMENT_REJECTION_REASONS.has(rejectionReason)
+      ? grpc.status.INVALID_ARGUMENT
+      : grpc.status.PERMISSION_DENIED;
   }
   if (message.includes('ownership preflight')) {
     return grpc.status.FAILED_PRECONDITION;
@@ -446,10 +460,9 @@ export function createMetaApiServiceHandlers(
       const requestedAccount = String(req.ad_account_id || '').trim();
       const actId = normalizeActId(req.ad_account_id) || actIdFromEndpoint(endpoint);
       if (requestedAccount && !normalizeActId(requestedAccount)) {
-        responder.respond({
-          code: grpc.status.INVALID_ARGUMENT,
-          message: 'ad_account_id must be an explicit numeric account id',
-        });
+        responder.respond(grpcErrorForOperationFailure(
+          new Error('ad_account_id must be an explicit numeric account id'),
+        ));
         return;
       }
 
@@ -494,10 +507,9 @@ export function createMetaApiServiceHandlers(
         || String(req.authorized_caller || '').trim() === 'campaign_creator'
       );
       if (moneyControl && !normalizeActId(req.ad_account_id)) {
-        responder.respond({
-          code: grpc.status.INVALID_ARGUMENT,
-          message: 'money Graph call requires explicit ad_account_id',
-        });
+        responder.respond(grpcErrorForOperationFailure(
+          new Error('money Graph call requires explicit ad_account_id'),
+        ));
         return;
       }
       const session = moneyControl
