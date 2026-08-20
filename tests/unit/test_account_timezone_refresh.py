@@ -35,7 +35,9 @@ async def test_empty_meta_answer_is_logged_not_swallowed(monkeypatch, caplog) ->
         return ["2108857220005012"]
 
     async def _fetch(_client, _account_id):
-        return account_tz.FetchedAccountContext(timezone_name=None, currency=None)
+        return account_tz.FetchedAccountContext(
+            timezone_name=None, currency=None, account_status=None
+        )
 
     async def _persist(*_args, **_kwargs):
         raise AssertionError("пустой контекст записывать нечем")
@@ -69,10 +71,13 @@ async def test_refresh_scope_comes_from_offers(monkeypatch) -> None:
     async def _fetch(_client, account_id):
         seen.append(account_id)
         return account_tz.FetchedAccountContext(
-            timezone_name="America/Dawson_Creek", currency="USD"
+            timezone_name="America/Dawson_Creek", currency="USD", account_status=1
         )
 
-    async def _persist(_engine, *, account_id, timezone_name, currency):
+    async def _persist(_engine, *, account_id, timezone_name, currency, account_status):
+        # Статус кабинета обязан доезжать до снимка вместе с поясом и валютой:
+        # иначе отключённый кабинет снова выглядел бы готовым к заливу.
+        assert account_status == 1
         return True
 
     monkeypatch.setattr(account_tz, "resolve_configured_ad_account_ids", _configured)

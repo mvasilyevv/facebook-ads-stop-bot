@@ -261,6 +261,8 @@ def test_fresh_baseline_keeps_only_live_operator_configuration_fields() -> None:
         "timezone_name",
         "currency",
         "currency_observed_at",
+        "account_status",
+        "account_status_observed_at",
         "created_at",
         "updated_at",
     }

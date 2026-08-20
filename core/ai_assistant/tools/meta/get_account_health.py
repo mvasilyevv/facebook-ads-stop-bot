@@ -16,22 +16,13 @@ from core.ai_assistant.tools.meta._currency import (
     format_major_money,
     format_minor_money,
 )
+from core.meta_api.account_status import ACCOUNT_STATUS_NAMES
 from core.meta_api.errors import MetaApiError
 from core.meta_api.insights.fetcher import InsightsFetcher
 
-# Marketing API account_status enum
-_ACCOUNT_STATUS = {
-    1: "ACTIVE",
-    2: "DISABLED",
-    3: "UNSETTLED",
-    7: "PENDING_RISK_REVIEW",
-    8: "PENDING_SETTLEMENT",
-    9: "IN_GRACE_PERIOD",
-    100: "PENDING_CLOSURE",
-    101: "CLOSED",
-    201: "ANY_ACTIVE",
-    202: "ANY_CLOSED",
-}
+# Marketing API account_status enum — один словарь на весь репозиторий: на нём же
+# стоит блокировка залива в неактивный кабинет.
+_ACCOUNT_STATUS = ACCOUNT_STATUS_NAMES
 
 
 class GetAccountHealthTool:

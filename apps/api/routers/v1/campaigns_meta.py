@@ -8,8 +8,9 @@ Endpoints под /api (auto-discovery, prefix="/api"):
 
 Account context читается только из ``meta_account_snapshot``.  Ни numeric offset,
 ни live Graph fallback не могут авторизовать validate/launch.  Состояние
-``ready`` означает валидную IANA timezone, свежую подтверждённую валюту и
-поддерживаемый minor-unit exponent.
+``ready`` означает валидную IANA timezone, свежую подтверждённую валюту,
+поддерживаемый minor-unit exponent и подтверждённо активный статус кабинета.
+Отключённый кабинет — это ``unavailable`` с причиной на языке оператора.
 
 Зачем (справочники): шаг «Идентичность» визарда требует page_id и pixel_id. Тянем
 доступные кабинету страницы (`/act_{id}/promote_pages`) и пиксели (`/act_{id}/adspixels`)
@@ -35,6 +36,7 @@ from pydantic import BaseModel
 from apps.api.deps import DepEngine
 from core.browser.circuit_breaker import CircuitOpenError
 from core.campaign_builder.account_context import (
+    campaign_account_context_message,
     normalize_campaign_account_id,
     resolve_campaign_account_context,
 )
@@ -282,7 +284,11 @@ async def get_ad_account_context(
             context.next_start_date.isoformat() if context.next_start_date is not None else None
         ),
         # Причина про сам снимок важнее причины неудачного похода в Meta.
-        issue=context.issue or (refresh_issue if context.state != "ready" else None),
+        # Наружу уходит формулировка для оператора, машинный код остаётся внутри.
+        issue=(
+            campaign_account_context_message(context)
+            or (refresh_issue if context.state != "ready" else None)
+        ),
     )
 
 

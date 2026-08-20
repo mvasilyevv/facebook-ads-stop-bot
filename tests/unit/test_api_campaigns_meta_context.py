@@ -13,6 +13,9 @@ import apps.api.routers.v1.campaigns_meta as mod
 from apps.api.deps import get_engine
 from apps.api.routers.v1.campaigns_meta import router
 from core.campaign_builder.account_context import (
+    CAMPAIGN_ACCOUNT_CONTEXT_STALE,
+    CAMPAIGN_ACCOUNT_CONTEXT_UNAVAILABLE,
+    CAMPAIGN_AD_ACCOUNT_NOT_ACTIVE,
     CampaignAccountContext,
     normalize_campaign_account_id,
 )
@@ -86,8 +89,8 @@ def test_ready_context_returns_immutable_evidence(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.parametrize(
     ("state", "issue"),
     [
-        ("stale", "account_context_stale"),
-        ("unavailable", "account_context_missing"),
+        ("stale", CAMPAIGN_ACCOUNT_CONTEXT_STALE),
+        ("unavailable", CAMPAIGN_ACCOUNT_CONTEXT_UNAVAILABLE),
     ],
 )
 def test_non_ready_context_is_explicit(
@@ -112,9 +115,36 @@ def test_non_ready_context_is_explicit(
     response = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"})
 
     assert response.status_code == 200
-    assert response.json()["state"] == state
-    assert response.json()["issue"] == issue
-    assert response.json()["next_start_date"] is None
+    payload = response.json()
+    assert payload["state"] == state
+    # Оператору уходит причина словами, а не машинный код.
+    assert payload["issue"] and payload["issue"] != issue
+    assert payload["next_start_date"] is None
+
+
+# Отключённый Meta кабинет не может выглядеть готовым: 20.08.2026 ручка отдавала
+# ready/issue=null, а первый же POST залива получал отказ Meta.
+def test_disabled_account_is_unavailable_with_operator_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disabled = CampaignAccountContext(
+        account_id="123",
+        state="unavailable",
+        timezone_name="America/New_York",
+        currency="USD",
+        currency_exponent=None,
+        observed_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+        next_start_date=None,
+        issue=CAMPAIGN_AD_ACCOUNT_NOT_ACTIVE,
+        account_status=2,
+    )
+    client = _client_for(monkeypatch, disabled, refreshed=disabled)
+
+    payload = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"}).json()
+
+    assert payload["state"] == "unavailable"
+    assert "отключ" in payload["issue"].lower()
+    assert payload["next_start_date"] is None
 
 
 def test_invalid_account_id_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,7 +294,7 @@ def test_durable_issue_wins_over_refresh_issue(monkeypatch: pytest.MonkeyPatch) 
         currency_exponent=2,
         observed_at=datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
         next_start_date=None,
-        issue="Подтверждение валюты устарело",
+        issue=CAMPAIGN_ACCOUNT_CONTEXT_STALE,
     )
     client = _client_for(
         monkeypatch,
@@ -275,4 +305,5 @@ def test_durable_issue_wins_over_refresh_issue(monkeypatch: pytest.MonkeyPatch) 
 
     resp = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"})
 
-    assert resp.json()["issue"] == "Подтверждение валюты устарело"
+    assert "устарел" in resp.json()["issue"]
+    assert "Канал Meta недоступен" not in resp.json()["issue"]

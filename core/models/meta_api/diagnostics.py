@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
+    SmallInteger,
     String,
     text,
 )
@@ -21,7 +22,7 @@ from core.models.base import Base, Timestamp
 
 
 class MetaAccountSnapshot(Timestamp, Base):
-    """Authoritative Meta timezone/currency for one canonical cabinet ID."""
+    """Authoritative Meta timezone/currency/status for one canonical cabinet ID."""
 
     __tablename__ = "meta_account_snapshot"
     __table_args__ = (
@@ -39,6 +40,12 @@ class MetaAccountSnapshot(Timestamp, Base):
     timezone_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     currency_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Код account_status из Marketing API. NULL означает «Meta не подтвердила
+    # статус», и залив в такой кабинет остаётся заблокированным.
+    account_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    account_status_observed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
