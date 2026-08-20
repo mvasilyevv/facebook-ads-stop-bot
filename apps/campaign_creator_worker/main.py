@@ -336,6 +336,8 @@ async def _persist_partial_created_ids(
     # Признак пишем только доказанный: его отсутствие означает «неизвестно».
     if pre_dispatch is not None:
         payload["pre_dispatch"] = bool(pre_dispatch)
+    if pre_dispatch_reason_code:
+        payload["pre_dispatch_reason_code"] = pre_dispatch_reason_code
     try:
         async with engine.begin() as conn:
             result = await conn.execute(
@@ -417,11 +419,16 @@ def _campaign_unknown_result(
     created_ids: dict[str, Any] | None = None,
     failed_step: str | None = None,
     pre_dispatch: bool | None = None,
+    pre_dispatch_reason_code: str | None = None,
 ) -> dict[str, Any]:
     """Результат неизвестного исхода: сверка обязательна, признаки — только доказанные.
 
     pre_dispatch=True — доказано, что последний отказ был до отправки запроса в Meta.
     None (ключа нет) — неизвестно; исход UNKNOWN и ручная сверка от признака не зависят.
+
+    pre_dispatch_reason_code — код названной причины этого отказа; из него карточка
+    инцидента берёт человеческий текст. Без причины ключа нет: «неизвестно» остаётся
+    неизвестным, а не превращается в пустую строку у оператора.
     """
     result: dict[str, Any] = {
         "outcome": "UNKNOWN",
@@ -437,6 +444,8 @@ def _campaign_unknown_result(
         result["failed_step"] = failed_step
     if pre_dispatch is not None:
         result["pre_dispatch"] = bool(pre_dispatch)
+    if pre_dispatch_reason_code:
+        result["pre_dispatch_reason_code"] = pre_dispatch_reason_code
     if task.correlation_id is not None:
         result["correlation_id"] = str(task.correlation_id)
     return result
@@ -1013,6 +1022,7 @@ async def _execute_run(
             created_ids=exc.created_ids,
             failed_step=exc.failed_step,
             pre_dispatch=exc.pre_dispatch,
+            pre_dispatch_reason_code=exc.pre_dispatch_reason_code,
         )
         await finalize_run_failed(
             engine,
@@ -1027,6 +1037,7 @@ async def _execute_run(
                 created_ids=exc.created_ids,
                 failed_step=exc.failed_step,
                 pre_dispatch=exc.pre_dispatch,
+                pre_dispatch_reason_code=exc.pre_dispatch_reason_code,
             ),
             progress={
                 "stage": "failed",

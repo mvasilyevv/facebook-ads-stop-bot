@@ -22,6 +22,7 @@ from typing import Any, Literal
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from core.meta_api.errors import BROWSER_OPERATION_REJECTION_REASONS
 from core.tasks.wakeup import TASK_QUEUE_NOTIFY_CHANNEL
 from core.wording import (
     action_label_ru,
@@ -635,6 +636,14 @@ async def _enqueue_standalone_campaign_unknown(
     # судьбу запроса. Отсутствие признака означает «неизвестно» — тогда карточка
     # молчит и про отправку. Без перечня созданного признаку не к чему привязаться.
     pre_dispatch = result.get("pre_dispatch") is True and bool(created_parts)
+    # Отказ назван словами, а не кодом: «сорвалось до отправки» не отвечает на
+    # вопрос «что именно отвергли». Текст берётся ТОЛЬКО из закрытого словаря —
+    # сырой details() браузера наружу не выносится, в нём изредка лежит токен.
+    # Код из более нового browser-agent словами назвать нечем: карточка тогда
+    # молчит про причину, а не показывает оператору непереводимый код.
+    reason_text = BROWSER_OPERATION_REJECTION_REASONS.get(
+        str(result.get("pre_dispatch_reason_code") or "")
+    )
     lines = [
         (
             f"Успело создаться: {' · '.join(created_parts)}"
@@ -645,6 +654,8 @@ async def _enqueue_standalone_campaign_unknown(
     ]
     if pre_dispatch:
         lines.insert(1, "Сорвалось до отправки следующего запроса в Facebook")
+        if reason_text:
+            lines.insert(2, f"Причина отказа: {reason_text}")
 
     from core.telegram.worker_notify import notify_recurring_incident_in_transaction
 
