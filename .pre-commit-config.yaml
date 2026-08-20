@@ -18,3 +18,14 @@ repos:
           - python
           - pyi
         require_serial: true
+
+      # Гейт перед пушем, а не перед коммитом: коммит локален и дёшев, а
+      # отправка — то, после чего чужие коммиты садятся поверх твоего.
+      # Ставится отдельно: pre-commit install --hook-type pre-push
+      - id: push-gate
+        name: тесты и состояние сборки перед пушем
+        entry: scripts/pre-push-gate.sh
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true

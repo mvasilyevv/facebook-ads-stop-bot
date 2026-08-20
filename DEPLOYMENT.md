@@ -335,3 +335,22 @@ sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz logs autopause_worker --lines 20
 PostgreSQL backup/restore automation намеренно отсутствует по решению owner.
 Удаление production volumes выполняется только по явной команде и только после
 проверки нового runtime.
+
+## Гейт перед пушем
+
+`scripts/pre-push-gate.sh` не пускает коммит, который заведомо не сядет, и не
+даёт сажать его поверх уже красной сборки. Две проверки: unit-набор на диске и
+состояние последнего прогона `main` через `gh`.
+
+Ставится один раз на машине:
+
+```bash
+ln -sf ../../scripts/pre-push-gate.sh .git/hooks/pre-push
+chmod +x scripts/pre-push-gate.sh
+```
+
+`pre-commit install --hook-type pre-push` откажется, если задан
+`core.hooksPath` — тогда только симлинк вручную, как выше.
+
+Аварийный обход, когда чинишь саму сборку и пуш обязан пройти:
+`FB_SKIP_PUSH_GATE=1 git push`.
