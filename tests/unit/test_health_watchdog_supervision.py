@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from unittest.mock import AsyncMock
 
@@ -92,10 +91,67 @@ async def test_supervised_exits_on_stop(monkeypatch):
     assert calls["n"] == 1
 
 
-# Контракт-пин: main_loop оборачивает циклы в _supervised (анти-регресс проводки)
-def test_main_loop_uses_supervisor():
-    src = inspect.getsource(hw.main_loop)
-    assert "_supervised(" in src
+# Проводка: упавший цикл сторожа поднимается САМИМ main_loop, а не в изоляции.
+# Прежняя версия читала исходник main_loop и искала в нём "_supervised(" — такая
+# проверка ломается от любого рефакторинга и при этом ничего не доказывает:
+# обёртку можно было оставить на месте, а gather собрать мимо неё (#251).
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_main_loop_restarts_a_crashed_loop_instead_of_dying_silently(monkeypatch):
+    monkeypatch.setattr(hw, "LOOP_RESTART_DELAY_SECONDS", 0.01)
+
+    class _FakeMetaClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def start(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    class _FakeEngine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr("core.meta_api.client.MetaApiClient", _FakeMetaClient)
+    monkeypatch.setattr(hw, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+    monkeypatch.setattr(hw, "_get_vision_cloud_url", lambda: "https://vision.invalid")
+
+    check_calls = {"n": 0}
+
+    async def _crashing_check_loop(*, stop, engine):  # noqa: ARG001
+        check_calls["n"] += 1
+        if check_calls["n"] == 1:
+            raise RuntimeError("проверка порогов упала")
+        stop.set()
+
+    async def _idle_loop(stop) -> None:
+        # Страховка на случай, что перезапуска нет: остальные циклы сами
+        # выставляют stop и дают набору упасть на внятном assert'е, а не
+        # повиснуть. Штатный путь до неё не доходит — stop приходит за
+        # миллисекунды из второго захода check_loop.
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            stop.set()
+
+    monkeypatch.setattr(hw, "check_loop", _crashing_check_loop)
+    monkeypatch.setattr(hw, "metrics_loop", lambda stop, _engine: _idle_loop(stop))
+    for name in (
+        "browser_readiness_loop",
+        "browser_workspace_loop",
+        "meta_probe_loop",
+        "vision_token_refresh_loop",
+        "shadow_spend_loop",
+    ):
+        monkeypatch.setattr(hw, name, lambda *_a, stop, **_k: _idle_loop(stop))
+
+    await asyncio.wait_for(hw.main_loop(database_url="postgresql+asyncpg://stub/stub"), timeout=20)
+
+    # Второй заход — доказательство перезапуска: без него сторож замолчал бы
+    # навсегда после первого же исключения (инцидент 01.07).
+    assert check_calls["n"] == 2
 
 
 # Probe: канал жив → INFO-след прохода (тишина ≠ зависание)

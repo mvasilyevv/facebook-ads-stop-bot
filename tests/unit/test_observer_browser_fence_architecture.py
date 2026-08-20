@@ -3,21 +3,16 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-import apps.observer_worker.main as observer
 import core.meta_api.account_tz as account_tz
 
 ROOT = Path(__file__).resolve().parents[2]
 
-
-def test_production_loop_never_runs_an_unclaimed_browser_scan() -> None:
-    loop_source = inspect.getsource(observer.main_loop)
-    claimed_source = inspect.getsource(observer._run_claimed_observer_scan)
-
-    assert "run_one_cycle(" not in loop_source
-    assert "enqueue_scheduled_observer_scan(" in loop_source
-    assert "claim_observer_scan(" in loop_source
-    assert "run_one_cycle(" in claimed_source
-    assert "run_with_observer_scan_control(" in claimed_source
+# «Производственный цикл не сканирует браузер без захваченной задачи» раньше
+# проверялось чтением исходника main_loop: поиском подстрок claim_observer_scan(
+# и run_one_cycle(. Опора ложная — ломается от переименования и ничего не
+# доказывает. Инвариант закреплён поведением в
+# tests/integration/test_observer_scan_claim_fence.py: свидетель внутри скана
+# смотрит на очередь в момент обращения к браузеру (#251).
 
 
 def test_every_direct_api_or_watchdog_browser_read_has_a_durable_fence() -> None:
