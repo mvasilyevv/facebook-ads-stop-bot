@@ -290,10 +290,11 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
  * вкладки, которая в этот момент несёт необратимую мутацию под другим замком.
  *
  * Роль interactive здесь остаётся видимой намеренно. Наблюдателей без кабинета
- * трое: проба готовности, полная проба канала в watchdog и чтение
- * `GET /api/settings/vision`, на котором стоит релизный предикат. Последним
- * двум показывать нечего, кроме вкладки, созданной лечащей ручкой ensure-cdp, —
- * а она создаётся именно под ролью interactive.
+ * четверо: проба готовности, полная проба канала в watchdog, чтение
+ * `GET /api/settings/vision`, на котором стоит релизный предикат, и
+ * диагностический health-probe-cli. Всем, кроме пробы готовности, показывать
+ * нечего, кроме вкладки, созданной лечащей ручкой ensure-cdp, — а она
+ * создаётся именно под ролью interactive.
  */
 export function findLiveAdsManagerPage(browser: Browser | null): Page | null {
   if (!browser) {
