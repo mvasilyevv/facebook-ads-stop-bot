@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -307,3 +309,54 @@ def test_durable_issue_wins_over_refresh_issue(monkeypatch: pytest.MonkeyPatch) 
 
     assert "устарел" in resp.json()["issue"]
     assert "Канал Meta недоступен" not in resp.json()["issue"]
+
+
+# Статус кабинета читается тем же запросом, что таймзона и валюта, — и обязан
+# доезжать до снимка. Пропуск именно этого аргумента наблюдался вживую 20.08:
+# гейт #217 fail-closed блокировал ЛЮБОЙ залив, потому что подтвердить статус
+# было нечем. Второй писатель (observer) его передавал, но работает только при
+# включённом сканировании, а оно выключено решением владельца.
+def test_api_refresh_persists_account_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    meta = mod
+
+    persisted: dict[str, object] = {}
+
+    class _Client:
+        async def start(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    class _Fence:
+        async def __aenter__(self) -> "_Fence":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def assert_held(self) -> None:
+            return None
+
+    async def _fake_fetch(client: object, act: str) -> object:
+        return SimpleNamespace(timezone_name="America/New_York", currency="USD", account_status=1)
+
+    async def _fake_persist(engine: object, **kwargs: object) -> bool:
+        persisted.update(kwargs)
+        return True
+
+    monkeypatch.setattr(meta, "_build_meta_client", lambda engine: _Client())
+    monkeypatch.setattr(meta, "BrowserOperationFence", lambda *a, **kw: _Fence())
+    monkeypatch.setattr(meta, "fetch_account_context", _fake_fetch)
+    monkeypatch.setattr(meta, "persist_account_context", _fake_persist)
+
+    issue = asyncio.run(meta._refresh_account_context_once(object(), "123"))
+
+    assert issue is None
+    assert persisted.get("account_status") == 1

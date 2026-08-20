@@ -202,6 +202,12 @@ async def _refresh_account_context_once(engine: Any, numeric_act_id: str) -> str
                 account_id=numeric_act_id,
                 timezone_name=fetched.timezone_name,
                 currency=fetched.currency,
+                # Статус приходит тем же запросом и обязан доехать до снимка.
+                # Пропуск наблюдался вживую 20.08: гейт статуса fail-closed, а
+                # подтвердить его было нечем — залив блокировался навсегда.
+                # Второй писатель (observer) статус передавал, но работает
+                # только при включённом сканировании, а оно выключено.
+                account_status=fetched.account_status,
             )
             return None
     except BrowserOperationBlocked:
