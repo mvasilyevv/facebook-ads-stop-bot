@@ -3222,3 +3222,42 @@ def test_campaign_claim_projects_and_pins_the_browser_session() -> None:
     loop_source = inspect.getsource(creator_main.task_loop)
     assert "claim.browser_session_id" in loop_source
     assert "client.session_id = claimed_session_id" in loop_source
+
+
+# Признак «нужен повторный вход» собирается в client.py, а читается в воркере
+# залива. Раньше эти два места ничем не были связаны: тесты воркера сами
+# конструировали сообщение, и переименование вердикта разошлось бы молча —
+# оператор перестал бы узнавать про разлогин из упавшего залива. Тест поднимает
+# исключение РЕАЛЬНЫМ путём client.py и проверяет, что воркер его опознаёт.
+@pytest.mark.asyncio
+async def test_login_required_verdict_survives_the_path_from_client_to_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apps.campaign_creator_worker.main import _requires_facebook_login
+
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    identity = _probe_identity()
+    identity.healthy = False
+    identity.probe_detail = "login_required"
+    client._stub.CheckMetaApiHealth = AsyncMock(return_value=identity)
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1901,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(BrowserReadinessRejectedError) as raised:
+            await _prepare_campaign_graph(
+                client,
+                method="POST",
+                endpoint="/act_123/campaigns",
+                body=_valid_campaign_create_body("campaigns"),
+            )
+
+    assert _requires_facebook_login(raised.value), (
+        "воркер залива обязан опознать вердикт разлогина в исключении, "
+        "собранном реальным путём client.py"
+    )

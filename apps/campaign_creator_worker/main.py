@@ -1450,24 +1450,34 @@ async def _publish_upload_storage_health(
     )
 
 
-def _upload_max_age_days() -> float:
-    raw = os.environ.get(_UPLOAD_MAX_AGE_DAYS_ENV, "").strip()
+def _parsed_env_threshold(name: str, cast, default):
+    """Порог из окружения; нераспознанное значение НЕ проглатывается молча.
+
+    Оператор, написавший «5GiB» вместо числа, иначе был бы уверен, что предел
+    поднят, а работал бы дефолт — и узнал бы об этом по удалённым наборам.
+    Предупреждение называет переменную, что было написано и что применено.
+    """
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return _DEFAULT_UPLOAD_MAX_AGE_DAYS
+        return default
     try:
-        return float(raw)
+        return cast(raw)
     except ValueError:
-        return _DEFAULT_UPLOAD_MAX_AGE_DAYS
+        logger.warning(
+            "campaign_create: %s не распознан (%r) — применён предел по умолчанию %r",
+            name,
+            raw,
+            default,
+        )
+        return default
+
+
+def _upload_max_age_days() -> float:
+    return _parsed_env_threshold(_UPLOAD_MAX_AGE_DAYS_ENV, float, _DEFAULT_UPLOAD_MAX_AGE_DAYS)
 
 
 def _upload_max_total_bytes() -> int:
-    raw = os.environ.get(_UPLOAD_MAX_TOTAL_BYTES_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_UPLOAD_MAX_TOTAL_BYTES
-    try:
-        return int(raw)
-    except ValueError:
-        return _DEFAULT_UPLOAD_MAX_TOTAL_BYTES
+    return _parsed_env_threshold(_UPLOAD_MAX_TOTAL_BYTES_ENV, int, _DEFAULT_UPLOAD_MAX_TOTAL_BYTES)
 
 
 async def _sweep_upload_storage_once(engine: AsyncEngine) -> None:
