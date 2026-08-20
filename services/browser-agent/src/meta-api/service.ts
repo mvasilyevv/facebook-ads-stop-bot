@@ -52,8 +52,12 @@ export const BROWSER_OPERATION_REJECTION_METADATA_KEY = 'x-browser-operation-rej
 // вопрос «что именно отвергнуто»: длинный залив отбивало, короткий проходил, и
 // отличить истёкший грант от чужого кабинета или неверной семантики было нечем.
 // Первое совпадение выигрывает, поэтому частные тексты стоят выше общих.
-// Зеркалит BROWSER_OPERATION_REJECTION_REASONS в core/meta_api/client.py.
-const OPERATION_REJECTION_PREDICATES: ReadonlyArray<readonly [string, string]> = [
+// Зеркалит BROWSER_OPERATION_REJECTION_TABLE в core/meta_api/errors.py.
+//
+// Таблица экспортируется намеренно: тест обязан спрашивать её, а не держать
+// рядом свою копию состава (#253). Копия совпадает ровно до того дня, когда
+// сюда добавят строку и забудут про двойник.
+export const OPERATION_REJECTION_PREDICATES: ReadonlyArray<readonly [string, string]> = [
   ['capability authority is unavailable', 'capability_authority_unavailable'],
   ['capability contract is incompatible', 'capability_contract_incompatible'],
   ['capability secret is unavailable', 'capability_secret_unavailable'],
@@ -64,7 +68,17 @@ const OPERATION_REJECTION_PREDICATES: ReadonlyArray<readonly [string, string]> =
   ['capability is expired or unbounded', 'capability_expired'],
   ['capability is malformed', 'capability_malformed'],
   ['capability signature is invalid', 'capability_signature_invalid'],
-  ['operation capability', 'capability_invalid'],
+  // Грант пришёл без пригодного срока действия (поток UploadVideo связывает
+  // срок с первого чанка, до того как подпись вообще может быть проверена).
+  // Это свойство самого запроса, а не окружения: следующая попытка соберёт
+  // такой же. Истёкший, но исправный срок сюда не попадает — он остаётся
+  // 'capability_expired' и повторяется.
+  ['capability deadline is missing', 'capability_expiry_missing'],
+  // Остаток семьи: текст говорит про разрешение на операцию, но ни один
+  // именованный предикат его не узнал. Это не причина, а честное признание,
+  // что причина не установлена, — и ведёт себя оно как незнание: повтор
+  // разрешён, оператору так и написано.
+  ['operation capability', 'capability_reason_unknown'],
   ['ownership preflight rejected', 'ownership_preflight_rejected'],
   ['graph method override', 'graph_method_override'],
   ['graph request method semantics', 'graph_method_semantics'],
@@ -215,7 +229,9 @@ function bindGrpcAbort(call: any): {
     bindCapabilityExpiry: (expiresAtSeconds: number) => {
       if (capabilityTimer !== undefined) clearTimeout(capabilityTimer);
       if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0) {
-        controller.abort('capability_invalid');
+        // Не «истёк», а «срока нет вовсе»: истёкший срок — положительное число
+        // в прошлом, и его отрабатывает таймер ниже как capability_expired.
+        controller.abort('capability_expiry_missing');
         return;
       }
       capabilityTimer = setTimeout(
@@ -246,11 +262,12 @@ function grpcAbortError(
   metadata?: grpc.Metadata;
 } {
   const reason = String(signal.reason || 'grpc_cancelled');
-  if (reason === 'capability_invalid') {
-    // Отдельная ветка ответа — но причина у неё та же и называется так же,
-    // иначе это был бы восьмой безымянный PERMISSION_DENIED.
+  if (reason === 'capability_expiry_missing') {
+    // Единственный живой обитатель бывшей общей корзины: потоковый UploadVideo
+    // связывает срок действия с первого чанка, задолго до проверки подписи, и
+    // на этом месте у гранта либо есть пригодный срок, либо его нет вовсе.
     return grpcErrorForOperationFailure(
-      new Error('Browser operation capability is invalid'),
+      new Error('Browser operation capability deadline is missing'),
     );
   }
   if (reason === 'capability_expired') {

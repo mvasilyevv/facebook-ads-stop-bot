@@ -92,7 +92,7 @@ def test_rejection_message_carries_no_raw_browser_details() -> None:
     mapped = MetaApiClient._grpc_to_meta_error(
         _rpc(
             grpc.StatusCode.PERMISSION_DENIED,
-            reason="capability_invalid",
+            reason="capability_signature_invalid",
             details="EAAG-secret-token leaked into details",
         ),
         endpoint="/act_1/ads",
@@ -183,7 +183,7 @@ def test_unknown_reason_code_is_not_promoted_to_a_proven_rejection() -> None:
 def test_aborted_capability_consume_stays_reconcilable() -> None:
     # Списанный грант мог пересечь границу: это ручная сверка, а не REJECTED.
     mapped = MetaApiClient._grpc_to_meta_error(
-        _rpc(grpc.StatusCode.ABORTED, reason="capability_invalid"),
+        _rpc(grpc.StatusCode.ABORTED, reason="capability_signature_invalid"),
         endpoint="/act_1/ads",
     )
 

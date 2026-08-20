@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from enum import Enum
 
 from core.safe_diagnostics import redact_sensitive_text
 
@@ -136,33 +138,116 @@ class PreDispatchRejectedError(SessionUnavailableError):
     """
 
 
-# Код причины → та же причина человеческим языком. Зеркалит
-# OPERATION_REJECTION_PREDICATES в services/browser-agent/src/meta-api/service.ts:
-# разошедшийся словарь молча вернёт отказ в путь «часть изменений принята».
+class BrowserRejectionRetry(Enum):
+    """Помогает ли повтор той же задачи после отказа с этим кодом причины.
+
+    Отдельная ось от исхода операции. Исход у всей семьи ``PreDispatchRejectedError``
+    один и здесь не пересматривается: ``REJECTED``, отправки не было. Здесь решается
+    только то, вернётся ли задача в очередь.
+    """
+
+    #: Отказ про окружение, а не про сам запрос: следующая попытка может пройти.
+    HELPS = "helps"
+    #: Свойство самого запроса или прав вызывающего: повтор вернёт тот же отказ.
+    DOES_NOT_HELP = "does_not_help"
+    #: Причина не установлена. Ведёт себя как незнание: повтор разрешён, но
+    #: оператору сказано, что причина не установлена, а не выдумана.
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class BrowserRejectionReason:
+    """Одна причина отказа: как она звучит оператору и что делать с повтором.
+
+    Оба поля обязательны. Это и есть смысл таблицы: новый код причины нельзя
+    завести, не сказав, помогает ли повтор. Раньше ответ «повтор помогает»
+    выражался отсутствием строки во втором наборе — то есть не выражался вовсе,
+    и забытая строка молча означала «повторяй вечно».
+    """
+
+    text: str
+    retry: BrowserRejectionRetry
+
+
+_HELPS = BrowserRejectionRetry.HELPS
+_DOES_NOT_HELP = BrowserRejectionRetry.DOES_NOT_HELP
+_UNKNOWN = BrowserRejectionRetry.UNKNOWN
+
+# Код причины → та же причина человеческим языком плюс вердикт про повтор.
+# Зеркалит OPERATION_REJECTION_PREDICATES в
+# services/browser-agent/src/meta-api/service.ts: разошедшаяся таблица молча
+# вернёт отказ в путь «часть изменений принята».
 #
-# Словарь закрытый и живёт здесь, рядом с исключением, а не в транспортном клиенте:
-# читает его и карточка инцидента оператора, которой gRPC-слой ни к чему. Причина
+# Таблица закрытая и живёт здесь, рядом с исключением, а не в транспортном клиенте:
+# читает её и карточка инцидента оператора, которой gRPC-слой ни к чему. Причина
 # доезжает до оператора только отсюда — сырой ``details()`` от browser-agent наружу
 # не выносится, в нём изредка лежит токен из Graph-ответа.
+BROWSER_OPERATION_REJECTION_TABLE: dict[str, BrowserRejectionReason] = {
+    "capability_authority_unavailable": BrowserRejectionReason(
+        "сервис выдачи разрешений на операцию недоступен", _HELPS
+    ),
+    "capability_contract_incompatible": BrowserRejectionReason(
+        "версия контракта браузера не совпадает", _DOES_NOT_HELP
+    ),
+    "capability_secret_unavailable": BrowserRejectionReason(
+        "ключ подписи разрешения недоступен в браузере", _HELPS
+    ),
+    "capability_cabinet_mismatch": BrowserRejectionReason(
+        "разрешение выдано на другой рекламный кабинет", _DOES_NOT_HELP
+    ),
+    "caller_not_authorized": BrowserRejectionReason(
+        "операция не разрешена вызывающему сервису", _DOES_NOT_HELP
+    ),
+    "capability_task_binding_invalid": BrowserRejectionReason(
+        "разрешение не привязано к задаче", _DOES_NOT_HELP
+    ),
+    "capability_lease_binding_invalid": BrowserRejectionReason(
+        "разрешение не привязано к аренде задачи", _DOES_NOT_HELP
+    ),
+    "capability_expired": BrowserRejectionReason(
+        "срок действия разрешения на операцию истёк", _HELPS
+    ),
+    "capability_malformed": BrowserRejectionReason(
+        "разрешение на операцию повреждено", _DOES_NOT_HELP
+    ),
+    "capability_signature_invalid": BrowserRejectionReason(
+        "подпись разрешения на операцию не сошлась", _DOES_NOT_HELP
+    ),
+    # Срок действия не «истёк», а не пришёл вовсе: поток UploadVideo связывает
+    # срок с первого чанка, раньше, чем подпись вообще может быть проверена.
+    # Свойство запроса, не окружения — следующая попытка соберёт такой же.
+    "capability_expiry_missing": BrowserRejectionReason(
+        "разрешение на операцию пришло без срока действия", _DOES_NOT_HELP
+    ),
+    # Остаток семьи, который различить нечем. Раньше он назывался
+    # «capability_invalid» и утверждал оператору, что разрешение недействительно,
+    # — вывод, которого никто не делал. Теперь незнание названо незнанием.
+    "capability_reason_unknown": BrowserRejectionReason("причина отказа не установлена", _UNKNOWN),
+    "ownership_preflight_rejected": BrowserRejectionReason(
+        "цель операции не принадлежит этому кабинету", _DOES_NOT_HELP
+    ),
+    "graph_method_override": BrowserRejectionReason(
+        "подмена HTTP-метода запроса не разрешена", _DOES_NOT_HELP
+    ),
+    "graph_method_semantics": BrowserRejectionReason(
+        "метод запроса задан неоднозначно", _DOES_NOT_HELP
+    ),
+    "graph_get_body": BrowserRejectionReason("запрос на чтение пришёл с телом", _DOES_NOT_HELP),
+    "graph_endpoint_query": BrowserRejectionReason(
+        "адрес запроса содержит недопустимые параметры", _DOES_NOT_HELP
+    ),
+    "ad_account_id_not_numeric": BrowserRejectionReason(
+        "идентификатор рекламного кабинета задан не числом", _DOES_NOT_HELP
+    ),
+    "ad_account_id_missing": BrowserRejectionReason(
+        "денежный запрос пришёл без идентификатора кабинета", _DOES_NOT_HELP
+    ),
+}
+
+# Код причины → та же причина человеческим языком. Производная от таблицы:
+# отдельного словаря, который может разойтись с вердиктом, больше нет.
 BROWSER_OPERATION_REJECTION_REASONS: dict[str, str] = {
-    "capability_authority_unavailable": "сервис выдачи разрешений на операцию недоступен",
-    "capability_contract_incompatible": "версия контракта браузера не совпадает",
-    "capability_secret_unavailable": "ключ подписи разрешения недоступен в браузере",
-    "capability_cabinet_mismatch": "разрешение выдано на другой рекламный кабинет",
-    "caller_not_authorized": "операция не разрешена вызывающему сервису",
-    "capability_task_binding_invalid": "разрешение не привязано к задаче",
-    "capability_lease_binding_invalid": "разрешение не привязано к аренде задачи",
-    "capability_expired": "срок действия разрешения на операцию истёк",
-    "capability_malformed": "разрешение на операцию повреждено",
-    "capability_signature_invalid": "подпись разрешения на операцию не сошлась",
-    "capability_invalid": "разрешение на операцию недействительно",
-    "ownership_preflight_rejected": "цель операции не принадлежит этому кабинету",
-    "graph_method_override": "подмена HTTP-метода запроса не разрешена",
-    "graph_method_semantics": "метод запроса задан неоднозначно",
-    "graph_get_body": "запрос на чтение пришёл с телом",
-    "graph_endpoint_query": "адрес запроса содержит недопустимые параметры",
-    "ad_account_id_not_numeric": "идентификатор рекламного кабинета задан не числом",
-    "ad_account_id_missing": "денежный запрос пришёл без идентификатора кабинета",
+    code: reason.text for code, reason in BROWSER_OPERATION_REJECTION_TABLE.items()
 }
 
 
@@ -198,26 +283,14 @@ class BrowserOperationRejectedError(PreDispatchRejectedError):
 # отправки не было, — но повторять их бессмысленно, а вечный requeue money-задачи
 # скрывает поломку вместо того, чтобы её показать.
 #
-# Набор живёт здесь, а не в транспортном клиенте: он про код причины, а не про
-# gRPC. Каждый код обязан быть и в BROWSER_OPERATION_REJECTION_REASONS — иначе
-# оператор получит задачу, которая больше не повторится, и «причина не записана».
+# Набор ВЫЧИСЛЯЕТСЯ из таблицы, а не ведётся рядом с ней. Второй список
+# совпадал с первым по договорённости: код, добавленный в один и забытый в
+# другом, молча получал «повторяй вечно» — при том что никто такого вердикта
+# не выносил (канон 6.1).
 BROWSER_OPERATION_PERMANENT_REJECTIONS: frozenset[str] = frozenset(
-    {
-        "capability_contract_incompatible",
-        "capability_cabinet_mismatch",
-        "caller_not_authorized",
-        "capability_task_binding_invalid",
-        "capability_lease_binding_invalid",
-        "capability_malformed",
-        "capability_signature_invalid",
-        "ownership_preflight_rejected",
-        "graph_method_override",
-        "graph_method_semantics",
-        "graph_get_body",
-        "graph_endpoint_query",
-        "ad_account_id_not_numeric",
-        "ad_account_id_missing",
-    }
+    code
+    for code, reason in BROWSER_OPERATION_REJECTION_TABLE.items()
+    if reason.retry is BrowserRejectionRetry.DOES_NOT_HELP
 )
 
 
