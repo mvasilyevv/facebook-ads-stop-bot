@@ -43,6 +43,7 @@ from core.campaign_builder.uniquify import (
     uniquify_concepts,
 )
 from core.creatives.video_uniquifier import VideoUniquifyError
+from core.meta_api.dispatch import mark_graph_dispatched
 from core.meta_api.errors import (
     PermanentError,
     RateLimitedError,
@@ -203,18 +204,35 @@ def test_uniquify_concepts_image_calls(monkeypatch):
 
 
 class _FakeClient:
-    """Замоканный MetaApiClient.execute_graph_call с авто-ID по endpoint."""
+    """Замоканный MetaApiClient.execute_graph_call с авто-ID по endpoint.
 
-    def __init__(self, fail_on: str | None = None, error: Exception | None = None):
+    Фейк обязан моделировать внешнюю границу так же, как настоящий клиент: факт
+    отправки ставит он сам, а не вызывающий. dispatched=True (по умолчанию) —
+    запрос передан транспорту, и отказ после этого неотличим от потерянного
+    ответа. dispatched=False — клиент отказал ДО отправки (нет явного кабинета,
+    отказ выдачи одноразового гранта, открытый предохранитель): во внешнюю
+    систему не ушло ничего.
+    """
+
+    def __init__(
+        self,
+        fail_on: str | None = None,
+        error: Exception | None = None,
+        *,
+        dispatched: bool = True,
+    ):
         self.calls: list[dict] = []
         self._counter = 0
         self._fail_on = fail_on
         self._error = error or PermanentError("boom")
+        self._dispatched = dispatched
 
     async def execute_graph_call(self, *, method, endpoint, body_json=None, ad_account_id=None):
         self.calls.append(
             {"method": method, "endpoint": endpoint, "body": body_json, "act": ad_account_id}
         )
+        if self._dispatched:
+            mark_graph_dispatched()
         # endswith: '/ads' иначе матчит и '/adsets'.
         if self._fail_on and endpoint.endswith(self._fail_on):
             raise self._error
@@ -593,7 +611,11 @@ def test_execute_fail_on_campaign_post_is_partial_not_transient(monkeypatch):
     cfg = _config(block)
     spec = build_campaign_spec(cfg)
     concepts = _concepts("image", count=1)
-    client = _FakeClient(fail_on="/campaigns", error=SessionUnavailableError("no vision"))
+    client = _FakeClient(
+        fail_on="/campaigns",
+        error=SessionUnavailableError("no vision"),
+        dispatched=True,
+    )
     uploader = _FakeUploader()
 
     async def run():
@@ -612,6 +634,79 @@ def test_execute_fail_on_campaign_post_is_partial_not_transient(monkeypatch):
     assert ei.value.irreversible_attempted is True
     # Классификация: НЕ transient (иначе requeue → дубль), а partial.
     assert classify_execution_error(ei.value) == "partial"
+
+
+# Money-инвариант: залив пересёк внешнюю границу только тогда, когда запрос ушёл
+# в транспорт. Клиент отказывает и ДО отправки — нет явного кабинета, отказ выдачи
+# одноразового гранта, открытый предохранитель. Кампания при таком отказе не
+# создаётся, поэтому исход REJECTED: чистить нечего, сверять нечего.
+#
+# До фикса execute помечал «POST campaign инициирован» ДО вызова клиента, и любой
+# такой отказ записывался как ack-lost UNKNOWN («кампания могла создаться»): повтор
+# запрещён навсегда, resume запрещён, оператор идёт сверять пустой кабинет.
+def test_execute_refusal_before_dispatch_is_not_ack_lost(monkeypatch):
+    _patch_uniquify(monkeypatch)
+    block = _image_block(n_adsets=1, concept_count=1)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=1)
+    client = _FakeClient(
+        fail_on="/campaigns",
+        # Реальный отказ этого класса: грант на операцию не выдан. Он не входит
+        # в семью PreDispatchRejectedError, поэтому «доказан отказ до отправки»
+        # по типу исключения не читается — только по факту отправки от клиента.
+        error=PermanentError("money browser RPC requires claimed-task operation authority"),
+        dispatched=False,
+    )
+    uploader = _FakeUploader()
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=uploader,
+        )
+
+    with pytest.raises(CampaignExecutionError) as ei:
+        asyncio.run(run())
+
+    assert not isinstance(ei.value, PartialCreateError)
+    assert ei.value.irreversible_attempted is False
+    assert classify_execution_error(ei.value) == "permanent"
+
+
+# Обратная половина того же инварианта на transient-причине: отказ ДО отправки
+# остаётся отказом и тогда, когда причина сама по себе располагает к повтору.
+# Ретрай здесь безопасен именно потому, что доказано — запрос не уходил.
+def test_execute_transient_refusal_before_dispatch_stays_retryable(monkeypatch):
+    _patch_uniquify(monkeypatch)
+    block = _image_block(n_adsets=1, concept_count=1)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=1)
+    client = _FakeClient(
+        fail_on="/campaigns",
+        error=TemporaryError("browser-agent недоступен"),
+        dispatched=False,
+    )
+    uploader = _FakeUploader()
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=uploader,
+        )
+
+    with pytest.raises(CampaignExecutionError) as ei:
+        asyncio.run(run())
+
+    assert not isinstance(ei.value, PartialCreateError)
+    assert classify_execution_error(ei.value) == "transient"
 
 
 # Money-safety: падение уникализации (нет ffmpeg/битый файл) идёт ДО любого POST →

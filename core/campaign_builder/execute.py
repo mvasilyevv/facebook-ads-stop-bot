@@ -41,6 +41,7 @@ from core.campaign_builder.uniquify import (
     build_uniquification_plan,
     uniquify_concepts,
 )
+from core.meta_api.dispatch import observe_graph_dispatch
 from core.meta_api.errors import PreDispatchRejectedError, TemporaryError
 
 logger = logging.getLogger(__name__)
@@ -88,10 +89,13 @@ class _Uploader(Protocol):
 class CampaignExecutionError(RuntimeError):
     """Залив провалился. Базовый класс.
 
-    irreversible_attempted — money-флаг: POST создания campaign БЫЛ инициирован до
+    irreversible_attempted — money-флаг: POST создания campaign УШЁЛ в транспорт до
     падения (ответ Meta мог потеряться при оборванной Vision-сессии/таймауте → объект
     мог реально создаться). Тогда сбой НЕЛЬЗЯ классифицировать как transient/requeue —
     повтор = дубль кампании. См. classify_execution_error.
+
+    Отказ клиента ДО отправки (нет явного кабинета, отказ выдачи одноразового гранта,
+    открытый предохранитель) флаг не поднимает: кампания не создана, повтор безопасен.
     """
 
     irreversible_attempted: bool = False
@@ -245,8 +249,9 @@ class _ProgressState:
     creatives_done: int = 0
     ads_done: int = 0
     total_ads: int = 0
-    # Money-флаг: POST создания campaign инициирован (см. CampaignExecutionError).
-    # Выставляется ДО самого вызова execute_graph_call(/campaigns) — ответ мог потеряться.
+    # Money-флаг: POST создания campaign ушёл в транспорт (см. CampaignExecutionError).
+    # Ставится по факту отправки от клиента, а не по намерению его позвать: ответ на
+    # ушедший запрос мог потеряться, а отказ до отправки кампанию не создаёт.
     campaign_create_attempted: bool = False
 
     def snapshot(self) -> dict[str, Any]:
@@ -337,19 +342,28 @@ async def _execute_block(
     materialized: list[UniquifiedAdset] = await uniquify_concepts(cfg, cfg_block, concepts, plan)
 
     # 1) campaign (всегда PAUSED).
-    # Money-safety: помечаем «POST campaign инициирован» ДО самого вызова — если он
-    # упадёт (Vision лёг/таймаут), ответ Meta мог потеряться, а кампания создаться.
-    # С этого момента любой сбой = необратимый (см. classify_execution_error).
+    # Money-safety: «POST campaign ушёл» — факт от транспорта, а не догадка залива.
+    # Клиент отказывает и ДО отправки (нет явного кабинета, отказ выдачи одноразового
+    # гранта, живая проба канала, открытый предохранитель) — кампания при таком отказе
+    # не создаётся. Пока факт угадывался здесь, такой отказ записывался как потерянный
+    # ответ: оператора звали сверять пустой кабинет, а повтор и resume запрещались.
+    # Ушедший запрос делает любой дальнейший сбой необратимым (classify_execution_error).
     state.stage = "creating"
-    state.campaign_create_attempted = True
     campaign_payload = dict(spec_block.body)
     campaign_payload["status"] = CREATED_OBJECT_STATUS
-    resp = await client.execute_graph_call(
-        method="POST",
-        endpoint=f"/{act}/campaigns",
-        body_json=campaign_payload,
-        ad_account_id=act,
-    )
+    with observe_graph_dispatch() as campaign_dispatch:
+        try:
+            resp = await client.execute_graph_call(
+                method="POST",
+                endpoint=f"/{act}/campaigns",
+                body_json=campaign_payload,
+                ad_account_id=act,
+            )
+        finally:
+            # Признак накопительный: следующий блок залива не отменяет отправку,
+            # которая уже случилась в предыдущем.
+            if campaign_dispatch.dispatched:
+                state.campaign_create_attempted = True
     campaign_id = _extract_id(resp, what="campaign")
     created["campaigns"].append(campaign_id)
     state.campaigns_done += 1
@@ -566,7 +580,10 @@ def _raise_for_failure(
     """
     if _has_created(created):
         raise PartialCreateError(
-            f"залив упал на шаге {failed_step!r} (часть объектов создана): {cause!r}",
+            # Причина НЕ запекается через repr: MetaApiError.__repr__ несёт fbtrace_id
+            # и полный текст Graph-ответа, а это сообщение доезжает до записи задачи.
+            # Класс и машинный код собирает воркер отдельным безопасным набором полей.
+            f"залив упал на шаге {failed_step!r} (часть объектов создана): {type(cause).__name__}",
             created_ids=created,
             failed_step=failed_step,
             pre_dispatch=isinstance(cause, PreDispatchRejectedError),
@@ -580,11 +597,17 @@ def _raise_for_failure(
         # ack-lost: POST campaign ушёл, ответа нет → возможен осиротевший объект.
         raise PartialCreateError(
             f"залив упал на шаге {failed_step!r} ПОСЛЕ инициации POST campaign "
-            f"(ответ Meta потерян — кампания могла создаться, проверь вручную): {cause!r}",
+            f"(ответ Meta потерян — кампания могла создаться, проверь вручную): "
+            f"{type(cause).__name__}",
             created_ids=created,
             failed_step=failed_step,
         ) from cause
-    # Ничего не создано и POST campaign не инициирован: causa через __cause__ для classify.
-    err = CampaignExecutionError(f"залив упал на шаге {failed_step!r}: {cause!r}")
+    # Ничего не создано и POST campaign не инициирован. Это ДОКАЗАННЫЙ отказ до
+    # отправки: признак ставит транспорт, а не догадка вызывающего. Помечаем его явно,
+    # потому что класс причины сюда может прийти любой (например отказ предохранителя),
+    # и проверка по семье PreDispatchRejectedError его бы не поймала.
+    # repr причины не используется: он несёт fbtrace_id и текст Graph-ответа.
+    err = CampaignExecutionError(f"залив упал на шаге {failed_step!r}: {type(cause).__name__}")
+    err.pre_dispatch = True
     err.__cause__ = cause
     raise err from cause

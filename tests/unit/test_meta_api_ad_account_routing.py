@@ -106,7 +106,10 @@ async def test_execute_graph_call_passes_ad_account_id() -> None:
     )
 
     req = _captured_request(breaker_call)
-    assert breaker_call.await_args.args[0] is client._stub.ExecuteGraphCallV5
+    # Предохранителю отдаётся обёртка, которая ставит отметку об отправке ровно
+    # перед транспортом (отказ предохранителя = отказ ДО отправки). Маршрут при
+    # этом прежний: обёрнут именно ExecuteGraphCallV5.
+    assert breaker_call.await_args.args[0].__wrapped__ is client._stub.ExecuteGraphCallV5
     assert req.ad_account_id == "555"
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import hashlib
 import hmac
 import json
@@ -36,6 +37,7 @@ from clients.python_grpc.v1 import meta_api_pb2, meta_api_pb2_grpc
 from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 from core.deadlines import remaining_deadline_seconds
 from core.meta_api.budget_limits import checked_daily_budget_minor_units
+from core.meta_api.dispatch import mark_graph_dispatched
 from core.meta_api.errors import (
     BROWSER_OPERATION_REJECTION_REASONS,
     AmbiguousResultError,
@@ -3028,9 +3030,25 @@ class MetaApiClient:
 
         req = meta_api_pb2.ExecuteGraphCallRequest(**req_kwargs)
 
+        stub_call = self._stub.ExecuteGraphCallV5
+
+        # functools.wraps: обёртка остаётся узнаваемой как ExecuteGraphCallV5 —
+        # и в трассировке, и для теста маршрутизации вызова.
+        @functools.wraps(stub_call)
+        async def _dispatch_graph_call(request: Any, **call_kwargs: Any) -> Any:
+            # Единственная точка, где запрос действительно уходит наружу. Отметка
+            # стоит ЗДЕСЬ, а не перед circuit_breaker.call: предохранитель
+            # отказывает раньше транспорта, и его отказ — отказ до отправки.
+            # Всё, что отвергло вызов выше (нет явного кабинета, отказ выдачи
+            # одноразового гранта, живая проба канала), тоже отказало до отправки.
+            # Дедлайн едет транспорту как есть (timeout=grpc_timeout_seconds):
+            # обёртка ничего не подменяет и своего таймаута не заводит.
+            mark_graph_dispatched()
+            return await stub_call(request, **call_kwargs)
+
         try:
             resp = await self._circuit_breaker.call(
-                self._stub.ExecuteGraphCallV5,
+                _dispatch_graph_call,
                 req,
                 timeout=grpc_timeout_seconds,
             )

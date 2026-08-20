@@ -203,7 +203,11 @@ describe('MetaApiService control page cancellation', () => {
     const call = unaryCall({
       session_id: 'session-1',
       vision_profile_id: 'profile-1',
-      capability_expires_at: Math.floor(Date.now() / 1_000),
+      // Свеж на захвате control-lock (см. assertCapabilityStillFresh в
+      // executeGraphCallV5Handler), иначе браузерная работа этого теста
+      // никогда бы не началась вовсе — грант умирал бы раньше, чем страница
+      // открылась, и это уже отдельный, доказанный pre-send отказ.
+      capability_expires_at: Math.floor(Date.now() / 1_000) + 1,
       ad_account_id: '123',
       method: 'POST',
       endpoint: '/987654321',

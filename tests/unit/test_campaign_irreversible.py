@@ -493,6 +493,92 @@ async def test_deadline_exhausted_after_confirmed_create_is_marked_pre_dispatch(
     assert classify_execution_error(raised.value) == "partial"
 
 
+# ============ факт отправки ставит транспорт, а не вызывающий ============
+#
+# «Задача пересекла внешнюю границу» — это не «мы собрались вызвать клиента», а
+# «запрос ушёл в транспорт». Между этими двумя точками у клиента лежит целый ряд
+# отказов: нет явного кабинета, отказ выдачи одноразового гранта, живая проба
+# канала, открытый предохранитель. Ни один из них не создаёт кампанию.
+
+
+def _graph_client(stub, *, circuit_breaker=None):
+    """Реальный MetaApiClient с подменённым транспортом (без gRPC-канала)."""
+    from core.meta_api.client import MetaApiClient
+
+    client = MetaApiClient(session_id="session-dispatch", circuit_breaker=circuit_breaker)
+    client._stub = stub  # noqa: SLF001
+    return client
+
+
+# Money-вызов без выданного гранта отказывает внутри клиента, но ДО транспорта:
+# отправки не было, и клиент обязан это сказать вызывающему.
+@pytest.mark.asyncio
+async def test_capability_refusal_is_not_a_dispatch() -> None:
+    from core.meta_api.dispatch import observe_graph_dispatch
+
+    # У заглушки нет ExecuteGraphCallV5: обращение к транспорту было бы AttributeError.
+    client = _graph_client(SimpleNamespace())
+
+    with observe_graph_dispatch() as dispatch:
+        with pytest.raises(PermanentError):
+            await client.execute_graph_call(
+                method="POST",
+                endpoint="/act_123/campaigns",
+                body_json={"name": "Campaign", "status": "PAUSED"},
+                ad_account_id="123",
+            )
+
+    assert dispatch.dispatched is False
+
+
+# Открытый предохранитель отказывает РАНЬШЕ транспорта — это отказ до отправки,
+# а не потерянный ответ. Отметка стоит за предохранителем, а не перед ним.
+@pytest.mark.asyncio
+async def test_open_circuit_breaker_is_not_a_dispatch() -> None:
+    from core.browser.circuit_breaker import AsyncCircuitBreaker
+    from core.meta_api.dispatch import observe_graph_dispatch
+    from core.meta_api.errors import SessionUnavailableError
+
+    breaker = AsyncCircuitBreaker(name="test-meta-api", failure_threshold=1, recovery_timeout=60.0)
+    await breaker.record_failure(RuntimeError("browser-agent лёг"))
+
+    transport_calls: list[object] = []
+
+    async def _never_called(request, **_call_kwargs):
+        transport_calls.append(request)
+        raise AssertionError("предохранитель обязан отказать до транспорта")
+
+    client = _graph_client(
+        SimpleNamespace(ExecuteGraphCallV5=_never_called),
+        circuit_breaker=breaker,
+    )
+
+    with observe_graph_dispatch() as dispatch:
+        with pytest.raises(SessionUnavailableError):
+            await client.execute_graph_call(method="GET", endpoint="/me")
+
+    assert transport_calls == []
+    assert dispatch.dispatched is False
+
+
+# Обрыв уже НА транспорте — ровно тот случай, ради которого исход остаётся
+# неоднозначным: запрос ушёл, ответа нет.
+@pytest.mark.asyncio
+async def test_transport_failure_after_send_is_a_dispatch() -> None:
+    from core.meta_api.dispatch import observe_graph_dispatch
+
+    async def _dies_in_flight(request, **_call_kwargs):
+        raise RuntimeError("транспорт оборвался после отправки")
+
+    client = _graph_client(SimpleNamespace(ExecuteGraphCallV5=_dies_in_flight))
+
+    with observe_graph_dispatch() as dispatch:
+        with pytest.raises(RuntimeError):
+            await client.execute_graph_call(method="GET", endpoint="/me")
+
+    assert dispatch.dispatched is True
+
+
 # Permanent-причина (например, валидация) без attempted → permanent.
 def test_classify_pre_post_permanent() -> None:
     err = CampaignExecutionError("bad config")
@@ -1160,3 +1246,37 @@ async def test_partial_without_login_cause_skips_login_incident(monkeypatch) -> 
     )
 
     assert failed.await_args.kwargs["login_required_ad_account_id"] is None
+
+
+# Утечка, найденная приёмкой: сообщение PartialCreateError запекало repr причины, а
+# MetaApiError.__repr__ несёт fbtrace_id и полный текст Graph-ответа. Это сообщение
+# доезжает до записи задачи и до карточки прогона, то есть секрет утекал туда, куда
+# по канону не должен попадать вовсе. Проверяется ПОВЕДЕНИЕ, а не текст функции.
+@pytest.mark.parametrize("created", [{"campaigns": ["120250000000001"]}, {}])
+def test_partial_create_message_never_carries_fbtrace_or_raw_meta_text(created) -> None:
+    from core.campaign_builder.execute import PartialCreateError, _raise_for_failure
+    from core.meta_api.errors import PermanentError
+
+    secret_trace = "AbCdEf_fbtrace_secret_0123456789"
+    raw_meta_text = "Unsupported post request. token=EAA" + "x" * 120
+    cause = PermanentError(
+        raw_meta_text,
+        code=100,
+        subcode=33,
+        endpoint="/act_1/campaigns",
+        fbtrace_id=secret_trace,
+    )
+    assert secret_trace in repr(cause), "предпосылка теста: repr действительно течёт"
+
+    with pytest.raises((PartialCreateError, Exception)) as raised:
+        _raise_for_failure(
+            cause=cause,
+            created=dict(created),
+            failed_step="creating",
+            campaign_create_attempted=True,
+        )
+
+    text = str(raised.value)
+    assert secret_trace not in text, "fbtrace_id не должен попадать в сообщение отказа"
+    assert "EAA" not in text, "сырой текст Graph-ответа не должен попадать в сообщение"
+    assert type(cause).__name__ in text, "класс причины назвать обязаны"

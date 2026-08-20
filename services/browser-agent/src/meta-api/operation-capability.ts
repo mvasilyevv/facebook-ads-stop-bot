@@ -276,3 +276,32 @@ export function verifyOperationCapability(
     throw new Error('Browser operation capability signature is invalid');
   }
 }
+
+/**
+ * Re-check only the temporal window of an already-verified grant.
+ *
+ * The signature is bound to the moment it was issued and does not change with
+ * time; only freshness does. This is meant to run a second time, separately
+ * from {@link verifyOperationCapability}, at the moment an operation actually
+ * starts working — i.e. once it has won the control-page FIFO lock (see
+ * page-lock.ts). A short-TTL grant (execute_graph_call: 40s) can be entirely
+ * consumed by that queue wait alone; without this second check the grant's
+ * clock effectively runs from the moment it was signed, not from the moment
+ * work began, and dies silently mid-queue instead of failing with a named,
+ * classifiable reason.
+ */
+export function assertCapabilityStillFresh(
+  request: Record<string, unknown>,
+  rpc: OperationCapabilityBinding['rpc'],
+  options: { nowSeconds?: number } = {},
+): void {
+  const nowSeconds = options.nowSeconds ?? Math.floor(Date.now() / 1_000);
+  const expiresAt = Number(request.capability_expires_at);
+  if (
+    !Number.isSafeInteger(expiresAt)
+    || expiresAt <= nowSeconds
+    || expiresAt > nowSeconds + MAX_TTL_SECONDS_BY_RPC[rpc]
+  ) {
+    throw new Error('Browser operation capability is expired or unbounded');
+  }
+}

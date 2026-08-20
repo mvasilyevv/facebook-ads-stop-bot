@@ -77,6 +77,7 @@ from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     BrowserReadinessRejectedError,
     LoginRequiredError,
+    MetaApiError,
     PreDispatchRejectedError,
 )
 from core.meta_api.upload import MediaUploader
@@ -420,6 +421,7 @@ def _campaign_unknown_result(
     failed_step: str | None = None,
     pre_dispatch: bool | None = None,
     pre_dispatch_reason_code: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Результат неизвестного исхода: сверка обязательна, признаки — только доказанные.
 
@@ -429,6 +431,10 @@ def _campaign_unknown_result(
     pre_dispatch_reason_code — код названной причины этого отказа; из него карточка
     инцидента берёт человеческий текст. Без причины ключа нет: «неизвестно» остаётся
     неизвестным, а не превращается в пустую строку у оператора.
+
+    diagnostics — структурная причина отказа из ``_failure_diagnostics`` (закрытый
+    набор безопасных полей, без Graph-текста/fbtrace_id). Идёт в ``task_queue.result``
+    рядом с ``reason``, чтобы разбор задачи не требовал чтения исходников.
     """
     result: dict[str, Any] = {
         "outcome": "UNKNOWN",
@@ -446,6 +452,8 @@ def _campaign_unknown_result(
         result["pre_dispatch"] = bool(pre_dispatch)
     if pre_dispatch_reason_code:
         result["pre_dispatch_reason_code"] = pre_dispatch_reason_code
+    if diagnostics:
+        result["diagnostics"] = diagnostics
     if task.correlation_id is not None:
         result["correlation_id"] = str(task.correlation_id)
     return result
@@ -491,6 +499,65 @@ def _proven_pre_dispatch_rejection(exc: BaseException) -> PreDispatchRejectedErr
     return None
 
 
+_FAILURE_DIAGNOSTIC_KEYS = (
+    "exception_class",
+    "reason_code",
+    "code",
+    "subcode",
+    "endpoint",
+    "stage",
+    "failed_step",
+)
+
+
+def _failure_diagnostics(
+    exc: BaseException,
+    *,
+    stage: str | None = None,
+    failed_step: str | None = None,
+) -> dict[str, Any]:
+    """Причина отказа в закрытом наборе безопасных полей — ``_FAILURE_DIAGNOSTIC_KEYS``.
+
+    Живая находка 20.08: ветка ack_lost строила статическую строку без причины,
+    и исходное исключение не было видно нигде — ни в ``task_queue.last_error``,
+    ни в ``campaign_run.error``, ни в логе. Эта функция — единая точка сбора
+    причины для всех терминальных веток, которым её не хватало.
+
+    ``MetaApiError.__repr__`` несёт ``fbtrace_id`` и полный Graph-текст (см.
+    ``core/meta_api/errors.py``) — сюда он никогда не попадает: используются
+    только именованные атрибуты (``code``/``subcode``/``endpoint``/
+    ``reason_code``), никакого ``repr(exc)``/``str(exc)``.
+
+    Обходим цепочку ``__cause__`` — ``execute.py`` заворачивает исходную
+    причину через ``raise ... from cause`` (тот же приём, что и
+    ``_proven_pre_dispatch_rejection``), поэтому самая говорящая причина обычно
+    не в верхнем исключении, а глубже.
+    """
+    diagnostics: dict[str, Any] = {"exception_class": type(exc).__name__}
+    if stage is not None:
+        diagnostics["stage"] = stage
+    if failed_step is not None:
+        diagnostics["failed_step"] = failed_step
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        reason_code = getattr(current, "reason_code", None)
+        if reason_code:
+            diagnostics["reason_code"] = reason_code
+            diagnostics["exception_class"] = type(current).__name__
+        if isinstance(current, MetaApiError):
+            diagnostics["exception_class"] = type(current).__name__
+            if current.code is not None:
+                diagnostics["code"] = current.code
+            if current.subcode is not None:
+                diagnostics["subcode"] = current.subcode
+            if current.endpoint is not None:
+                diagnostics["endpoint"] = current.endpoint
+        current = current.__cause__
+    return diagnostics
+
+
 def _has_any_created_ids(created: dict[str, list[str]]) -> bool:
     return any(created.get(kind) for kind in created)
 
@@ -512,6 +579,11 @@ def _is_proven_pre_dispatch(exc: BaseException) -> bool:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         if isinstance(current, PreDispatchRejectedError):
+            return True
+        # Явная отметка от слоя исполнения: транспорт подтвердил, что запрос не
+        # уходил. Класс причины при этом может быть любым — например отказ
+        # предохранителя, который в семью PreDispatchRejectedError не входит.
+        if getattr(current, "pre_dispatch", None) is True:
             return True
         seen.add(id(current))
         current = current.__cause__ or current.__context__
@@ -724,9 +796,13 @@ async def process_one_task(
     except CreatorTaskControlAbort as exc:
         await _finalize_campaign_control_abort(engine, task, control, run_id=str(run_id), exc=exc)
         return
-    except CreatorTaskFenceLost:
+    except CreatorTaskFenceLost as exc:
         _record_stale_fence()
-        logger.warning("campaign_create: stale task fence before execution task=%s", task.id)
+        logger.warning(
+            "campaign_create: stale task fence before execution task=%s diagnostics=%s",
+            task.id,
+            _failure_diagnostics(exc),
+        )
         return
 
     if control.external_started:
@@ -820,11 +896,12 @@ async def _execute_run(
         except CreatorTaskControlAbort as exc:
             await _finalize_campaign_control_abort(engine, task, control, run_id=run_id, exc=exc)
             return
-        except CreatorTaskFenceLost:
+        except CreatorTaskFenceLost as exc:
             _record_stale_fence()
             logger.warning(
-                "campaign_create: queued transition rejected by stale fence task=%s",
+                "campaign_create: queued transition rejected by stale fence task=%s diagnostics=%s",
                 task.id,
+                _failure_diagnostics(exc, stage="uniquifying"),
             )
             return
         logger.info(
@@ -932,11 +1009,12 @@ async def _execute_run(
             exc.external_started,
         )
         return
-    except CreatorTaskFenceLost:
+    except CreatorTaskFenceLost as exc:
         _record_stale_fence()
         logger.warning(
-            "campaign_create: task=%s lost lease; active external work cancelled",
+            "campaign_create: task=%s lost lease; active external work cancelled diagnostics=%s",
             task.id,
+            _failure_diagnostics(exc, stage=last_stage),
         )
         return
     except asyncio.TimeoutError:
@@ -999,22 +1077,34 @@ async def _execute_run(
                 exc.created_ids,
                 exc.failed_step,
             )
-            error = f"partial_fail (step={exc.failed_step}): проверь Meta вручную: {exc!r}"
+            # repr исключения сюда не идёт: MetaApiError.__repr__ несёт fbtrace_id и
+            # полный текст Graph-ответа. Причина собирается тем же безопасным набором
+            # полей, что и в остальных терминальных ветках.
+            diagnostics = _failure_diagnostics(exc, stage="creating", failed_step=exc.failed_step)
+            error = (
+                f"partial_fail (step={exc.failed_step}): проверь Meta вручную: cause={diagnostics}"
+            )
         else:
             # POST campaign инициирован, ответ Meta потерян: ни одного id не
             # подтверждено. Чистить нечего, но повтор всё равно запрещён — объект
             # мог реально родиться в Meta без дошедшего ответа.
             reason = "ack_lost_nothing_confirmed"
+            # #ack-lost: раньше эта ветка строила статическую строку без причины —
+            # исходное исключение (что именно Meta не вернула: код/subcode/endpoint)
+            # не было видно нигде. _failure_diagnostics — та же причина, что и в
+            # exc.__cause__, в закрытом наборе безопасных полей (см. её docstring).
+            diagnostics = _failure_diagnostics(exc, stage=last_stage, failed_step=exc.failed_step)
             logger.error(
                 "campaign_create: task id=%s ACK LOST — ответ Meta потерян после "
                 "POST кампании, подтверждённых объектов нет, нужна сверка, повтор "
-                "запрещён: step=%s",
+                "запрещён: step=%s diagnostics=%s",
                 task.id,
                 exc.failed_step,
+                diagnostics,
             )
             error = (
                 f"ack_lost (step={exc.failed_step}): ответ Meta потерян после POST "
-                "кампании: чистить нечего, нужна сверка, повтор запрещён."
+                f"кампании: чистить нечего, нужна сверка, повтор запрещён. cause={diagnostics}"
             )
         await _persist_partial_created_ids(
             engine,
@@ -1038,6 +1128,7 @@ async def _execute_run(
                 failed_step=exc.failed_step,
                 pre_dispatch=exc.pre_dispatch,
                 pre_dispatch_reason_code=exc.pre_dispatch_reason_code,
+                diagnostics=diagnostics,
             ),
             progress={
                 "stage": "failed",
@@ -1120,13 +1211,27 @@ async def _execute_run(
         # это REJECTED, сколько бы успешных вызовов ему ни предшествовало: те
         # завершились определённо, а этот не начинался.
         if control.external_started and not _is_proven_pre_dispatch(exc):
+            # Раньше эта ветка тоже строила текст без причины (repr(exc) здесь —
+            # ловушка: exc может оказаться MetaApiError, чей __repr__ несёт
+            # fbtrace_id и полный Graph-текст). _failure_diagnostics — тот же
+            # закрытый набор безопасных полей, что и в ветке ack_lost.
+            diagnostics = _failure_diagnostics(exc, stage=last_stage)
+            logger.error(
+                "campaign_create: task id=%s ambiguous failure after external "
+                "boundary diagnostics=%s",
+                task.id,
+                diagnostics,
+            )
             await finalize_run_failed(
                 engine,
                 run_id,
                 task=task,
-                error=f"ambiguous failure after external boundary: {exc!r}",
+                error=f"ambiguous failure after external boundary: cause={diagnostics}",
                 task_result=_campaign_unknown_result(
-                    task, run_id=run_id, reason="external_result_ambiguous"
+                    task,
+                    run_id=run_id,
+                    reason="external_result_ambiguous",
+                    diagnostics=diagnostics,
                 ),
                 progress={
                     "stage": "failed",

@@ -25,6 +25,7 @@ import {
 } from '../session-health.js';
 import {
   assertCanonicalGraphMethodSemantics,
+  assertCapabilityStillFresh,
   BROWSER_OPERATION_CONTRACT_VERSION,
   graphOperationBinding,
   mediaOperationBinding,
@@ -231,7 +232,15 @@ function bindGrpcAbort(call: any): {
   };
 }
 
-function grpcAbortError(signal: AbortSignal): {
+/** Whether a money capability grant has been durably (irreversibly) consumed. */
+interface CapabilityConsumptionState {
+  consumed: boolean;
+}
+
+function grpcAbortError(
+  signal: AbortSignal,
+  capabilityState?: CapabilityConsumptionState,
+): {
   code: number;
   message: string;
   metadata?: grpc.Metadata;
@@ -245,9 +254,25 @@ function grpcAbortError(signal: AbortSignal): {
     );
   }
   if (reason === 'capability_expired') {
+    // capabilityState отсутствует у вызывающих, которые ещё не отслеживают
+    // списание гранта (сейчас — потоковый uploadVideo). Для них неизвестность
+    // обязана остаться неизвестностью: реклассификация допустима только там,
+    // где явно доказано, что _consumeOperationCapability не завершался.
+    if (capabilityState !== undefined && !capabilityState.consumed) {
+      // Грант истёк, но необратимое списание (_consumeOperationCapability)
+      // ещё не состоялось: наружу гарантированно ничего не ушло. Это тот же
+      // доказанный pre-send отказ, что и остальная семья capability_*, а не
+      // безымянный DEADLINE_EXCEEDED — код причины в трейлере обязателен.
+      return grpcErrorForOperationFailure(
+        new Error('Browser operation capability is expired or unbounded'),
+      );
+    }
+    // Send boundary уже пересечён (или неизвестно, пересечён ли): fetch мог
+    // уйти в Meta до того, как истёк грант. Кода причины здесь нет намеренно —
+    // приписать его значило бы выдать неоднозначный исход за доказанный отказ.
     return {
       code: grpc.status.DEADLINE_EXCEEDED,
-      message: 'Browser operation capability expired',
+      message: 'Browser operation capability expired after the grant was consumed',
     };
   }
   if (reason === 'grpc_deadline_exceeded') {
@@ -265,6 +290,7 @@ function grpcAbortError(signal: AbortSignal): {
 function createUnaryOperationResponder(
   callback: any,
   signal: AbortSignal,
+  capabilityState?: CapabilityConsumptionState,
 ): {
   respond: (error: any, response?: any) => void;
   dispose: () => void;
@@ -275,7 +301,7 @@ function createUnaryOperationResponder(
     responded = true;
     callback(error, response);
   };
-  const onAbort = (): void => respond(grpcAbortError(signal));
+  const onAbort = (): void => respond(grpcAbortError(signal, capabilityState));
   signal.addEventListener('abort', onAbort, { once: true });
   return {
     respond,
@@ -450,9 +476,15 @@ export function createMetaApiServiceHandlers(
 
   async function executeGraphCallV5Handler(call: any, callback: any): Promise<void> {
     const grpcAbort = bindGrpcAbort(call);
+    // Отдельная переменная, а не поле на grpcAbort: она отвечает не за
+    // дедлайн, а за то, пересечён ли необратимый send boundary — этим
+    // определяется, можно ли поздний capability_expired считать доказанным
+    // pre-send отказом (см. grpcAbortError/onAbort ниже).
+    const capabilityState: CapabilityConsumptionState = { consumed: false };
     const responder = createUnaryOperationResponder(
       callback,
       grpcAbort.controller.signal,
+      capabilityState,
     );
     try {
       const req = call.request;
@@ -531,12 +563,24 @@ export function createMetaApiServiceHandlers(
           }
         : undefined;
       if (moneyControl) {
+        // Дешёвый ранний отказ: явно битый или уже просроченный на входе
+        // грант не должен вообще занимать очередь control-страницы.
         _verifyOperationCapability(req, capabilityBinding!);
-        grpcAbort.bindCapabilityExpiry(Number(req.capability_expires_at));
       }
       const role = moneyControl ? 'control' : 'interactive';
       const operationId = `${role}:${session.id}:${actId || 'default'}:${randomUUID()}`;
       const result = await withPageRoleLock(session.id, role, actId, async () => {
+        if (moneyControl) {
+          // Грант живёт с момента, когда операция реально захватила
+          // control-страницу, а не с момента подписи (см. operation-capability.ts):
+          // FIFO-очередь кабинета может растянуться дольше короткого TTL, и без
+          // этой переверификации грант умирал бы просто в ожидании, отвечая
+          // безымянным DEADLINE_EXCEEDED — тем же кодом, что и честная потеря
+          // ответа. Синхронный throw здесь превращает это в тот же доказанный
+          // pre-send отказ, что и остальная семья capability_*.
+          assertCapabilityStillFresh(req, 'execute_graph_call');
+          grpcAbort.bindCapabilityExpiry(Number(req.capability_expires_at));
+        }
         let operationPage: Page | undefined;
         try {
           operationPage = moneyControl
@@ -574,6 +618,10 @@ export function createMetaApiServiceHandlers(
               capabilityBinding!,
               grpcAbort.controller.signal,
             );
+            // Send boundary пересечён необратимо: с этого момента поздний
+            // capability_expired больше не доказывает, что наружу ничего не
+            // ушло, — исход остаётся неоднозначным (см. grpcAbortError).
+            capabilityState.consumed = true;
           }
           const graphResult = await executeGraphCall(operationPage, params, {
             signal: grpcAbort.controller.signal,
