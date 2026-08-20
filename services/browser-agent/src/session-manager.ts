@@ -110,6 +110,18 @@ function safePageUrl(page: Page | null | undefined): string {
   }
 }
 
+/** Живо ли CDP-соединение. Клиент без isConnected считается живым (как в тестах). */
+function isBrowserAlive(browser: Browser | null | undefined): boolean {
+  try {
+    return Boolean(
+      browser &&
+        (typeof browser.isConnected !== "function" || browser.isConnected()),
+    );
+  } catch {
+    return false;
+  }
+}
+
 function safeBrowserContexts(browser: Browser | null): BrowserContext[] {
   try {
     return browser?.contexts() || [];
@@ -349,6 +361,30 @@ export class SessionManager {
       signal,
     } = options;
     throwIfOperationAborted(signal);
+
+    // Один профиль Vision — одна сессия. Реестр вкладок принадлежит сессии, и
+    // каждая новая сессия открывала СВОИ вкладки тех же кабинетов: перезапуск
+    // воркера или второй потребитель канала удваивали набор вкладок профиля, а
+    // прежние оставались в браузере навсегда. Профиль один и физически, и здесь.
+    const liveSession = forceProfileRestart
+      ? null
+      : this.findLiveSessionForProfile(visionProfileId);
+    if (liveSession) {
+      console.log(
+        `[session-manager] startBrowser: профиль ${visionProfileId} уже ведёт ` +
+          `сессия ${liveSession.id}, переиспользую её вкладки`,
+      );
+      // Свежие реквизиты Vision у вызывающего новее наших: перезапуск профиля
+      // под maintenance пойдёт по ним, а не по токену, протухшему с прошлой
+      // сессии.
+      if (visionXToken) {
+        liveSession.visionXToken = visionXToken;
+      }
+      if (visionApiUrl) {
+        liveSession.visionApiUrl = visionApiUrl;
+      }
+      return liveSession;
+    }
 
     const visionClient = new VisionClient(visionXToken, visionApiUrl);
 
@@ -749,6 +785,27 @@ export class SessionManager {
     return session;
   }
 
+  /** Сессия, которая уже ведёт этот профиль по живому CDP-соединению. */
+  private findLiveSessionForProfile(profileId: string): BrowserSession | null {
+    const normalizedProfileId = String(profileId || "").trim();
+    if (!normalizedProfileId) {
+      return null;
+    }
+    return (
+      Array.from(this.sessions.values())
+        .filter(
+          (candidate) =>
+            candidate.status === "connected" &&
+            candidate.visionProfileId === normalizedProfileId &&
+            isBrowserAlive(candidate.browser),
+        )
+        .sort(
+          (left, right) =>
+            right.connectedAt.getTime() - left.connectedAt.getTime(),
+        )[0] ?? null
+    );
+  }
+
   getSessionForVisionProfile(profileId: string): BrowserSession {
     const normalizedProfileId = String(profileId || "").trim();
     if (!normalizedProfileId) {
@@ -997,16 +1054,7 @@ export class SessionManager {
     session.interactivePages ??= new Map();
 
     const browser = session.browser;
-    let alive = false;
-    try {
-      alive = Boolean(
-        browser &&
-        (typeof browser.isConnected !== "function" || browser.isConnected()),
-      );
-    } catch {
-      alive = false;
-    }
-    const contexts = alive ? safeBrowserContexts(browser) : [];
+    const contexts = isBrowserAlive(browser) ? safeBrowserContexts(browser) : [];
     const context = contexts[0];
     if (!browser || !context) {
       throw new Error(

@@ -414,8 +414,9 @@ async def _refresh_observer_campaigns_unfenced(
         # Гарантируем активную Vision-сессию: refresh самодостаточен и НЕ зависит от того,
         # сканирует ли observer сейчас (иначе зацикленность: включение скана гейтится пустым
         # allowlist'ом → observer не сканирует → нет сессии → refresh не видит кампании →
-        # нечем заполнить allowlist). StartBrowser создаёт только process-local сессию,
-        # подключаясь к уже живому CDP; lifecycle профиля здесь не меняется.
+        # нечем заполнить allowlist). StartBrowser подключается к уже живому CDP:
+        # он отдаёт сессию, которая уже ведёт этот профиль, а если её нет — заводит
+        # свою. Lifecycle профиля здесь не меняется.
         await client.start_browser()
         # По каждому кабинету list_campaigns откроет его вкладку (ensureAdsManagerPage(actId)),
         # достанет graph-токен со страницы и резолвит кампании по owner_tag.

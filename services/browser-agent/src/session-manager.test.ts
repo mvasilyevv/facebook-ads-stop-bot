@@ -2425,6 +2425,163 @@ test("уехавшая с кабинета вкладка возвращаетс
   assert.equal(currentUrl, adsManagerUrlForAct("333"));
 });
 
+// #218: реестр вкладок принадлежит сессии, поэтому вторая сессия того же
+// профиля открывала СВОИ вкладки тех же кабинетов. Перезапуск воркера или
+// второй потребитель канала так удваивали набор вкладок, а прежние оставались
+// в браузере. Профиль один — значит и сессия одна.
+test("повторный StartBrowser того же профиля переиспользует сессию и её вкладки", async () => {
+  const manager = new SessionManager();
+  const cabinetTab = {
+    isClosed: () => false,
+    url: () => adsManagerUrlForAct("111"),
+    evaluate: async () => ({ present: true }),
+  };
+  let newPageCalls = 0;
+  const browser = {
+    isConnected: () => true,
+    contexts: () => [
+      {
+        addInitScript: async () => {},
+        pages: () => [cabinetTab],
+        newPage: async () => {
+          newPageCalls += 1;
+          return assert.fail("вкладки живого профиля не открываются заново");
+        },
+      },
+    ],
+  };
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  let connectCalls = 0;
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return "folder-1";
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: "folder-1", profile_id: "profile-1", port: 7001 };
+  };
+  VisionClient.prototype.waitUntilCdpReady =
+    async function waitUntilCdpReady() {
+      return true;
+    };
+  (chromium as any).connectOverCDP = async () => {
+    connectCalls += 1;
+    return browser as any;
+  };
+
+  try {
+    const first = await manager.startBrowser({
+      visionXToken: "token-old",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+    const scan = await manager.ensureScanPage(first, { actId: "111" });
+
+    const second = await manager.startBrowser({
+      visionXToken: "token-fresh",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+
+    assert.equal(second.id, first.id, "второй потребитель канала — та же сессия");
+    assert.equal(connectCalls, 1, "второе CDP-подключение к тому же профилю не нужно");
+    assert.equal(
+      await manager.ensureScanPage(second, { actId: "111" }),
+      scan,
+      "вкладка кабинета переиспользуется, а не открывается заново",
+    );
+    assert.equal(newPageCalls, 0);
+    assert.equal(
+      second.visionXToken,
+      "token-fresh",
+      "восстановление профиля пойдёт по свежим реквизитам, а не по прошлым",
+    );
+    assert.equal(manager.listSessions().length, 1);
+
+    const otherProfile = await manager.startBrowser({
+      visionXToken: "token-fresh",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-2",
+    });
+    assert.notEqual(
+      otherProfile.id,
+      first.id,
+      "другой профиль Vision — другая сессия",
+    );
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
+});
+
+// Сессию с оборванным CDP переиспользовать нечем: её страницы мертвы.
+test("сессия с мёртвым CDP не переиспользуется при StartBrowser", async () => {
+  const manager = new SessionManager();
+  const adsPage = {
+    isClosed: () => false,
+    url: () => adsManagerUrlForAct("111"),
+  };
+  let connected = true;
+  const deadBrowser = {
+    isConnected: () => connected,
+    contexts: () => [{ addInitScript: async () => {}, pages: () => [adsPage] }],
+    removeAllListeners: () => {},
+  };
+  const freshBrowser = {
+    isConnected: () => true,
+    contexts: () => [{ addInitScript: async () => {}, pages: () => [adsPage] }],
+  };
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  let connectCalls = 0;
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return "folder-1";
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: "folder-1", profile_id: "profile-1", port: 7001 };
+  };
+  VisionClient.prototype.waitUntilCdpReady =
+    async function waitUntilCdpReady() {
+      return true;
+    };
+  (chromium as any).connectOverCDP = async () => {
+    connectCalls += 1;
+    return (connectCalls === 1 ? deadBrowser : freshBrowser) as any;
+  };
+
+  try {
+    const first = await manager.startBrowser({
+      visionXToken: "token",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+    connected = false;
+
+    const second = await manager.startBrowser({
+      visionXToken: "token",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+
+    assert.notEqual(second.id, first.id);
+    assert.equal(connectCalls, 2);
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
+});
+
 // #205: профиль, который забрала другая машина, НЕ запускается заново.
 // Vision при остановке архивирует профиль в облако, а при запуске разворачивает
 // архив обратно. Если тот же профиль открыт на второй машине, наш «перезапуск

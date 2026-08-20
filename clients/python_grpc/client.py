@@ -177,7 +177,11 @@ class BrowserAgentClient:
         return await self.start_browser()
 
     async def start_browser(self) -> str:
-        """Attach a process-local session to an already-live Vision profile."""
+        """Attach to the session of an already-live Vision profile.
+
+        Одна сессия на профиль: browser-agent отдаёт ту, что уже ведёт профиль,
+        и её вкладки кабинетов переиспользуются вместо вторых копий.
+        """
         req = browser_session_pb2.StartBrowserRequest(
             vision_x_token=self.config.vision_x_token,
             vision_api_url=self.config.vision_api_url,
