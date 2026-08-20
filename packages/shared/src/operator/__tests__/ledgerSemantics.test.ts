@@ -180,6 +180,26 @@ describe("operator ledger semantics", () => {
     ]);
   });
 
+  it("does not merge two failures that fell for different reasons", () => {
+    const base = makeOperatorSnapshot().actions.data!.items[0]!;
+    const failure = (id: string, reason: string) => ({
+      ...base,
+      id,
+      public_id: `#${id}`,
+      state: "failed" as const,
+      reason,
+    });
+
+    // Свёртка по состоянию спрятала бы вторую причину за «×2» — ровно так
+    // пять разных отказов залива читались одной строкой.
+    const groups = collapseConsecutiveOperatorActions([
+      failure("9101", "Шаг: создание объектов кампании. Meta отказала."),
+      failure("9102", "Шаг: загрузка креативов. Истёк отведённый заливу срок."),
+    ]);
+
+    expect(groups.map((group) => group.count)).toEqual([1, 1]);
+  });
+
   it("does not merge the same command aimed at different ads", () => {
     const base = makeOperatorSnapshot().actions.data!.items[0]!;
 

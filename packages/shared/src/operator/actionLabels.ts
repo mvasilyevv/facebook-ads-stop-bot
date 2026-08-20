@@ -31,7 +31,10 @@ export function operatorActionKindLabel(kind: unknown): string {
   return "Операторское действие";
 }
 
-/** Derive safe operator copy from the public lifecycle, never backend reason text. */
+/**
+ * Что означает состояние команды. Это подпись состояния, а не причина исхода:
+ * причина приходит из события в `action.reason` — см. `operatorActionReason`.
+ */
 export function operatorActionStateReason(state: unknown): string {
   if (
     typeof state === "string" &&
@@ -42,6 +45,62 @@ export function operatorActionStateReason(state: unknown): string {
     ];
   }
   return "Состояние команды требует сверки. Не повторяйте действие вслепую.";
+}
+
+/** Сверка обязательна независимо от того, названа причина или нет. */
+const RECONCILE_WARNING =
+  "Результат требует сверки — не повторяйте действие вслепую.";
+
+/**
+ * Зеркало серверного `sanitize_operator_reason` (`core/tasks/action_reason.py`).
+ * Причина приходит из БД, а не из кода экрана, поэтому последний рубеж перед
+ * оператором проверяет её здесь: внутренности Python, адрес, секрет с
+ * разделителем, Graph-токен, идентификатор запроса и UUID не показываются
+ * вовсе. Обрезанный traceback в ленте хуже честного «причина не записана».
+ *
+ * Разошедшееся с сервером правило — дефект: сервер отбрасывает такой текст ещё
+ * при чтении, здесь он не должен появиться.
+ */
+const UNSAFE_OPERATOR_REASON =
+  /Traceback|File "|line \d+, in |https?:\/\/|\b(?:access_token|api[_-]?key|x-token|token|password|secret|fbtrace[_-]?id)\s*[:=]|\bBearer\s|\bEAA[A-Za-z0-9_-]{16,}|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+
+function recordedOperatorReason(reason: unknown): string {
+  if (typeof reason !== "string") return "";
+  const trimmed = reason.trim();
+  if (!trimmed || UNSAFE_OPERATOR_REASON.test(trimmed)) return "";
+  return trimmed;
+}
+
+const UNRECORDED_REASON = {
+  failed: "Причина отказа не записана. Проверьте состояние перед повтором.",
+  unknown: `Причина не записана. ${RECONCILE_WARNING}`,
+} as const;
+
+/**
+ * Причина исхода действия: та, что записал бэкенд при завершении задачи.
+ *
+ * Из состояния причина не выводится. Раньше выводилась — и пять заливов,
+ * упавших по пяти разным причинам (отключённый кабинет, потерянный контекст
+ * страницы, недоступный браузер, исчерпанный дедлайн), читались в очереди
+ * одной строкой.
+ *
+ * `null` от бэкенда означает «причина не записана», а не «всё в порядке»:
+ * у отказа и неизвестного итога это говорится прямым текстом. Предупреждение о
+ * сверке остаётся при любом `unknown` — оно про деньги, а не про причину.
+ */
+export function operatorActionReason(action: {
+  state: unknown;
+  reason?: string | null;
+}): string {
+  const recorded = recordedOperatorReason(action.reason);
+  if (action.state === "unknown") {
+    return recorded
+      ? `${recorded} ${RECONCILE_WARNING}`
+      : UNRECORDED_REASON.unknown;
+  }
+  if (recorded) return recorded;
+  if (action.state === "failed") return UNRECORDED_REASON.failed;
+  return operatorActionStateReason(action.state);
 }
 
 export type OperatorCommandTone = "success" | "info" | "warning" | "error";

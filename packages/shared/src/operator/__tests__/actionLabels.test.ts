@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   operatorActionKindLabel,
+  operatorActionReason,
   operatorActionRecovery,
   operatorActionStateReason,
   operatorCommandTone,
@@ -45,6 +46,72 @@ describe("operator action labels", () => {
   it("does not expose an unknown backend state", () => {
     expect(operatorActionStateReason("internal_retry_exhausted")).toBe(
       "Состояние команды требует сверки. Не повторяйте действие вслепую.",
+    );
+  });
+
+  it("shows the recorded reason instead of a constant per state", () => {
+    const disabledAccount = operatorActionReason({
+      state: "failed",
+      reason:
+        "Шаг: создание объектов кампании. Ответ Meta: Отключенные аккаунты не могут создавать рекламу.",
+    });
+    const deadline = operatorActionReason({
+      state: "failed",
+      reason: "Шаг: загрузка креативов. Истёк отведённый заливу срок.",
+    });
+
+    expect(disabledAccount).not.toBe(deadline);
+    expect(disabledAccount).toContain("Отключенные аккаунты");
+    expect(deadline).toContain("Истёк отведённый заливу срок");
+  });
+
+  it("says the reason is unrecorded instead of a cheerful constant", () => {
+    expect(operatorActionReason({ state: "failed", reason: null })).toBe(
+      "Причина отказа не записана. Проверьте состояние перед повтором.",
+    );
+    expect(operatorActionReason({ state: "unknown", reason: "   " })).toBe(
+      "Причина не записана. Результат требует сверки — не повторяйте действие вслепую.",
+    );
+  });
+
+  it("keeps the reconcile warning on an ambiguous outcome that names its reason", () => {
+    expect(
+      operatorActionReason({
+        state: "unknown",
+        reason: "Ответ Meta потерян после отправки кампании.",
+      }),
+    ).toBe(
+      "Ответ Meta потерян после отправки кампании. Результат требует сверки — не повторяйте действие вслепую.",
+    );
+  });
+
+  it("refuses a reason that carries internals instead of showing it trimmed", () => {
+    expect(
+      operatorActionReason({
+        state: "failed",
+        reason: "Traceback: secret-host token=unsafe",
+      }),
+    ).toBe("Причина отказа не записана. Проверьте состояние перед повтором.");
+    expect(
+      operatorActionReason({
+        state: "failed",
+        reason: "Ответ Meta: сбой на https://graph.facebook.example/act_1/ads",
+      }),
+    ).toBe("Причина отказа не записана. Проверьте состояние перед повтором.");
+    expect(
+      operatorActionReason({
+        state: "failed",
+        reason: "Отказ по объекту 00000000-0000-4000-8000-000000000099",
+      }),
+    ).toBe("Причина отказа не записана. Проверьте состояние перед повтором.");
+  });
+
+  it("keeps state copy for commands that have not failed", () => {
+    expect(operatorActionReason({ state: "queued", reason: null })).toBe(
+      "Команда принята и ожидает выполнения.",
+    );
+    expect(operatorActionReason({ state: "confirmed", reason: null })).toBe(
+      "Результат команды подтверждён.",
     );
   });
 

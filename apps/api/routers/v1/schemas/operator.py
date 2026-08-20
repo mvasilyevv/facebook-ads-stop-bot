@@ -249,7 +249,14 @@ class OperatorActionItem(BaseModel):
     requested_at: datetime
     updated_at: datetime
     requested_by: str | None
-    reason: str | None
+    # Причина исхода, записанная при завершении задачи. Из состояния не
+    # выводится: пять отказов по пяти разным причинам не должны читаться
+    # одинаково. null означает «причина не записана», а не «всё в порядке».
+    reason: str | None = Field(
+        description=(
+            "Recorded outcome reason in operator language; null when no reason was recorded."
+        ),
+    )
     correlation_id: str
     account_id: str | None
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")

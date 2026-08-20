@@ -81,34 +81,30 @@ def test_action_kind_contract(task_type, payload, expected) -> None:
     assert task_action_kind(task_type, payload) == expected
 
 
+# Причина берётся из записи о завершении задачи, а не из состояния (#206).
+# Машинный код в ``result['reason']`` и ``last_error`` — внутренние поля: они
+# не становятся текстом для оператора ни при каком состоянии.
 @pytest.mark.parametrize(
     ("status", "result", "expected_reason"),
     [
-        ("pending", {"reason": "raw pending detail"}, "Команда принята и ожидает выполнения."),
-        (
-            "running",
-            {"reason": "raw running detail"},
-            "Команда выполняется; итог ещё не подтверждён.",
-        ),
-        (
-            "succeeded",
-            {"outcome": "CONFIRMED", "reason": "raw success detail"},
-            "Результат команды подтверждён.",
-        ),
+        ("pending", {"reason": "raw pending detail"}, None),
+        ("running", {"reason": "raw running detail"}, None),
+        ("succeeded", {"outcome": "CONFIRMED", "reason": "raw success detail"}, None),
+        ("failed", {"outcome": "REJECTED", "reason": "Traceback: secret-host"}, None),
+        ("cancelled", {}, None),
+        ("succeeded", {"outcome": "UNKNOWN", "reason": "internal_reconcile_code"}, None),
         (
             "failed",
-            {"outcome": "REJECTED", "reason": "Traceback: secret-host"},
-            "Команда завершилась ошибкой. Проверьте состояние перед повтором.",
-        ),
-        ("cancelled", {}, "Команда отменена."),
-        (
-            "succeeded",
-            {"outcome": "UNKNOWN", "reason": "internal_reconcile_code"},
-            "Результат команды требует сверки. Не повторяйте действие вслепую.",
+            {
+                "outcome": "REJECTED",
+                "reason": "permanent_pre_external_failure",
+                "operator_reason": "Шаг: создание объектов кампании. Meta отказала до создания объектов.",
+            },
+            "Шаг: создание объектов кампании. Meta отказала до создания объектов.",
         ),
     ],
 )
-def test_task_item_derives_safe_reason_from_public_lifecycle(
+def test_task_item_projects_only_the_recorded_operator_reason(
     status, result, expected_reason
 ) -> None:
     raw_last_error = "password=unsafe database.internal"
@@ -129,6 +125,8 @@ def test_task_item_derives_safe_reason_from_public_lifecycle(
     )
 
     assert item["reason"] == expected_reason
+    if item["reason"] is None:
+        return
     assert raw_last_error not in item["reason"]
     if raw_result_reason := result.get("reason"):
         assert str(raw_result_reason) not in item["reason"]

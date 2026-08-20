@@ -10467,7 +10467,8 @@
                 "type": "null"
               }
             ],
-            "title": "Reason"
+            "title": "Reason",
+            "description": "Recorded outcome reason in operator language; null when no reason was recorded."
           },
           "correlation_id": {
             "type": "string",

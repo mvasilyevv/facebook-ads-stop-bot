@@ -3490,7 +3490,10 @@ export interface components {
       updated_at: string;
       /** Requested By */
       requested_by: string | null;
-      /** Reason */
+      /**
+       * Reason
+       * @description Recorded outcome reason in operator language; null when no reason was recorded.
+       */
       reason: string | null;
       /** Correlation Id */
       correlation_id: string;

@@ -16,7 +16,7 @@ import { useState, type ReactNode } from "react";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
-import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
+import { operatorActionReason } from "@fb/shared/operator/actionLabels";
 import { safeOperatorAttentionHref } from "@fb/shared/operator/attentionNavigation";
 import {
   completeOperatorCommandIntent,
@@ -773,7 +773,7 @@ export function ActionList({ items }: { items: OperatorActionItem[] }) {
                 {ACTION_STATE_LABEL[item.state]}
               </span>
             </div>
-            <p>{operatorActionStateReason(item.state)}</p>
+            <p>{operatorActionReason(item)}</p>
             {item.state === "running" || item.state === "queued" ? (
               <div className="ledger-action-item__progress" aria-hidden="true" />
             ) : null}
