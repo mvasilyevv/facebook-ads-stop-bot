@@ -117,11 +117,31 @@ def _validated_browser_readiness_schedule(
 )
 _BROWSER_READINESS_WRITER_INSTANCE = uuid.uuid4()
 
-# Каденция явной подготовки рабочего места. Она намеренно на два порядка реже
-# пробы готовности: подготовка открывает и навигирует вкладки, и повторяющийся
-# отказ кабинета не должен превращаться в цикл вкладок в живом профиле.
-BROWSER_WORKSPACE_INTERVAL_SECONDS = float(
-    os.environ.get("HEALTH_WATCHDOG_BROWSER_WORKSPACE_SEC", "60")
+
+def _validated_browser_workspace_interval(interval_seconds: float) -> float:
+    """Каденция подготовки обязана быть редкой, и это проверяется на старте.
+
+    Подготовка открывает и навигирует вкладки. Ошибка в единице измерения
+    вернула бы каденцию того же порядка, что и проба готовности, — то есть
+    ровно цикл вкладок, ради которого всё это и делалось. Нижняя граница ещё и
+    строго больше времени жизни evidence: чаще неё подготовка реагировала бы на
+    наблюдение, которое проба не успела переписать.
+    """
+    interval = float(interval_seconds)
+    if (
+        not math.isfinite(interval)
+        or interval <= BROWSER_READINESS_TTL_SECONDS
+        or not 30.0 <= interval <= 3600.0
+    ):
+        raise RuntimeError(
+            "browser workspace cadence must be between 30 and 3600 seconds "
+            "and longer than the readiness TTL"
+        )
+    return interval
+
+
+BROWSER_WORKSPACE_INTERVAL_SECONDS = _validated_browser_workspace_interval(
+    float(os.environ.get("HEALTH_WATCHDOG_BROWSER_WORKSPACE_SEC", "60"))
 )
 
 # ====================== канал авто-стопа (money-критичный мониторинг) ======================
@@ -1369,10 +1389,8 @@ async def prepare_browser_workspace(
     engine: AsyncEngine,
     *,
     open_cabinet_tabs: Callable[[list[str]], Awaitable[list[dict[str, Any]]]],
-) -> bool:
+) -> None:
     """Одна попытка подготовить рабочее место: вкладка Ads Manager каждому кабинету.
-
-    Возвращает True, если подготовка действительно выполнялась.
 
     Кто открывает вкладку кабинета при выключенном сканировании — watchdog.
     Observer делает это в своей фазе подготовки, но его цикл живёт задачами
@@ -1385,30 +1403,45 @@ async def prepare_browser_workspace(
     подтверждённом канале цикл не трогает браузер вообще. Отказ по кабинету не
     превращается в цикл вкладок — следующая попытка не раньше следующего тика.
     """
+    from core.deadlines import bind_absolute_deadline
     from core.meta_api.browser_readiness import browser_channel_ready_now
     from core.observer.accounts import resolve_configured_ad_account_ids
 
     if await browser_channel_ready_now(engine):
-        return False
+        return
     accounts = await resolve_configured_ad_account_ids(engine)
     if not accounts:
         # Кабинета нет ни в одном активном оффере: открывать наугад нечего.
-        return False
+        return
 
+    # Дедлайн той же формы, что у близнеца в observer. Он нужен не ради скорости:
+    # живая строка в browser_operation_leases считается активной работой для
+    # drain обслуживания, поэтому неограниченная подготовка уронила бы по
+    # таймауту операторский ensure-cdp ровно тогда, когда канал сломан.
+    prepare_deadline_seconds = max(60, 20 * len(accounts))
+    prepare_deadline_at = datetime.now(UTC) + timedelta(seconds=prepare_deadline_seconds)
     try:
         async with BrowserOperationFence(
             engine,
             operation_kind="browser_workspace_prepare",
             target="cabinet_tabs",
         ) as fence:
-            results = await open_cabinet_tabs(list(accounts))
+            with bind_absolute_deadline(prepare_deadline_at):
+                async with asyncio.timeout(prepare_deadline_seconds):
+                    results = await open_cabinet_tabs(list(accounts))
             await fence.assert_held()
     except BrowserOperationBlocked:
         logger.info("workspace: Vision maintenance active — подготовка отложена")
-        return False
+        return
     except BrowserFenceLeaseLost:
         logger.warning("workspace: browser-operation fence lost — подготовка отброшена")
-        return False
+        return
+    except TimeoutError:
+        logger.warning(
+            "workspace: подготовка не уложилась в %dс — попытка брошена",
+            prepare_deadline_seconds,
+        )
+        return
     except Exception as exc:  # noqa: BLE001 — класс отказа браузера/gRPC не ограничен
         # Причина называется безопасным диагностиком и повторяется следующим
         # тиком: молчаливая тишина здесь неотличима от мёртвого воркера.
@@ -1416,7 +1449,7 @@ async def prepare_browser_workspace(
             "workspace: вкладки кабинетов открыть не удалось (%s)",
             safe_exception_diagnostic(exc),
         )
-        return True
+        return
 
     confirmed = sum(1 for result in results if result.get("opened"))
     logger.info(
@@ -1424,7 +1457,6 @@ async def prepare_browser_workspace(
         confirmed,
         len(accounts),
     )
-    return True
 
 
 async def browser_workspace_loop(
@@ -1434,11 +1466,21 @@ async def browser_workspace_loop(
     open_cabinet_tabs: Callable[[list[str]], Awaitable[list[dict[str, Any]]]],
     interval: float = BROWSER_WORKSPACE_INTERVAL_SECONDS,
 ) -> None:
-    """Явная подготовка рабочего места, не зависящая от тумблера сканирования."""
+    """Явная подготовка рабочего места, не зависящая от тумблера сканирования.
+
+    Перед первой попыткой выжидает общий startup grace: browser-agent и Vision
+    поднимаются дольше воркеров, и без паузы каждый рестарт начинался бы с
+    предупреждения о недоступном браузере, которое ничего не означает.
+    """
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=STARTUP_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
     while not stop.is_set():
         await prepare_browser_workspace(engine, open_cabinet_tabs=open_cabinet_tabs)
         try:
-            await asyncio.wait_for(stop.wait(), timeout=max(1.0, interval))
+            await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
             pass
 

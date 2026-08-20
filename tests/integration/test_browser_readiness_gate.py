@@ -15,6 +15,7 @@ from core.browser.circuit_breaker import AsyncCircuitBreaker
 from core.meta_api.browser_readiness import (
     BrowserReadinessObservation,
     VisionReadinessIdentity,
+    browser_channel_ready_now,
     load_vision_readiness_identity,
     persist_browser_readiness,
     probe_and_publish_browser_readiness,
@@ -729,3 +730,54 @@ async def test_probe_writer_uses_token_only_exact_profile_and_db_time(
     assert row.state == "ready"
     assert row.observed_not_future is True
     assert row.still_fresh is True
+
+
+# Читатель, на котором стоит вся подготовка рабочего места: пока он говорит
+# «готово», watchdog браузер не трогает. Отказ «всегда True» означал бы, что
+# вкладку никто никогда не откроет и залив не стартует, — ровно та ловушка, из-за
+# которой пробу нельзя было просто лишить права создавать вкладку.
+@pytest.mark.asyncio
+async def test_channel_is_ready_only_while_the_evidence_is_fresh_and_positive(
+    pg_engine,
+) -> None:
+    identity = await _seed_config(pg_engine)
+
+    assert await browser_channel_ready_now(pg_engine) is False, "пустая таблица — не готовность"
+
+    assert await persist_browser_readiness(
+        pg_engine,
+        identity=identity,
+        observation=_ready(identity),
+        writer_instance=uuid.uuid4(),
+        ttl_seconds=6,
+    )
+    assert await browser_channel_ready_now(pg_engine) is True
+
+    # Свежесть считается часами PostgreSQL: истёкшая evidence — это «не готов»,
+    # а не «готов, но давно».
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE browser_channel_readiness
+                SET readiness_expires_at = clock_timestamp() - INTERVAL '1 second'
+                WHERE channel = 'meta_api'
+                """
+            )
+        )
+    assert await browser_channel_ready_now(pg_engine) is False
+
+    # Живой срок при неготовом состоянии тоже не готовность.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE browser_channel_readiness
+                SET state = 'unavailable',
+                    reason_code = 'no_ads_manager_page',
+                    readiness_expires_at = clock_timestamp() + INTERVAL '1 hour'
+                WHERE channel = 'meta_api'
+                """
+            )
+        )
+    assert await browser_channel_ready_now(pg_engine) is False

@@ -221,21 +221,59 @@ async def test_readiness_loop_runs_immediately_without_startup_grace(
     publish.assert_called_once()
 
 
-def test_check_health_contract_carries_explicit_cabinet() -> None:
-    """Проба готовности обязана называть кабинет явно, а не наследовать вкладку.
+class _RecordingHealthStub:
+    """Заглушка gRPC-стаба: запоминает то, что реально ушло в browser-agent."""
 
-    Инцидент 17.08.2026: кабинет брался из адреса текущей вкладки, и проба
-    каждые 2 секунды воскрешала вкладку кабинета, которого нет ни в одном оффере.
+    def __init__(self) -> None:
+        self.requests: list[meta_api_pb2.CheckMetaApiHealthRequest] = []
+
+    async def CheckMetaApiHealth(self, request, **_kwargs):  # noqa: N802
+        self.requests.append(request)
+        return meta_api_pb2.CheckMetaApiHealthResponse(
+            healthy=True,
+            browser_contract_version=5,
+            session_id="session-1",
+            vision_profile_id="profile-1",
+        )
+
+
+def _client_with_recording_stub() -> tuple[meta_client.MetaApiClient, _RecordingHealthStub]:
+    client = meta_client.MetaApiClient()
+    stub = _RecordingHealthStub()
+    client._stub = stub  # type: ignore[assignment]
+    return client, stub
+
+
+@pytest.mark.asyncio
+async def test_named_cabinet_reaches_browser_agent_as_a_tab_assignment() -> None:
+    """Явно названный кабинет доходит до browser-agent — на нём стоит ensure-cdp.
+
+    Инцидент 17.08.2026: кабинет брался из адреса текущей вкладки. Лечащая ручка
+    и money-предполёт называют его сами, и это поручение подготовить вкладку.
     """
-    protocol_params = inspect.signature(
-        readiness.BrowserReadinessProbeClient.check_health
-    ).parameters
-    client_params = inspect.signature(meta_client.MetaApiClient.check_health).parameters
+    client, stub = _client_with_recording_stub()
 
-    assert "ad_account_id" in protocol_params
-    assert "ad_account_id" in client_params
-    request = meta_api_pb2.CheckMetaApiHealthRequest(ad_account_id="2108857220005012")
-    assert request.ad_account_id == "2108857220005012"
+    await client.check_health(
+        full_probe=True,
+        expected_profile_id="profile-1",
+        ad_account_id="100000000000001",
+    )
+
+    assert [request.ad_account_id for request in stub.requests] == ["100000000000001"]
+
+
+@pytest.mark.asyncio
+async def test_omitted_cabinet_reaches_browser_agent_empty_and_opens_nothing() -> None:
+    """Не названный кабинет уходит пустым — это и есть «только наблюдать».
+
+    Пустое поле browser-agent читает как запрет создавать вкладку. Если бы клиент
+    подставлял сюда что-нибудь своё, наблюдатель снова стал бы создателем.
+    """
+    client, stub = _client_with_recording_stub()
+
+    await client.check_health(full_probe=False, expected_profile_id="profile-1")
+
+    assert [request.ad_account_id for request in stub.requests] == [""]
 
 
 class _FakeFence:
