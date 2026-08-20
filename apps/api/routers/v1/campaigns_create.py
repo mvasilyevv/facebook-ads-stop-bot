@@ -1197,14 +1197,23 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     # clients always send ad_account_ids sourced from the selected catalog offer.
     if body.ad_account_ids is None:
         receipt = await _launch_account_plan(body, engine, account_id=body.config.act_id)
-        draft_cleared = await _clear_launch_draft(engine, revision=body.draft_revision)
+        request_state = _launch_request_state([receipt])
+        # Черновик снимается только когда в очередь встало хоть что-то. До
+        # разреза этой ветке нечего было отвергать: кабинет либо ставился, либо
+        # падал исключением. Теперь план может быть отвергнут покампанийно — и
+        # стереть черновик, не поставив ни одной кампании, значит отобрать у
+        # оператора то, что он собирал, ровно в момент, когда это ему нужнее.
+        draft_cleared = await _clear_launch_draft(
+            engine,
+            revision=body.draft_revision if request_state != "rejected" else None,
+        )
         return LaunchOut(
             run_id=receipt.run_id,
             task_id=receipt.task_id,
             status=receipt.status,
             idempotency_key=receipt.idempotency_key,
             draft_cleared=draft_cleared,
-            request_state=_launch_request_state([receipt]),
+            request_state=request_state,
             accounts=[receipt],
         )
 

@@ -22,7 +22,12 @@ import pytest
 
 from apps.api.routers.v1.campaigns_create import (
     _compute_campaign_idempotency_key,
+    _launch_request_state,
     _run_launches_independently,
+)
+from apps.api.routers.v1.schemas.campaigns_create import (
+    LaunchAccountOut,
+    LaunchCampaignOut,
 )
 from core.campaign_builder.builder import build_campaign_spec, total_code_span
 from core.campaign_builder.config import (
@@ -213,3 +218,45 @@ def test_per_campaign_spans_reproduce_the_whole_plan_codes() -> None:
         code_start += total_code_span(slice_config)
 
     assert code_start - plan.code_start == total_code_span(plan)
+
+
+# ---------------------- черновик оператора ----------------------
+
+
+def test_request_state_counts_campaigns_not_cabinets() -> None:
+    """Знаменатель запроса — кампании: кабинет сам по себе единицей не является."""
+
+    account = LaunchAccountOut(
+        account_id="111",
+        status="queued",
+        campaigns=[
+            LaunchCampaignOut(campaign_key="c1", run_id="run-1", status="queued"),
+            LaunchCampaignOut(campaign_key="c2", status="rejected", error="отказ"),
+        ],
+    )
+    assert _launch_request_state([account]) == "partial"
+
+
+def test_request_state_is_rejected_when_no_campaign_was_queued() -> None:
+    """Ни одной поставленной кампании — запрос отвергнут, а не принят.
+
+    От этого зависит черновик оператора: стереть его, не поставив ничего,
+    значит отобрать собранный план ровно тогда, когда он нужнее всего.
+    """
+
+    account = LaunchAccountOut(
+        account_id="111",
+        status="rejected",
+        campaigns=[
+            LaunchCampaignOut(campaign_key="c1", status="rejected", error="отказ"),
+            LaunchCampaignOut(campaign_key="c2", status="rejected", error="отказ"),
+        ],
+    )
+    assert _launch_request_state([account]) == "rejected"
+
+
+def test_cabinet_rejected_before_plan_is_one_rejected_unit() -> None:
+    """Кабинет, отвергнутый до разбора плана, не даёт пустой знаменатель."""
+
+    account = LaunchAccountOut(account_id="111", status="rejected", error="отказ")
+    assert _launch_request_state([account]) == "rejected"
