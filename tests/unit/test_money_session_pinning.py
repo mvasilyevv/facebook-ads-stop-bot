@@ -410,10 +410,13 @@ async def test_money_rpc_accepts_the_session_named_by_the_claim(monkeypatch) -> 
 # ====================== 3. реестр money-RPC ↔ закрепляющие вызовы ======================
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+# Каталоги Python-исходников, которые не являются боевым кодом этого дерева.
+# Скрытые каталоги перечислять поимённо нельзя: рядом живут вложенные worktree
+# (`.claude/worktrees/…`) с полной копией `core/`, и обход находил в них второй
+# экземпляр того же вызова. Копия списка расходится молча — правило вместо
+# перечисления (канон 6.1).
 _SKIPPED_TREES = frozenset(
     {
-        ".git",
-        ".venv",
         "node_modules",
         "tests",
         "frontend",
@@ -428,6 +431,8 @@ def _python_sources() -> Iterator[Path]:
     for path in sorted(_REPO_ROOT.rglob("*.py")):
         relative = path.relative_to(_REPO_ROOT)
         if _SKIPPED_TREES & set(relative.parts):
+            continue
+        if any(part.startswith(".") for part in relative.parts):
             continue
         yield path
 
