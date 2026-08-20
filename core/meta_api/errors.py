@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from core.safe_diagnostics import redact_sensitive_text
+
 
 class MutationValidationError(ValueError):
     """Ошибка валидации payload в mutation handler'е.
@@ -36,11 +38,16 @@ class MetaApiError(RuntimeError):
         subcode: int | None = None,
         endpoint: str | None = None,
         fbtrace_id: str | None = None,
+        meta_message: str | None = None,
     ) -> None:
         self.code = code
         self.subcode = subcode
         self.endpoint = endpoint
         self.fbtrace_id = fbtrace_id
+        # Санитизированный текст отказа Meta. Живёт ТОЛЬКО здесь: ни str(), ни
+        # repr() его не показывают, потому что оба доезжают до last_error задачи
+        # и до карточки оператора. Читатель — лог воркера рядом с exc_info.
+        self.meta_message = meta_message
         super().__init__(message)
 
     def __repr__(self) -> str:
@@ -292,10 +299,14 @@ def classify_graph_error(
     # message использован ТОЛЬКО для классификации выше (subcode/code/regex на полном
     # тексте) — Graph-текст может содержать access_token или другие секреты, поэтому в
     # тело исключения (str(exc): логи, audit, UI) он не попадает, остаётся код ошибки.
+    # Санитизированная копия едет отдельным полем: без неё код вроде
+    # «100/1885316» — это всё, что остаётся оператору, и причина неустановима.
+    redacted = redact_sensitive_text(message).strip() if message else ""
     return exc_cls(
         f"Graph API error code={code} subcode={subcode}",
         code=code,
         subcode=subcode,
         endpoint=endpoint,
         fbtrace_id=fbtrace_id,
+        meta_message=redacted or None,
     )

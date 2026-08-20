@@ -125,6 +125,43 @@ describe('executeGraphCall error-mapping (H-8)', () => {
     assert.equal(r.error?.fbtraceId, 'TRACE1');
   });
 
+  it('объясняющие поля Meta доезжают, а не теряются за «Invalid parameter»', async () => {
+    // Живое падение 20.08.2026: залив вставал с code=100 subcode=1885316, и
+    // единственным текстом было «Invalid parameter» — причина неустановима.
+    const body = JSON.stringify({
+      error: {
+        code: 100,
+        error_subcode: 1885316,
+        type: 'OAuthException',
+        message: 'Invalid parameter',
+        error_user_title: 'Нельзя изменить цель кампании',
+        error_user_msg: 'Выбранная цель недоступна для этого рекламного аккаунта.',
+        fbtrace_id: 'TRACE2',
+      },
+    });
+    const page = mockPage(() => ({ status_code: 400, response_json: body }));
+    const r = await executeGraphCall(page, baseParams);
+    assert.equal(r.error?.code, 100);
+    assert.equal(r.error?.subcode, 1885316);
+    assert.ok(r.error?.message.includes('Нельзя изменить цель кампании'));
+    assert.ok(r.error?.message.includes('Выбранная цель недоступна'));
+    assert.ok(r.error?.message.includes('Invalid parameter'));
+  });
+
+  it('повтор одного текста в нескольких полях Meta не дублируется', async () => {
+    const body = JSON.stringify({
+      error: {
+        code: 100,
+        message: 'Invalid parameter',
+        error_user_title: 'Invalid parameter',
+        error_user_msg: '  ',
+      },
+    });
+    const page = mockPage(() => ({ status_code: 400, response_json: body }));
+    const r = await executeGraphCall(page, baseParams);
+    assert.equal(r.error?.message, 'Invalid parameter');
+  });
+
   it('token not found (code -1) пробрасывается из page.evaluate', async () => {
     const body = JSON.stringify({
       error: { code: -1, type: 'TokenNotFound', message: 'EAA-токен не найден' },

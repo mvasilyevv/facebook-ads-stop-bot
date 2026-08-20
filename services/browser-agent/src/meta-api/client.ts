@@ -630,6 +630,31 @@ export function isLoginRequiredError(
 }
 
 /**
+ * Собрать текст отказа Meta из всех полей, которые его объясняют.
+ *
+ * `message` у Graph часто вырожден до «Invalid parameter», а настоящая причина
+ * лежит в `error_user_title`/`error_user_msg` — полях, которые Meta пишет
+ * специально для показа человеку. Живая находка 20.08.2026: залив вставал с
+ * `code=100 subcode=1885316`, и это было всё, что доходило до оператора.
+ *
+ * Python-сторона санитизирует полученный текст перед тем, как положить его в
+ * `MetaApiError.meta_message` (core/meta_api/errors.py), поэтому лишней
+ * поверхности утечки здесь не появляется.
+ */
+function buildGraphErrorMessage(error: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of ['message', 'error_user_title', 'error_user_msg']) {
+    const value = error[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    // Meta повторяет один и тот же текст в нескольких полях — дубли не несут
+    // информации, но съедают длину сообщения.
+    if (trimmed && !parts.includes(trimmed)) parts.push(trimmed);
+  }
+  return parts.join(' | ');
+}
+
+/**
  * Распарсить error блок из JSON-ответа Meta.
  * Возвращает undefined если ошибки нет (success response).
  */
@@ -641,7 +666,7 @@ function extractGraphError(responseJson: string): GraphApiCallResult['error'] | 
         code: Number(parsed.error.code ?? 0),
         subcode: Number(parsed.error.error_subcode ?? parsed.error.subcode ?? 0),
         type: String(parsed.error.type ?? ''),
-        message: String(parsed.error.message ?? ''),
+        message: buildGraphErrorMessage(parsed.error),
         fbtraceId: String(parsed.error.fbtrace_id ?? ''),
       };
     }

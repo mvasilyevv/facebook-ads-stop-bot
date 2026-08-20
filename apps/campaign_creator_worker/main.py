@@ -558,6 +558,25 @@ def _failure_diagnostics(
     return diagnostics
 
 
+def _meta_reason_for_log(exc: BaseException) -> str | None:
+    """Санитизированный текст отказа Meta из цепочки причин — ТОЛЬКО для лога.
+
+    Намеренно не входит в ``_failure_diagnostics``: тот набор едет в
+    ``task_queue.result`` и в карточку оператора, а Graph-текст остаётся
+    внутренней диагностикой. Без него код вида «100/1885316» — это всё, что
+    остаётся, когда залив встаёт (живая находка 20.08.2026).
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = getattr(current, "meta_message", None)
+        if message:
+            return str(message)
+        current = current.__cause__
+    return None
+
+
 def _has_any_created_ids(created: dict[str, list[str]]) -> bool:
     return any(created.get(kind) for kind in created)
 
@@ -1097,10 +1116,12 @@ async def _execute_run(
             logger.error(
                 "campaign_create: task id=%s ACK LOST — ответ Meta потерян после "
                 "POST кампании, подтверждённых объектов нет, нужна сверка, повтор "
-                "запрещён: step=%s diagnostics=%s",
+                "запрещён: step=%s diagnostics=%s meta_reason=%r",
                 task.id,
                 exc.failed_step,
                 diagnostics,
+                _meta_reason_for_log(exc),
+                exc_info=True,
             )
             error = (
                 f"ack_lost (step={exc.failed_step}): ответ Meta потерян после POST "
@@ -1287,7 +1308,16 @@ async def _execute_run(
                 )
             return
         # permanent: валидация/Meta permission/policy → run=failed, без retry.
-        logger.error("campaign_create: task id=%s → permanent fail: %r", task.id, exc)
+        # exc_info: наружу едет только класс причины (fbtrace_id и текст Graph-ответа
+        # утекают через repr), поэтому единственное место, где причина остаётся
+        # диагностируемой, — лог воркера.
+        logger.error(
+            "campaign_create: task id=%s → permanent fail: %r meta_reason=%r",
+            task.id,
+            exc,
+            _meta_reason_for_log(exc),
+            exc_info=True,
+        )
         await finalize_run_failed(
             engine,
             run_id,

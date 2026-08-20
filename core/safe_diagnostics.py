@@ -13,6 +13,9 @@ _UUID_RE = re.compile(
 )
 _TELEGRAM_BOT_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])\d{5,}:[A-Za-z0-9_-]{20,}")
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
+# Graph-токен в тексте ответа Meta приходит и без имени поля («Session for EAA… is
+# invalid»), поэтому _NAMED_SECRET_RE его не ловит.
+_META_ACCESS_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])EAA[A-Za-z0-9_-]{16,}")
 _NAMED_SECRET_RE = re.compile(
     r"(?i)\b(?P<name>access_token|api[_-]?key|x-token|token|password|secret)"
     r"(?P<separator>\s*[:=]\s*)[^\s&;,]+"
@@ -66,6 +69,7 @@ def redact_sensitive_text(value: object) -> str:
     text = str(value or "")
     text = _URL_QUERY_RE.sub(r"\g<base>?<redacted>", text)
     text = _BEARER_RE.sub("Bearer <redacted>", text)
+    text = _META_ACCESS_TOKEN_RE.sub("<redacted>", text)
     text = _TELEGRAM_BOT_TOKEN_RE.sub("<redacted>", text)
     text = _NAMED_SECRET_RE.sub(
         lambda match: f"{match.group('name')}{match.group('separator')}<redacted>",
