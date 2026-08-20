@@ -178,8 +178,11 @@ async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wa
     claim_sql = str(task_queue._BROWSER_READY_CLAIM_SQL)
 
     assert "task.lane = 'money'" in claim_sql
-    assert "WHEN task.lane = 'money' THEN" in claim_sql
-    assert "make_interval(secs => :money_deadline_seconds)" in claim_sql
+    # Окно исполнения выбирается по полосе строки и отсчитывается от захвата
+    # (#219: то же правило теперь действует для всех полос, не только money).
+    assert "CASE task.lane" in claim_sql
+    assert "WHEN 'money' THEN :money_deadline_seconds" in claim_sql
+    assert "deadline_at = clock_timestamp() + make_interval" in claim_sql
     assert "browser_maintenance" in claim_sql
 
     from core.deadlines import bind_absolute_deadline
@@ -210,10 +213,16 @@ async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wa
 
 
 def test_overdue_reconciler_does_not_reject_unclaimed_money_work() -> None:
-    """Old pre-fix rows with an enqueue-time deadline must survive rollout."""
-    source = inspect.getsource(task_queue.expire_overdue_tasks)
+    """Old pre-fix rows with an enqueue-time deadline must survive rollout.
 
-    assert "lane <> 'money'" in source
+    Правило подметания живёт в одном тексте на оба применения — общий проход
+    reconciler'а и подметание своих задач потребителем очереди (#219).
+    """
+    for statement in (
+        task_queue._EXPIRE_OVERDUE_TASKS_SQL,
+        task_queue._EXPIRE_OVERDUE_CLAIMABLE_SQL,
+    ):
+        assert "lane <> 'money'" in str(statement)
 
 
 def test_readiness_rejection_cannot_bypass_attempt_budget() -> None:

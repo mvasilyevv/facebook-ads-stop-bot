@@ -2,6 +2,9 @@
 """Unified task_queue helpers — async API для всех outbox-воркеров.
 
 Контракты:
+- у задачи два независимых срока: предел ожидания в очереди (ставится при
+  постановке и при каждом переносе) и окно на работу (ставится при захвате);
+  ``deadline_at`` несёт тот из них, который действует в текущем статусе
 - claim_next_task: FOR UPDATE SKIP LOCKED → атомарный захват + status='running'
 - mark_succeeded/mark_failed: только из workspace того воркера который захватил
 - requeue_for_retry: backoff = min(30 * 2^attempt, 300) сек
@@ -56,12 +59,31 @@ TASK_LANES = frozenset({"money", "interactive", "bulk", "background"})
 BROWSER_BACKED_TASK_TYPES = frozenset({"meta_api_mutation", "observer_scan", "campaign_create"})
 BROWSER_READY_CLAIM_TASK_TYPES = frozenset({"meta_api_mutation", "campaign_create"})
 
-_LANE_DEFAULT_DEADLINE_SECONDS = {
+# Предельный срок ожидания в очереди: сколько задача может пролежать
+# незабранной, прежде чем её закроют отказом. Отсчитывается от постановки и
+# от каждого переноса. Money-полосы здесь нет намеренно: авто-стоп не
+# выбрасывают из очереди, он ждёт исполнителя (deadline_at остаётся NULL).
+_LANE_QUEUE_WAIT_SECONDS = {
+    "interactive": 120,
+    "bulk": 30 * 60,
+    "background": 120,
+}
+
+# Окно на саму работу. Отсчитывается от ЗАХВАТА задачи воркером, а не от
+# постановки в очередь: ожидание готовности канала браузера его не тратит.
+# До 20.08.2026 окно было одно и ставилось при постановке — залив, прождавший
+# канал полчаса, сгорал по дедлайну, ни разу не обратившись к Meta (#219).
+_LANE_EXECUTION_WINDOW_SECONDS = {
     "money": 30,
     "interactive": 120,
     "bulk": 30 * 60,
     "background": 120,
 }
+
+# Запас аренды поверх окна. Терминальная запись требует живого lease, а воркер
+# залива аренду не продлевает: окно, равное аренде, означало бы задачу, которая
+# в момент дедлайна уже не может закрыть саму себя и остаётся running.
+_FINALIZE_HEADROOM_SECONDS = 60
 _LANE_DEFAULT_PRIORITY = {
     "money": 100,
     "interactive": 50,
@@ -148,6 +170,45 @@ def _calc_retry_available_at(attempt: int) -> datetime:
     """Exponential backoff: 30s, 60s, 120s, 240s, 300s+."""
     delay = min(_RETRY_BASE_SECONDS * (2**attempt), _RETRY_MAX_SECONDS)
     return datetime.now(timezone.utc) + timedelta(seconds=delay)
+
+
+def _queue_wait_seconds(lane: str) -> int:
+    """Предельное ожидание в очереди для полосы (money сюда не попадает)."""
+    return _LANE_QUEUE_WAIT_SECONDS.get(lane, _LANE_QUEUE_WAIT_SECONDS["background"])
+
+
+def _with_lane_window(statement: str, *, alias: str) -> str:
+    """Подставить в claim-SQL окно исполнения строки по её полосе.
+
+    Окно определено один раз на оператор: и дедлайн работы, и аренда считаются
+    от одного и того же выражения, поэтому разойтись они не могут.
+    """
+    window = (
+        f"CASE {alias}.lane\n"
+        "            WHEN 'money' THEN :money_deadline_seconds\n"
+        "            WHEN 'bulk' THEN :bulk_deadline_seconds\n"
+        "            WHEN 'interactive' THEN :interactive_deadline_seconds\n"
+        "            ELSE :background_deadline_seconds\n"
+        "          END"
+    )
+    if "/*window*/" not in statement:
+        raise ValueError("claim statement must mark where the lane window belongs")
+    return statement.replace("/*window*/", window)
+
+
+def _execution_window_params() -> dict[str, int]:
+    """Окна исполнения всех полос одним набором bind-параметров claim-SQL.
+
+    Полоса задачи известна только строке, поэтому окно выбирает сам SQL: один
+    claim может обслуживать несколько полос сразу.
+    """
+    return {
+        **{
+            f"{lane}_deadline_seconds": int(seconds)
+            for lane, seconds in _LANE_EXECUTION_WINDOW_SECONDS.items()
+        },
+        "finalize_headroom_seconds": _FINALIZE_HEADROOM_SECONDS,
+    }
 
 
 def _row_to_task(row: Any) -> Task:
@@ -261,9 +322,9 @@ async def create_task(
     effective_available_at = available_at or now
     effective_deadline_at = deadline_at
     if effective_deadline_at is None and effective_lane != "money":
-        effective_deadline_at = now + timedelta(
-            seconds=_LANE_DEFAULT_DEADLINE_SECONDS[effective_lane]
-        )
+        # Дедлайн незабранной строки — предел ожидания в очереди, а не окно на
+        # работу: окно задаёт claim, когда исполнитель действительно нашёлся.
+        effective_deadline_at = now + timedelta(seconds=_queue_wait_seconds(effective_lane))
     effective_priority = (
         _LANE_DEFAULT_PRIORITY[effective_lane] if priority is None else int(priority)
     )
@@ -704,7 +765,13 @@ def _campaign_run_terminal_reason(
         return "Залив отменён до завершения."
     if phase == "unknown":
         return "Залив прерван, подтверждение Facebook не получено — нужна сверка кабинета."
-    if str((result or {}).get("reason") or "") == "absolute_deadline_exceeded":
+    reason = str((result or {}).get("reason") or "")
+    if reason == "queue_wait_limit_exceeded":
+        return (
+            "Залив так и не начался: истёк предельный срок ожидания в очереди. "
+            "В Facebook не уходило ничего — залив можно запустить заново."
+        )
+    if reason == "absolute_deadline_exceeded":
         return "Срок задачи истёк, и воркер её так и не начал — залив не выполнялся."
     return "Задача залива завершилась отказом."
 
@@ -1057,18 +1124,17 @@ async def _transition_returned_terminal_tasks(
 
 
 _CLAIM_SQL = text(
-    """
+    _with_lane_window(
+        """
     UPDATE task_queue
     SET status = 'running',
         lease_owner = :worker_id,
         lease_token = task_queue.lease_token + 1,
-        deadline_at = CASE
-          WHEN task_queue.lane = 'money' THEN
-            clock_timestamp() + make_interval(secs => :money_deadline_seconds)
-          ELSE task_queue.deadline_at
-        END,
-        lease_expires_at =
-          clock_timestamp() + make_interval(secs => :lease_seconds),
+        deadline_at = clock_timestamp() + make_interval(secs => /*window*/),
+        lease_expires_at = clock_timestamp() + make_interval(secs => GREATEST(
+          :lease_seconds,
+          /*window*/ + :finalize_headroom_seconds
+        )),
         updated_at = clock_timestamp()
     WHERE id = (
         SELECT id FROM task_queue
@@ -1106,7 +1172,9 @@ _CLAIM_SQL = text(
               lane, priority, available_at, deadline_at, lease_owner,
               lease_token, lease_expires_at, cancel_requested_at, cancel_reason,
               correlation_id
-    """
+    """,
+        alias="task_queue",
+    )
 ).bindparams(bindparam("lanes", expanding=True))
 
 
@@ -1209,7 +1277,8 @@ async def explain_browser_claim_block(
 
 
 _BROWSER_READY_CLAIM_SQL = text(
-    """
+    _with_lane_window(
+        """
     WITH readiness AS MATERIALIZED (
         SELECT
             config.profile_id AS browser_profile_id,
@@ -1268,13 +1337,11 @@ _BROWSER_READY_CLAIM_SQL = text(
     SET status = 'running',
         lease_owner = :worker_id,
         lease_token = task.lease_token + 1,
-        deadline_at = CASE
-          WHEN task.lane = 'money' THEN
-            clock_timestamp() + make_interval(secs => :money_deadline_seconds)
-          ELSE task.deadline_at
-        END,
-        lease_expires_at =
-          clock_timestamp() + make_interval(secs => :lease_seconds),
+        deadline_at = clock_timestamp() + make_interval(secs => /*window*/),
+        lease_expires_at = clock_timestamp() + make_interval(secs => GREATEST(
+          :lease_seconds,
+          /*window*/ + :finalize_headroom_seconds
+        )),
         updated_at = clock_timestamp()
     FROM candidate
     WHERE task.id = candidate.id
@@ -1304,7 +1371,9 @@ _BROWSER_READY_CLAIM_SQL = text(
         candidate.browser_profile_id,
         candidate.browser_session_id,
         candidate.browser_readiness_generation
-    """
+    """,
+        alias="task",
+    )
 ).bindparams(bindparam("lanes", expanding=True))
 
 
@@ -1369,7 +1438,7 @@ async def claim_next_task(
                     "lanes": effective_lanes,
                     "worker_id": worker_id or _DEFAULT_WORKER_ID,
                     "lease_seconds": max(5, int(lease_seconds)),
-                    "money_deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS["money"],
+                    **_execution_window_params(),
                 },
             )
         ).first()
@@ -1380,6 +1449,12 @@ async def claim_next_task(
                 correlation_id=_optional_uuid(row.correlation_id),
                 phase="executing",
                 payload=dict(row.payload or {}),
+            )
+        else:
+            await _expire_overdue_claimable_tasks(
+                conn,
+                task_type=task_type,
+                lanes=effective_lanes,
             )
     metric_lane = (
         str(row.lane)
@@ -1434,7 +1509,7 @@ async def claim_browser_ready_task(
                     "lanes": effective_lanes,
                     "worker_id": worker_id or _DEFAULT_WORKER_ID,
                     "lease_seconds": max(5, int(lease_seconds)),
-                    "money_deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS["money"],
+                    **_execution_window_params(),
                 },
             )
         ).first()
@@ -1445,6 +1520,15 @@ async def claim_browser_ready_task(
                 correlation_id=_optional_uuid(row.correlation_id),
                 phase="executing",
                 payload=dict(row.payload or {}),
+            )
+        else:
+            # Гейт готовности молчалив: пока канал не подтверждён, кандидатов
+            # нет и задача лежит pending. Просроченную строку закрывает тот же
+            # потребитель — иначе она остаётся «в очереди» будучи мёртвой.
+            await _expire_overdue_claimable_tasks(
+                conn,
+                task_type=task_type,
+                lanes=effective_lanes,
             )
     metric_lane = (
         str(row.lane)
@@ -2210,14 +2294,7 @@ async def requeue_for_retry(
 
     next_at = _calc_retry_available_at(new_attempt)
     retry_deadline = (
-        None
-        if lane == "money"
-        else next_at
-        + timedelta(
-            seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(
-                lane, _LANE_DEFAULT_DEADLINE_SECONDS["background"]
-            )
-        )
+        None if lane == "money" else next_at + timedelta(seconds=_queue_wait_seconds(lane))
     )
     async with engine.begin() as conn:
         result = await conn.execute(
@@ -2297,14 +2374,7 @@ async def requeue_proven_not_committed(
     new_attempt = int(attempt_count) + 1
     next_at = _calc_retry_available_at(new_attempt)
     retry_deadline = (
-        None
-        if lane == "money"
-        else next_at
-        + timedelta(
-            seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(
-                lane, _LANE_DEFAULT_DEADLINE_SECONDS["background"]
-            )
-        )
+        None if lane == "money" else next_at + timedelta(seconds=_queue_wait_seconds(lane))
     )
     async with engine.begin() as conn:
         await conn.execute(
@@ -2566,10 +2636,7 @@ async def release_after_browser_readiness_rejection(
             {
                 "task_id": task.id,
                 "error": error[:8000],
-                "deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS.get(
-                    task.lane,
-                    _LANE_DEFAULT_DEADLINE_SECONDS["background"],
-                ),
+                "deadline_seconds": _queue_wait_seconds(task.lane),
                 "lease_owner": task.lease_owner,
                 "lease_token": task.lease_token,
             },
@@ -2618,8 +2685,7 @@ async def requeue_unknown_for_reconciliation(
     deadline = (
         None
         if task.lane == "money"
-        else datetime.now(timezone.utc)
-        + timedelta(seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(task.lane, 120))
+        else datetime.now(timezone.utc) + timedelta(seconds=_queue_wait_seconds(task.lane))
     )
     async with engine.begin() as conn:
         result = await conn.execute(
@@ -2669,7 +2735,7 @@ async def defer_unknown_reconciliation(
     if not _has_valid_fence(task.lease_owner, task.lease_token):
         return False
     delay = max(1, int(delay_seconds))
-    deadline_seconds = _LANE_DEFAULT_DEADLINE_SECONDS.get(task.lane, 120)
+    deadline_seconds = _queue_wait_seconds(task.lane)
     async with engine.begin() as conn:
         result = await conn.execute(
             text(
@@ -2887,7 +2953,14 @@ async def reconcile_stuck_running(
     """
     exclude = [k for k in (exclude_kinds or ()) if k]
     irreversible_types = sorted(IRREVERSIBLE_TASK_TYPES)
-    params: dict[str, Any] = {"sec": int(stuck_after_seconds), "irrev_types": irreversible_types}
+    params: dict[str, Any] = {
+        "sec": int(stuck_after_seconds),
+        "irrev_types": irreversible_types,
+        # Строка возвращается в очередь, поэтому получает предел ожидания —
+        # тот же, что при постановке, а не окно исполнения.
+        "bulk_wait_seconds": _queue_wait_seconds("bulk"),
+        "default_wait_seconds": _queue_wait_seconds("interactive"),
+    }
     # Безусловный guard: необратимые task_type целиком вне requeue (money-safety).
     guard = "\n  AND task_type NOT IN :irrev_types"
     if exclude:
@@ -2939,8 +3012,8 @@ async def reconcile_stuck_running(
                     THEN CASE
                         WHEN lane = 'money' THEN NULL
                         ELSE NOW() + make_interval(secs => CASE lane
-                            WHEN 'bulk' THEN 1800
-                            ELSE 120
+                            WHEN 'bulk' THEN :bulk_wait_seconds
+                            ELSE :default_wait_seconds
                         END)
                     END
                 ELSE deadline_at
@@ -3057,52 +3130,92 @@ async def request_task_cancel(
     return count > 0
 
 
+_EXPIRE_OVERDUE_SQL = """
+    UPDATE task_queue
+    SET status = 'failed',
+        completed_at = NOW(),
+        last_error = CASE
+            WHEN external_started_at IS NOT NULL
+              OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                THEN 'absolute deadline exceeded while external outcome remained unknown'
+            ELSE 'queue wait limit exceeded before any external call'
+        END,
+        result = COALESCE(result, '{}'::jsonb)
+            || jsonb_build_object(
+                'outcome', CASE
+                    WHEN external_started_at IS NOT NULL
+                      OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        THEN 'UNKNOWN'
+                    ELSE 'REJECTED'
+                END,
+                'reconcile_required', CASE
+                    WHEN external_started_at IS NOT NULL
+                      OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        THEN true
+                    ELSE false
+                END,
+                'reason', CASE
+                    WHEN external_started_at IS NOT NULL
+                      OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        THEN 'absolute_deadline_exceeded'
+                    ELSE 'queue_wait_limit_exceeded'
+                END
+            ),
+        updated_at = NOW()
+    WHERE status IN ('pending', 'retrying')
+      AND lane <> 'money'
+      AND deadline_at IS NOT NULL
+      AND deadline_at <= NOW()
+      /*scope*/
+    RETURNING id, correlation_id, payload, status, result,
+              requested_by, lane, task_type
+"""
+
+# Подметание всей очереди — для reconciler'а.
+_EXPIRE_OVERDUE_TASKS_SQL = text(_EXPIRE_OVERDUE_SQL.replace("/*scope*/", ""))
+
+# То же правило, суженное до одного потребителя: его task_type и его полосы.
+_EXPIRE_OVERDUE_CLAIMABLE_SQL = text(
+    _EXPIRE_OVERDUE_SQL.replace("/*scope*/", "AND task_type = :tt\n      AND lane IN :lanes")
+).bindparams(bindparam("lanes", expanding=True))
+
+
+async def _expire_overdue_claimable_tasks(
+    conn: AsyncConnection,
+    *,
+    task_type: str,
+    lanes: Sequence[str],
+) -> int:
+    """Закрыть просроченные задачи этого потребителя в транзакции его claim.
+
+    Пустой claim при непустой очереди не означает «работы нет»: строка, чей
+    предел ожидания истёк, кандидатом уже не станет никогда. Пока её никто не
+    закрыл, оператор видит «в очереди» у мёртвой задачи — так залив 20.08.2026
+    простоял pending с дедлайном семиминутной давности. Подметает тот, кто
+    очередь и читает: отдельный reconciler есть не в каждой инсталляции.
+    """
+    result = await conn.execute(
+        _EXPIRE_OVERDUE_CLAIMABLE_SQL,
+        {"tt": task_type, "lanes": list(lanes)},
+    )
+    rows, count = _returned_task_rows(result)
+    await _transition_returned_terminal_tasks(conn, rows)
+    return count
+
+
 async def expire_overdue_tasks(engine: AsyncEngine) -> int:
     """Expire queued non-money work without erasing an ambiguous outcome.
 
-    Money deadlines start only when a worker claims an execution attempt. Old
-    pre-fix rows may still contain enqueue-time deadlines, so the terminalizer
-    must explicitly leave all pending/retrying money work claimable.
+    A pending row carries the queue wait limit, not the execution window: the
+    window is granted at claim time. Exhausting the wait limit is therefore a
+    proven pre-send refusal — ``REJECTED`` with reason ``queue_wait_limit_exceeded``.
+    A row that already crossed an external boundary stays ``UNKNOWN``.
+
+    Money deadlines start only when a worker claims an execution attempt, so
+    all pending/retrying money work is explicitly left claimable.
     """
     async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET status = 'failed',
-                    completed_at = NOW(),
-                    last_error = CASE
-                        WHEN external_started_at IS NOT NULL
-                          OR COALESCE(result->>'reconcile_required', 'false') = 'true'
-                            THEN 'absolute deadline exceeded while external outcome remained unknown'
-                        ELSE 'absolute task deadline exceeded before external call'
-                    END,
-                    result = COALESCE(result, '{}'::jsonb)
-                        || jsonb_build_object(
-                            'outcome', CASE
-                                WHEN external_started_at IS NOT NULL
-                                  OR COALESCE(result->>'reconcile_required', 'false') = 'true'
-                                    THEN 'UNKNOWN'
-                                ELSE 'REJECTED'
-                            END,
-                            'reconcile_required', CASE
-                                WHEN external_started_at IS NOT NULL
-                                  OR COALESCE(result->>'reconcile_required', 'false') = 'true'
-                                    THEN true
-                                ELSE false
-                            END,
-                            'reason', 'absolute_deadline_exceeded'
-                        ),
-                    updated_at = NOW()
-                WHERE status IN ('pending', 'retrying')
-                  AND lane <> 'money'
-                  AND deadline_at IS NOT NULL
-                  AND deadline_at <= NOW()
-                RETURNING id, correlation_id, payload, status, result,
-                          requested_by, lane, task_type
-                """
-            )
-        )
+        result = await conn.execute(_EXPIRE_OVERDUE_TASKS_SQL)
         rows, count = _returned_task_rows(result)
         await _transition_returned_terminal_tasks(conn, rows)
     return count

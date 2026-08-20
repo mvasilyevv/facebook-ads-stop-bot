@@ -50,6 +50,9 @@ _RESUMABLE_REASONS = frozenset(
         "cancel_requested_before_external_call",
         "creator_dependencies_unavailable",
         "pre_external_attempts_exhausted",
+        # Предел ожидания в очереди исчерпан до первого обращения к Facebook:
+        # доказанный отказ до отправки, объектов не создано (#219).
+        "queue_wait_limit_exceeded",
         "run_cancelled_before_external_call",
     }
 )

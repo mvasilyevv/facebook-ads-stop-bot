@@ -149,7 +149,8 @@ def test_claim_contract_uses_db_clock_and_fresh_v5_evidence() -> None:
     assert "EXCLUDED.observed_at" in persist_sql
     assert "> browser_channel_readiness.observed_at" in persist_sql
     generic_sql = str(task_queue._CLAIM_SQL)
-    assert "lease_expires_at =\n          clock_timestamp()" in generic_sql
+    # Аренда считается по часам БД, а не по часам процесса-воркера.
+    assert "lease_expires_at = clock_timestamp()" in generic_sql
     assert "available_at <= clock_timestamp()" in generic_sql
     assert "deadline_at > clock_timestamp()" in generic_sql
 
