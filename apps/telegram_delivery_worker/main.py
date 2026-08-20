@@ -48,6 +48,7 @@ from core.telegram.outbound_authority import hold_telegram_outbound_authority
 from core.telegram.service import load_telegram_config
 from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
 from core.telegram.webhook_configuration import process_one_webhook_configuration
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import (
     mark_worker_heartbeat,
     record_notification_delivery_transition,
@@ -437,6 +438,7 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
     try:
         while not shutdown.is_set():
             mark_worker_heartbeat(WORKER_NAME)
+            await record_worker_heartbeat(engine, WORKER_NAME)
             now = loop.time()
             if now >= next_webhook_configuration:
                 try:
@@ -509,6 +511,10 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
                 gateway_generation=active_generation,
                 worker_id=worker_id,
             )
+            # Единственное доказательство, что цикл реально разбирает очереди
+            # доставки/ответов, а не просто числится живым по heartbeat выше
+            # (issue #176).
+            await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
             if not notification_processed and not reply_processed:
                 try:
                     await asyncio.wait_for(shutdown.wait(), timeout=0.5)

@@ -282,7 +282,14 @@ class OperatorSystemData(BaseModel):
     monitoring_enabled: bool | None
     last_scan_at: datetime | None
     next_scan_at: datetime | None
+    # Per-cabinet scan actors (cabinet_runtime) — historically mislabeled
+    # "workers" on the operator screen even though they are not the eleven
+    # actual background workers (issue #176).
     workers: list[OperatorWorkerState]
+    # The eleven long-running background workers themselves: campaign
+    # creation, auto-stop, Telegram inbox/outbox, reconciler, cleanup,
+    # digest, observer process, health watchdog, tracker reconciliation.
+    background_workers: list[OperatorWorkerState]
 
 
 class OperatorActionsResponse(BaseModel):

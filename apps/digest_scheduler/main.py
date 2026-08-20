@@ -30,6 +30,7 @@ from core.telegram.digest_builder import build_digest
 from core.telegram.notifications import enqueue_notification
 from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
 from core.wording import ads_ru, commands_ru, offers_ru, warnings_ru
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("digest_scheduler")
@@ -274,10 +275,11 @@ async def run_pulse_tick(
 # ====================== loops ======================
 
 
-async def metrics_loop(stop: asyncio.Event) -> None:
-    """Refresh the process-local Prometheus liveness gauge."""
+async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine) -> None:
+    """Refresh the process-local Prometheus liveness gauge and its durable twin."""
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        await record_worker_heartbeat(engine, WORKER_NAME)
         try:
             await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -312,6 +314,10 @@ async def tick_loop(
                 logger.info("pulse tick status=%s", pulse_status)
         except Exception:
             logger.exception("Ошибка в pulse tick")
+        # Оба тика выше ловят и логируют свои ошибки, а не поднимают их —
+        # поэтому дойти досюда означает, что рабочий цикл жив и итерирует, а
+        # не завис на одном из вызовов выше (issue #176).
+        await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
         try:
             await asyncio.wait_for(stop.wait(), timeout=CHECK_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -381,7 +387,7 @@ async def main_loop(
         # Каждый цикл под _supervised: упавший цикл перезапускается, а не гасит
         # весь воркер молча (MID-11).
         await asyncio.gather(
-            _supervised("metrics_loop", lambda: metrics_loop(stop), stop),
+            _supervised("metrics_loop", lambda: metrics_loop(stop, engine), stop),
             _supervised(
                 "tick_loop",
                 lambda: tick_loop(

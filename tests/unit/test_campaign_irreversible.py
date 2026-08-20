@@ -773,6 +773,7 @@ async def test_campaign_worker_uses_durable_gate_without_preclaim_rpc(
 
     monkeypatch.setattr(worker, "_claim", claim)
     monkeypatch.setattr(worker, "process_one_task", process)
+    monkeypatch.setattr(worker, "record_worker_heartbeat", AsyncMock())
     client = MagicMock()
     client.operation_authority.return_value = nullcontext()
 

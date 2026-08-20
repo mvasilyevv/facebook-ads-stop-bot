@@ -49,6 +49,14 @@ const WORKER_STATUS_LABEL: Record<string, string> = {
   offline: "Недоступен",
   degraded: "С ограничениями",
   unknown: "Не подтверждено",
+  // Наблюдение за кабинетом (актёры сканирования, cabinet_runtime).
+  running: "Сканирует",
+  stale: "Не отвечает",
+  failed: "Ошибка",
+  // Фоновые воркеры (issue #176): heartbeat жив, но реальный рабочий цикл
+  // (claim задачи/плановая проверка) не подтверждён — отдельное состояние
+  // от «недоступен», это ровно тот разрыв, что скрыл инцидент 18.08.
+  stalled: "Не разбирает очередь",
 };
 
 export function workerStatusLabel(status: string): string {

@@ -31,6 +31,38 @@ from apps.api.routers.v1.schemas.operator import (
 )
 from core.operator.queries import _task_item, task_action_kind, task_action_state
 from core.public_identifiers import public_uuid
+from core.worker_liveness import WORKER_POLL_INTERVAL_SECONDS
+
+
+@pytest.fixture(autouse=True)
+def _healthy_background_workers(monkeypatch):
+    """Background workers default to healthy (issue #176).
+
+    Every pre-existing test in this module asserts on the observer/scan half
+    of ``_system_section`` and never intended to exercise background-worker
+    liveness; without this fixture they would all start failing the moment
+    ``_system_section`` gains a ``fetch_worker_heartbeats`` call, because an
+    empty/unmocked heartbeat table would legitimately turn every one of them
+    ``partial`` (unknown background workers). Scenario-specific tests below
+    override this per test.
+    """
+
+    def _healthy_rows() -> list[dict]:
+        now = datetime.now(UTC)
+        return [
+            {
+                "worker_name": name,
+                "last_heartbeat_at": now,
+                "last_poll_success_at": now,
+            }
+            for name in WORKER_POLL_INTERVAL_SECONDS
+        ]
+
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_worker_heartbeats",
+        AsyncMock(side_effect=lambda *args, **kwargs: _healthy_rows()),
+    )
 
 
 def test_campaign_run_notify_scope_preserves_only_a_valid_opaque_id() -> None:
@@ -434,7 +466,7 @@ async def test_system_section_uses_durable_cabinet_activity(monkeypatch) -> None
     section = await operator_router._system_section(engine=object(), now=now)
 
     assert section.state == DataState.READY
-    assert section.sources == ["postgresql", "cabinet_runtime"]
+    assert section.sources == ["postgresql", "cabinet_runtime", "worker_heartbeats"]
     assert section.data is not None
     assert section.data.workers[0].last_activity_at == now
     assert section.data.workers[0].status == "online"
@@ -515,6 +547,159 @@ async def test_system_section_never_false_greens_unknown_monitoring_state(
     assert section.data is not None
     assert section.data.severity == "unknown"
     assert any(issue.code == "monitoring_state_unknown" for issue in section.issues)
+
+
+def _healthy_scan_state(now: datetime) -> dict:
+    """Baseline scan_state so the only source of degradation is a heartbeat row."""
+    return {
+        "enabled": True,
+        "last_scan_at": now,
+        "last_scan_outcome": "success",
+        "next_scan_at": None,
+        "campaign_ids": ["c1"],
+        "actors": [
+            {
+                "ad_account_id": "123",
+                "owner_instance": None,
+                "lease_expires_at": None,
+                "stage": "idle",
+                "last_progress_at": now,
+                "last_snapshot_at": now,
+                "error": None,
+            }
+        ],
+    }
+
+
+def _worker_rows(now: datetime, **overrides: dict) -> list[dict]:
+    """Healthy rows for every registered worker, overridden per test."""
+    rows = {
+        name: {"worker_name": name, "last_heartbeat_at": now, "last_poll_success_at": now}
+        for name in WORKER_POLL_INTERVAL_SECONDS
+    }
+    for name, patch in overrides.items():
+        rows[name] = {**rows[name], **patch}
+    return list(rows.values())
+
+
+async def _setup_system_section(monkeypatch, *, now: datetime, worker_rows: list[dict]) -> None:
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_scan_state",
+        AsyncMock(return_value=_healthy_scan_state(now)),
+    )
+    monkeypatch.setattr(
+        operator_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123"])
+    )
+    monkeypatch.setattr(
+        operator_router, "fetch_worker_heartbeats", AsyncMock(return_value=worker_rows)
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_section_background_worker_missing_heartbeat_is_unknown(
+    monkeypatch,
+) -> None:
+    """A worker that never wrote a row (fresh deploy, typo'd name) is unknown,
+    not silently healthy — ``null`` means unknown, not zero.
+    """
+    now = datetime.now(UTC)
+    rows = [row for row in _worker_rows(now) if row["worker_name"] != "cleanup"]
+    await _setup_system_section(monkeypatch, now=now, worker_rows=rows)
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    background = {w.id: w for w in section.data.background_workers}
+    cleanup = background["worker:cleanup"]
+    assert cleanup.status == "unknown"
+    assert cleanup.severity == OperatorSeverity.UNKNOWN
+    assert cleanup.last_activity_at is None
+    assert any(issue.code == "background_worker_missing" for issue in section.issues)
+    assert section.data.severity == OperatorSeverity.UNKNOWN
+    assert section.state == DataState.PARTIAL
+
+
+@pytest.mark.asyncio
+async def test_system_section_background_worker_dead_process_is_offline_critical(
+    monkeypatch,
+) -> None:
+    """18.08.2026: eleven hours of silence never reached the operator screen.
+
+    A worker whose *heartbeat itself* has gone stale — the process is not
+    responding at all — must be CRITICAL and visibly distinct from a healthy
+    idle worker.
+    """
+    now = datetime.now(UTC)
+    dead_since = now - timedelta(hours=11)
+    rows = _worker_rows(
+        now,
+        campaign_creator={
+            "last_heartbeat_at": dead_since,
+            "last_poll_success_at": dead_since,
+        },
+    )
+    await _setup_system_section(monkeypatch, now=now, worker_rows=rows)
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    background = {w.id: w for w in section.data.background_workers}
+    creator = background["worker:campaign_creator"]
+    assert creator.status == "offline"
+    assert creator.severity == OperatorSeverity.CRITICAL
+    assert section.data.severity == OperatorSeverity.CRITICAL
+    assert any(issue.code == "background_worker_offline" for issue in section.issues)
+
+
+@pytest.mark.asyncio
+async def test_system_section_background_worker_stuck_queue_loop_is_critical_and_distinct_from_offline(
+    monkeypatch,
+) -> None:
+    """A process that is alive but stopped polling its own queue is not the
+    same failure as a dead process, and neither may be confused with a
+    healthy idle worker: this is the exact bug class that hid the incident —
+    a decoupled heartbeat coroutine can keep ticking while the real task loop
+    is stuck.
+    """
+    now = datetime.now(UTC)
+    rows = _worker_rows(
+        now,
+        campaign_creator={
+            "last_heartbeat_at": now,  # process itself is fine
+            "last_poll_success_at": now - timedelta(hours=1),  # queue loop is not
+        },
+    )
+    await _setup_system_section(monkeypatch, now=now, worker_rows=rows)
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    background = {w.id: w for w in section.data.background_workers}
+    creator = background["worker:campaign_creator"]
+    assert creator.status == "stalled"
+    assert creator.status != "offline"
+    assert creator.severity == OperatorSeverity.CRITICAL
+    assert section.data.severity == OperatorSeverity.CRITICAL
+
+
+@pytest.mark.asyncio
+async def test_system_section_background_worker_idle_with_fresh_poll_is_healthy(
+    monkeypatch,
+) -> None:
+    """An idle worker at an empty queue keeps advancing both signals and must
+    look healthy, not merely "not yet flagged".
+    """
+    now = datetime.now(UTC)
+    rows = _worker_rows(now)  # everyone healthy, including an "idle" campaign_creator
+    await _setup_system_section(monkeypatch, now=now, worker_rows=rows)
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    background = {w.id: w for w in section.data.background_workers}
+    for worker in background.values():
+        assert worker.status == "online"
+        assert worker.severity == OperatorSeverity.OK
+    assert section.data.severity == OperatorSeverity.OK
+    assert section.state == DataState.READY
+    assert not any(issue.code.startswith("background_worker_") for issue in section.issues)
 
 
 @pytest.mark.parametrize(
@@ -890,6 +1075,7 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
             last_scan_at=now,
             next_scan_at=None,
             workers=[],
+            background_workers=[],
         ),
     )
     action_rows = [

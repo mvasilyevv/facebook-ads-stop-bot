@@ -564,6 +564,33 @@ async def fetch_operator_scan_state(
     return {**dict(row._mapping), "actors": [dict(actor) for actor in actors]}
 
 
+async def fetch_worker_heartbeats(engine: AsyncEngine) -> list[dict[str, Any]]:
+    """Read DB-authoritative background-worker liveness (issue #176).
+
+    Distinct from ``fetch_operator_scan_state``'s per-cabinet ``actors``:
+    those track observer scan progress per ad account, this tracks the
+    eleven long-running background workers themselves (campaign creation,
+    auto-stop, Telegram inbox/outbox, reconciler, cleanup, digest, observer
+    process, health watchdog, tracker reconciliation).
+    """
+    async with engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    SELECT worker_name, last_heartbeat_at, last_poll_success_at
+                    FROM worker_heartbeats
+                    """
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(row) for row in rows]
+
+
 async def fetch_operator_revision(engine: AsyncEngine) -> tuple[int, str]:
     """Return a commit-visible, non-decreasing PostgreSQL WAL cursor.
 

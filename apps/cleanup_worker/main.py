@@ -21,6 +21,7 @@ from apps.cleanup_worker.storage import (
 )
 from apps.cleanup_worker.worker import create_next_partition_if_missing, run_once
 from core.db import WORKER_ENGINE_KWARGS
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import mark_worker_db_poll_success, mark_worker_heartbeat
 
 logger = logging.getLogger("cleanup_worker")
@@ -38,6 +39,7 @@ async def metrics_loop(stop: asyncio.Event, engine) -> None:
     next_storage_check = 0.0
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        await record_worker_heartbeat(engine, WORKER_NAME)
         loop_time = asyncio.get_running_loop().time()
         if loop_time >= next_storage_check:
             try:
@@ -46,6 +48,7 @@ async def metrics_loop(stop: asyncio.Event, engine) -> None:
                     now=datetime.now(timezone.utc),
                 )
                 mark_worker_db_poll_success(WORKER_NAME)
+                await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
             except Exception as exc:
                 logger.exception("cleanup freshness check failed: %s", exc)
             try:

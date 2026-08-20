@@ -8,7 +8,11 @@ import {
   snapshotForRealtimeState,
   workerStatusLabel,
 } from "@fb/shared/operator/viewModel";
-import type { OperatorSeverity } from "@fb/shared/operator/contracts";
+import type {
+  DataState,
+  OperatorSeverity,
+  OperatorWorkerState,
+} from "@fb/shared/operator/contracts";
 
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Button, Skeleton } from "@/components/ui";
@@ -134,42 +138,66 @@ function SystemSourcesPage() {
                 </div>
               </dl>
 
-              <ul className="divide-y divide-[var(--color-hairline)]" aria-label="Воркеры">
-                {system.workers.map((worker) => {
-                  const severity = severityForDataState(
-                    worker.severity,
-                    snapshot.system.state,
-                  );
-                  const status = stateTrusted
-                    ? workerStatusLabel(worker.status)
-                    : "Состояние не подтверждено";
-                  return (
-                    <li
-                      key={worker.id}
-                      className="flex min-h-14 items-center gap-3 py-3"
-                    >
-                      <span
-                        className="size-2.5 shrink-0 rounded-full"
-                        style={{ background: SEVERITY_COLOR[severity] }}
-                        data-severity={severity}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <strong className="block truncate text-[14px] text-bg-11">
-                          {worker.label}
-                        </strong>
-                        <span className="block truncate text-[12px] text-bg-9">
-                          {status}
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+              <h2 className="mb-2 text-[12px] font-semibold uppercase tracking-[.08em] text-bg-8">
+                Сканирование кабинетов
+              </h2>
+              <WorkerList
+                workers={system.workers}
+                label="Сканирование кабинетов"
+                sectionState={snapshot.system.state}
+                stateTrusted={stateTrusted}
+              />
+
+              <h2 className="mb-2 mt-4 text-[12px] font-semibold uppercase tracking-[.08em] text-bg-8">
+                Фоновые воркеры
+              </h2>
+              <WorkerList
+                workers={system.background_workers}
+                label="Фоновые воркеры"
+                sectionState={snapshot.system.state}
+                stateTrusted={stateTrusted}
+              />
             </div>
           )}
         </OperatorSectionFrame>
       </div>
     </div>
+  );
+}
+
+function WorkerList({
+  workers,
+  label,
+  sectionState,
+  stateTrusted,
+}: {
+  workers: OperatorWorkerState[];
+  label: string;
+  sectionState: DataState;
+  stateTrusted: boolean;
+}) {
+  return (
+    <ul className="divide-y divide-[var(--color-hairline)]" aria-label={label}>
+      {workers.map((worker) => {
+        const severity = severityForDataState(worker.severity, sectionState);
+        const status = stateTrusted
+          ? workerStatusLabel(worker.status)
+          : "Состояние не подтверждено";
+        return (
+          <li key={worker.id} className="flex min-h-14 items-center gap-3 py-3">
+            <span
+              className="size-2.5 shrink-0 rounded-full"
+              style={{ background: SEVERITY_COLOR[severity] }}
+              data-severity={severity}
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1">
+              <strong className="block truncate text-[14px] text-bg-11">{worker.label}</strong>
+              <span className="block truncate text-[12px] text-bg-9">{status}</span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

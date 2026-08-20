@@ -4166,6 +4166,8 @@ export interface components {
       next_scan_at: string | null;
       /** Workers */
       workers: components["schemas"]["OperatorWorkerState"][];
+      /** Background Workers */
+      background_workers: components["schemas"]["OperatorWorkerState"][];
     };
     /** OperatorWorkerState */
     OperatorWorkerState: {

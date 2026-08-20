@@ -28,16 +28,26 @@ describe("WorkerPulse", () => {
     });
   });
 
-  it("shows the confirmed worker count", () => {
+  it("shows the confirmed worker count across scan actors and background workers", () => {
     render(<WorkerPulse />);
-    expect(screen.getByText("1/2 воркеров")).toBeInTheDocument();
+    // Fixture: 2 scan actors (1 ok) + 2 background workers (1 ok, issue #176).
+    expect(screen.getByText("2/4 воркеров")).toBeInTheDocument();
+  });
+
+  it("surfaces a stalled background worker in the header popover, not only the scan-actor list", async () => {
+    render(<WorkerPulse />);
+
+    screen.getByRole("button", { name: /Воркеры/ }).focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(screen.getByText("Сверка задач")).toBeInTheDocument();
   });
 
   it("neutralizes cached worker health while realtime reconnects", async () => {
     mockRealtimeStatus.mockReturnValue("reconnecting");
     render(<WorkerPulse />);
 
-    expect(screen.getByText("—/2 воркеров")).toBeInTheDocument();
+    expect(screen.getByText("—/4 воркеров")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Воркеры: статус не подтверждён" }),
     ).toBeInTheDocument();

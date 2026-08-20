@@ -300,6 +300,22 @@ export function makeOperatorSnapshot(): OperatorSnapshot {
             last_activity_at: "2026-07-18T10:14:40Z",
           },
         ],
+        background_workers: [
+          {
+            id: "worker:campaign_creator",
+            label: "Создание кампаний",
+            severity: "ok",
+            status: "online",
+            last_activity_at: "2026-07-18T10:14:44Z",
+          },
+          {
+            id: "worker:reconciler",
+            label: "Сверка задач",
+            severity: "critical",
+            status: "stalled",
+            last_activity_at: "2026-07-18T09:40:00Z",
+          },
+        ],
       },
     },
   };

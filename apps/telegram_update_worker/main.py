@@ -31,6 +31,7 @@ from core.telegram.update_inbox import (
     retire_stale_telegram_update_claim,
     telegram_update_claim_is_authoritative,
 )
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,7 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
     try:
         while not shutdown.is_set():
             mark_worker_heartbeat(WORKER_NAME)
+            await record_worker_heartbeat(engine, WORKER_NAME)
             now = loop.time()
             if gateway is None or now >= next_config_refresh:
                 config = await load_telegram_config(engine)
@@ -169,6 +171,10 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
                 gateway=gateway,
                 worker_id=worker_id,
             )
+            # Единственное доказательство, что цикл реально забирает
+            # обновления, а не просто числится живым по heartbeat выше
+            # (issue #176).
+            await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
             if processed is None:
                 next_config_refresh = 0.0
                 continue

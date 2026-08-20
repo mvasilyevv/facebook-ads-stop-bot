@@ -28,6 +28,7 @@ from core.metrics import (
 )
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 from core.pubsub import CHANNEL_TRACKER_WAKEUP
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("tracker_reconciliation_worker")
@@ -45,10 +46,11 @@ def _get_redis_url() -> str:
     return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
 
 
-async def metrics_loop(stop: asyncio.Event) -> None:
+async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine) -> None:
     """Refresh process-local Prometheus liveness; Redis remains wakeup-only."""
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        await record_worker_heartbeat(engine, WORKER_NAME)
         try:
             await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -164,7 +166,7 @@ async def main_loop(database_url: str) -> None:
             pass
 
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
-    metrics_task = asyncio.create_task(metrics_loop(stop_event))
+    metrics_task = asyncio.create_task(metrics_loop(stop_event, engine))
     listener_task = asyncio.create_task(wakeup_listener(redis_client, stop_event, wakeup))
     next_reconcile = 0.0
     try:
@@ -175,6 +177,9 @@ async def main_loop(database_url: str) -> None:
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("tracker durable queue drain failed")
+            # drain_event_tasks уже поймал и залогировал свою ошибку — дойти
+            # досюда значит рабочий цикл жив и реально трогает БД (issue #176).
+            await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
 
             monotonic_now = loop.time()
             if monotonic_now >= next_reconcile:

@@ -22,7 +22,14 @@ export function WorkerPulse() {
 
   const snapshot = data ? snapshotForRealtimeState(data, realtimeStatus === "connected") : null;
   const systemState = snapshot?.system.state ?? "unavailable";
-  const workers = snapshot?.system.data?.workers ?? [];
+  // Кабинеты-сканеры (cabinet_runtime) и одиннадцать фоновых воркеров
+  // (issue #176) — один общий пульс. Раньше здесь были только сканеры:
+  // остановившийся campaign_creator/reconciler/... не поднимал бы этот чип
+  // вообще, а это единственный индикатор, который оператор видит всегда.
+  const workers = [
+    ...(snapshot?.system.data?.workers ?? []),
+    ...(snapshot?.system.data?.background_workers ?? []),
+  ];
   const confirmed = systemState === "ready";
   const total = workers.length;
   const online = confirmed ? workers.filter((worker) => worker.severity === "ok").length : 0;

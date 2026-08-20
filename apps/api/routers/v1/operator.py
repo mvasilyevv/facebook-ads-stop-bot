@@ -93,9 +93,15 @@ from core.operator.queries import (
     fetch_operator_incidents,
     fetch_operator_revision,
     fetch_operator_scan_state,
+    fetch_worker_heartbeats,
 )
 from core.public_identifiers import parse_public_uuid, public_uuid
 from core.safe_diagnostics import redact_sensitive_text
+from core.worker_liveness import (
+    WORKER_POLL_INTERVAL_SECONDS,
+    heartbeat_stale_after_seconds,
+    poll_stale_after_seconds,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/operator", tags=["operator"])
@@ -125,6 +131,23 @@ _COMMAND_RESPONSES = {
     **_PROBLEM_RESPONSES,
 }
 _EVENTS_MAX_RANGE_DAYS = 90
+
+# Русские подписи одиннадцати фоновых воркеров (issue #176) — не путать с
+# per-cabinet scan actors из cabinet_runtime, которые исторически подписаны
+# «воркеры» на экране, хотя ими не являются.
+_BACKGROUND_WORKER_LABELS: dict[str, str] = {
+    "campaign_creator": "Создание кампаний",
+    "autopause": "Авто-стоп (money)",
+    "meta_api": "Meta API исполнитель",
+    "cleanup": "Очистка",
+    "digest_scheduler": "Дайджест",
+    "health_watchdog": "Сторож здоровья",
+    "observer": "Наблюдение (процесс)",
+    "reconciler": "Сверка задач",
+    "telegram_delivery": "Telegram · доставка",
+    "telegram_updates": "Telegram · приём",
+    "tracker_reconciliation_worker": "Сверка трекера",
+}
 
 
 def _problem(*, status_code: int, code: str, message: str, correlation_id: str) -> JSONResponse:
@@ -1179,13 +1202,106 @@ async def _system_section(
             )
         )
 
+    # Одиннадцать фоновых воркеров (issue #176): их heartbeat раньше жил
+    # только как process-local метрика Prometheus и никогда не попадал в
+    # операторский снимок. «Не отвечает» (heartbeat не тикает) и «отвечает,
+    # но простаивает» (heartbeat тикает, реальный рабочий цикл тоже — просто
+    # очередь пуста) — разные состояния; см. poll_stale_after_seconds.
+    heartbeat_rows = {
+        str(row.get("worker_name")): row for row in await fetch_worker_heartbeats(engine)
+    }
+    background_workers: list[OperatorWorkerState] = []
+    for worker_name in sorted(WORKER_POLL_INTERVAL_SECONDS):
+        label = _BACKGROUND_WORKER_LABELS.get(worker_name, worker_name)
+        row = heartbeat_rows.get(worker_name)
+        if row is None:
+            background_workers.append(
+                OperatorWorkerState(
+                    id=f"worker:{worker_name}",
+                    label=label,
+                    severity=OperatorSeverity.UNKNOWN,
+                    status="unknown",
+                    last_activity_at=None,
+                )
+            )
+            issues.append(
+                OperatorIssue(
+                    code="background_worker_missing",
+                    title=f"{label}: ещё не подтверждён",
+                    detail="В PostgreSQL нет heartbeat для этого воркера.",
+                    severity=OperatorSeverity.UNKNOWN,
+                    correlation_id=None,
+                )
+            )
+            continue
+        heartbeat_at = row.get("last_heartbeat_at")
+        poll_at = row.get("last_poll_success_at")
+        heartbeat_age = _age(now, heartbeat_at)
+        poll_age = _age(now, poll_at)
+        if heartbeat_age is None or heartbeat_age > heartbeat_stale_after_seconds():
+            worker_severity = OperatorSeverity.CRITICAL
+            worker_status = "offline"
+        elif poll_age is None or poll_age > poll_stale_after_seconds(worker_name):
+            # Процесс жив (heartbeat свежий), но его рабочий цикл — тот,
+            # что реально разбирает очередь/выполняет плановую проверку —
+            # не подтверждён. Ровно этот разрыв скрыл инцидент 18.08: у
+            # campaign_creator heartbeat шёл из отдельной корутины, не
+            # зависящей от зависшего task_loop.
+            worker_severity = OperatorSeverity.CRITICAL
+            worker_status = "stalled"
+        else:
+            worker_severity = OperatorSeverity.OK
+            worker_status = "online"
+        last_worker_activity = max(
+            (value for value in (heartbeat_at, poll_at) if isinstance(value, datetime)),
+            default=None,
+        )
+        background_workers.append(
+            OperatorWorkerState(
+                id=f"worker:{worker_name}",
+                label=label,
+                severity=worker_severity,
+                status=worker_status,
+                last_activity_at=last_worker_activity,
+            )
+        )
+        if worker_status == "offline":
+            issues.append(
+                OperatorIssue(
+                    code="background_worker_offline",
+                    title=f"{label}: не отвечает",
+                    detail=None
+                    if heartbeat_age is None
+                    else f"Возраст heartbeat: {heartbeat_age} с.",
+                    severity=OperatorSeverity.CRITICAL,
+                    correlation_id=None,
+                )
+            )
+        elif worker_status == "stalled":
+            issues.append(
+                OperatorIssue(
+                    code="background_worker_stalled",
+                    title=f"{label}: не разбирает очередь",
+                    detail=None
+                    if poll_age is None
+                    else f"Возраст последнего опроса: {poll_age} с.",
+                    severity=OperatorSeverity.CRITICAL,
+                    correlation_id=None,
+                )
+            )
+
     last_scan = scan.get("last_scan_at")
     scan_age = _age(now, last_scan)
+    all_workers = workers + background_workers
     critical_workers = [
-        worker for worker in workers if worker.severity == OperatorSeverity.CRITICAL
+        worker for worker in all_workers if worker.severity == OperatorSeverity.CRITICAL
     ]
-    warning_workers = [worker for worker in workers if worker.severity == OperatorSeverity.WARNING]
-    unknown_workers = [worker for worker in workers if worker.severity == OperatorSeverity.UNKNOWN]
+    warning_workers = [
+        worker for worker in all_workers if worker.severity == OperatorSeverity.WARNING
+    ]
+    unknown_workers = [
+        worker for worker in all_workers if worker.severity == OperatorSeverity.UNKNOWN
+    ]
     critical_issues = [issue for issue in issues if issue.severity == OperatorSeverity.CRITICAL]
     # Включённый мониторинг может фактически не покрывать ни одного объявления:
     # при одном кабинете пустой allowlist означает, что скан не выполняется вовсе
@@ -1273,7 +1389,7 @@ async def _system_section(
         state=state,
         as_of=last_scan,
         freshness_seconds=scan_age,
-        sources=["postgresql", "cabinet_runtime"],
+        sources=["postgresql", "cabinet_runtime", "worker_heartbeats"],
         issues=issues,
         data=OperatorSystemData(
             severity=severity,
@@ -1281,6 +1397,7 @@ async def _system_section(
             last_scan_at=last_scan,
             next_scan_at=scan.get("next_scan_at"),
             workers=workers,
+            background_workers=background_workers,
         ),
     )
 

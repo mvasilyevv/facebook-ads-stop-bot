@@ -105,6 +105,7 @@ from core.tasks.queue import (
 )
 from core.telegram.worker_notify import notify_recurring_incident, resolve_recurring_incident
 from core.wording import human_bytes_ru
+from core.worker_liveness import record_worker_heartbeat
 from core.worker_metrics import (
     mark_worker_heartbeat,
     record_irreversible_safety_event,
@@ -1772,10 +1773,19 @@ async def _run_has_created_meta_ids(engine: AsyncEngine, run_id: str) -> bool:
 # ====================== sub-loops ======================
 
 
-async def metrics_loop(stop: asyncio.Event) -> None:
-    """Refresh the process-local Prometheus liveness gauge."""
+async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine) -> None:
+    """Refresh the process-local Prometheus liveness gauge and its durable twin.
+
+    This coroutine is independent of ``task_loop``: a hang inside the claim
+    call below would not stop this tick from firing. That decoupling is
+    exactly what hid the 18.08.2026 incident, so the durable heartbeat here
+    marks process-alive only — the queue-claiming proof of life is recorded
+    from ``task_loop`` itself, not from here (see ``poll_success=True`` call
+    below).
+    """
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        await record_worker_heartbeat(engine, WORKER_NAME)
         try:
             await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -1798,6 +1808,11 @@ async def task_loop(
             logger.exception("ошибка claim_campaign_task")
             await _sleep_or_stop(stop)
             continue
+
+        # Единственное доказательство, что рабочий цикл реально трогает
+        # очередь, а не просто числится живым по отдельной корутине heartbeat
+        # (issue #176). Отмечается независимо от того, нашлась ли задача.
+        await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
 
         if claim.queue_empty or claim.task is None:
             # Пустой claim при непустой очереди означает закрытый гейт готовности.
@@ -1927,7 +1942,7 @@ async def main_loop(database_url: str | None = None) -> None:
     try:
         await asyncio.gather(
             task_loop(engine, stop, client=meta_client, uploader=uploader),
-            metrics_loop(stop),
+            metrics_loop(stop, engine),
             upload_storage_loop(engine, stop),
         )
     finally:

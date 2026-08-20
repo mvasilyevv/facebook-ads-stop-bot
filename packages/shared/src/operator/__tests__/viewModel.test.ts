@@ -274,6 +274,15 @@ describe("operator view model", () => {
     expect(workerStatusLabel("warming_up")).toBe("warming_up");
   });
 
+  it("distinguishes a stalled background worker from a fully offline one (issue #176)", () => {
+    // «Не отвечает» (heartbeat не тикает) и «отвечает, но не разбирает
+    // очередь» (heartbeat тикает, реальный опрос — нет) должны читаться
+    // как разные фразы, не как один и тот же «недоступен».
+    expect(workerStatusLabel("offline")).toBe("Недоступен");
+    expect(workerStatusLabel("stalled")).toBe("Не разбирает очередь");
+    expect(workerStatusLabel("offline")).not.toBe(workerStatusLabel("stalled"));
+  });
+
   it("reports healthy only for a confirmed empty attention section", () => {
     expect(snapshotHeadline(snapshot).severity).toBe("ok");
     expect(

@@ -12772,10 +12772,24 @@
             },
             "type": "array",
             "title": "Workers"
+          },
+          "background_workers": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorWorkerState"
+            },
+            "type": "array",
+            "title": "Background Workers"
           }
         },
         "type": "object",
-        "required": ["severity", "monitoring_enabled", "last_scan_at", "next_scan_at", "workers"],
+        "required": [
+          "severity",
+          "monitoring_enabled",
+          "last_scan_at",
+          "next_scan_at",
+          "workers",
+          "background_workers"
+        ],
         "title": "OperatorSystemData"
       },
       "OperatorWorkerState": {
