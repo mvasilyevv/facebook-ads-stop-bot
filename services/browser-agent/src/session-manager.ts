@@ -110,6 +110,18 @@ function safePageUrl(page: Page | null | undefined): string {
   }
 }
 
+/** Живо ли CDP-соединение. Клиент без isConnected считается живым (как в тестах). */
+function isBrowserAlive(browser: Browser | null | undefined): boolean {
+  try {
+    return Boolean(
+      browser &&
+        (typeof browser.isConnected !== "function" || browser.isConnected()),
+    );
+  } catch {
+    return false;
+  }
+}
+
 function safeBrowserContexts(browser: Browser | null): BrowserContext[] {
   try {
     return browser?.contexts() || [];
@@ -349,6 +361,30 @@ export class SessionManager {
       signal,
     } = options;
     throwIfOperationAborted(signal);
+
+    // Один профиль Vision — одна сессия. Реестр вкладок принадлежит сессии, и
+    // каждая новая сессия открывала СВОИ вкладки тех же кабинетов: перезапуск
+    // воркера или второй потребитель канала удваивали набор вкладок профиля, а
+    // прежние оставались в браузере навсегда. Профиль один и физически, и здесь.
+    const liveSession = forceProfileRestart
+      ? null
+      : this.findLiveSessionForProfile(visionProfileId);
+    if (liveSession) {
+      console.log(
+        `[session-manager] startBrowser: профиль ${visionProfileId} уже ведёт ` +
+          `сессия ${liveSession.id}, переиспользую её вкладки`,
+      );
+      // Свежие реквизиты Vision у вызывающего новее наших: перезапуск профиля
+      // под maintenance пойдёт по ним, а не по токену, протухшему с прошлой
+      // сессии.
+      if (visionXToken) {
+        liveSession.visionXToken = visionXToken;
+      }
+      if (visionApiUrl) {
+        liveSession.visionApiUrl = visionApiUrl;
+      }
+      return liveSession;
+    }
 
     const visionClient = new VisionClient(visionXToken, visionApiUrl);
 
@@ -749,6 +785,27 @@ export class SessionManager {
     return session;
   }
 
+  /** Сессия, которая уже ведёт этот профиль по живому CDP-соединению. */
+  private findLiveSessionForProfile(profileId: string): BrowserSession | null {
+    const normalizedProfileId = String(profileId || "").trim();
+    if (!normalizedProfileId) {
+      return null;
+    }
+    return (
+      Array.from(this.sessions.values())
+        .filter(
+          (candidate) =>
+            candidate.status === "connected" &&
+            candidate.visionProfileId === normalizedProfileId &&
+            isBrowserAlive(candidate.browser),
+        )
+        .sort(
+          (left, right) =>
+            right.connectedAt.getTime() - left.connectedAt.getTime(),
+        )[0] ?? null
+    );
+  }
+
   getSessionForVisionProfile(profileId: string): BrowserSession {
     const normalizedProfileId = String(profileId || "").trim();
     if (!normalizedProfileId) {
@@ -997,16 +1054,7 @@ export class SessionManager {
     session.interactivePages ??= new Map();
 
     const browser = session.browser;
-    let alive = false;
-    try {
-      alive = Boolean(
-        browser &&
-        (typeof browser.isConnected !== "function" || browser.isConnected()),
-      );
-    } catch {
-      alive = false;
-    }
-    const contexts = alive ? safeBrowserContexts(browser) : [];
+    const contexts = isBrowserAlive(browser) ? safeBrowserContexts(browser) : [];
     const context = contexts[0];
     if (!browser || !context) {
       throw new Error(
@@ -1065,26 +1113,22 @@ export class SessionManager {
       if (otherRole === role) continue;
       for (const page of pages.values()) opposite.add(page);
     }
+    // Вкладка этой роли и этого кабинета, если она у нас уже есть. Единственная
+    // причина её не брать — вкладки больше нет (закрыта или в карантине) или её
+    // держит другая роль. Расхождение адреса, чужой набор колонок и умершая
+    // внутри страницы сессия чинятся обновлением ТОЙ ЖЕ вкладки: каждая
+    // дополнительная вкладка кабинета — ещё один контекст, который может умереть
+    // посреди необратимой операции, и по набору вкладок больше не видно, где
+    // идёт залив.
     const mapped = ownPages.get(cabinetKey);
-    const mappedMatchesAct =
-      Boolean(resolvedAct) && isConfirmedAdsManagerPage(mapped, resolvedAct);
-    let page: Page | null = null;
-    if (
+    let page: Page | null =
       mapped &&
       !isPageClosed(mapped) &&
       !this.poisonedPages.has(mapped) &&
-      mappedMatchesAct &&
-      !opposite.has(mapped) &&
-      // Money-роль не может судить о живой сессии по одному URL: кэшированная
-      // control-страница может умереть без видимой навигации, а
-      // isConfirmedAdsManagerPage сравнивает только pathname и act. Тот же
-      // признак, что использует реальная проба (checkMetaApiHealth), обязан
-      // подтвердить аутентификацию перед тем, как отдать закешированную
-      // страницу под мутацию — иначе она отдаётся молча.
-      (role !== "control" || (await pageHasMetaApiToken(mapped, opts.signal)))
-    ) {
-      page = mapped;
-    } else {
+      !opposite.has(mapped)
+        ? mapped
+        : null;
+    if (!page) {
       ownPages.delete(cabinetKey);
     }
 
@@ -1101,8 +1145,8 @@ export class SessionManager {
         }
       }
     }
-    for (const [key, page] of ownPages) {
-      if (key !== cabinetKey) reserved.add(page);
+    for (const [key, otherCabinetPage] of ownPages) {
+      if (key !== cabinetKey) reserved.add(otherCabinetPage);
     }
 
     // Money-роли НИКОГДА не усыновляют чужую вкладку: единственным критерием
@@ -1116,6 +1160,7 @@ export class SessionManager {
         : null;
     }
 
+    let createdNow = false;
     if (!page) {
       // Живой вкладки нет, значит сейчас будет создание и навигация — именно то,
       // что превращается в цикл «открыл → закрыл», если кабинет падает подряд.
@@ -1151,27 +1196,24 @@ export class SessionManager {
           );
         }
       }
-      try {
-        await navigatePageWithinOperation(page, targetUrl, opts.signal);
-        if (!isConfirmedAdsManagerPage(page, resolvedAct)) {
-          throw new Error(
-            `cabinet_not_confirmed: final Ads Manager URL does not confirm act=${resolvedAct}`,
-          );
-        }
-      } catch (error) {
-        this.failRolePageNavigation(session, {
-          page,
-          resolvedAct,
-          ownPages,
-          cabinetKey,
-          error,
-          signal: opts.signal,
-        });
-      }
-    } else if (
-      opts.amColumnsQs !== undefined &&
-      !adsManagerUrlUsesColumnsQs(safePageUrl(page), opts.amColumnsQs)
-    ) {
+      createdNow = true;
+    }
+
+    // Обновление вкладки — единственный способ починить её состояние. Новая
+    // вкладка вместо обновления оставляла прежнюю открытой навсегда: так один
+    // кабинет и набирал по три-четыре копии.
+    const needsNavigation =
+      createdNow ||
+      !isConfirmedAdsManagerPage(page, resolvedAct) ||
+      (opts.amColumnsQs !== undefined &&
+        !adsManagerUrlUsesColumnsQs(safePageUrl(page), opts.amColumnsQs)) ||
+      // Money-роль не может судить о живой сессии по одному URL: control-страница
+      // умирает без видимой навигации, а isConfirmedAdsManagerPage сравнивает
+      // только pathname и act. Тот же признак, что использует реальная проба
+      // (checkMetaApiHealth), решает, отдавать страницу под мутацию или сначала
+      // обновить её.
+      (role === "control" && !(await pageHasMetaApiToken(page, opts.signal)));
+    if (needsNavigation) {
       try {
         await navigatePageWithinOperation(page, targetUrl, opts.signal);
         if (!isConfirmedAdsManagerPage(page, resolvedAct)) {

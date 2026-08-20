@@ -1773,33 +1773,40 @@ test("failed agent-owned navigation leaves an existing about:blank untouched", a
   assert.equal(session.scanPages.has("111"), false);
 });
 
-test("mapped login/wrong-origin page is rejected and replaced with a confirmed canonical tab", async () => {
+// #218: вкладка кабинета, уехавшая на вход, не отдаётся под роль — но и не
+// заменяется второй вкладкой. Прежнее «заменить новой» оставляло страницу входа
+// открытой навсегда и добавляло к ней ещё одну вкладку того же кабинета.
+test("mapped login page is refreshed in place and refused as a sign-out, without a second tab", async () => {
   const manager = new SessionManager();
+  let gotoCalls = 0;
   const staleMapped = {
     isClosed: () => false,
+    // Профиль разлогинен: навигация на кабинет снова приводит на вход.
     url: () => "https://www.facebook.com/login/?act=111",
-  };
-  let canonicalUrl = "about:blank";
-  const replacement = {
-    isClosed: () => false,
-    url: () => canonicalUrl,
-    goto: async (url: string) => {
-      canonicalUrl = url;
+    goto: async () => {
+      gotoCalls += 1;
     },
   };
+  let newPageCalls = 0;
   const context = {
     pages: () => [staleMapped],
-    newPage: async () => replacement,
+    newPage: async () => {
+      newPageCalls += 1;
+      return assert.fail("вторая вкладка того же кабинета не открывается");
+    },
   };
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: staleMapped });
   session.scanPages.set("111", staleMapped);
 
-  const selected = await manager.ensureScanPage(session, { actId: "111" });
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /cabinet_login_required/,
+  );
 
-  assert.equal(selected, replacement);
-  assert.equal(session.scanPages.get("111"), replacement);
-  assert.equal(canonicalUrl, adsManagerUrlForAct("111"));
+  assert.equal(gotoCalls, 1, "чиним состояние своей вкладки, а не открываем новую");
+  assert.equal(newPageCalls, 0);
+  assert.equal(session.scanPages.has("111"), false);
 });
 
 // #196: URL совпадения (isConfirmedAdsManagerPage: pathname + act) недостаточно
@@ -1809,7 +1816,7 @@ test("mapped login/wrong-origin page is rejected and replaced with a confirmed c
 // молча только по адресу.
 test("mapped control page whose live probe answers a login sign is not handed out silently", async () => {
   const manager = new SessionManager();
-  const mappedUrl =
+  let mappedUrl =
     "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111";
   let probeCalls = 0;
   const staleMapped = {
@@ -1821,24 +1828,19 @@ test("mapped control page whose live probe answers a login sign is not handed ou
       probeCalls += 1;
       return { present: false };
     },
-  };
-  let replacementUrl = "about:blank";
-  let newPageCalls = 0;
-  const replacement = {
-    isClosed: () => false,
-    url: () => replacementUrl,
     goto: async () => {
       // Свежая навигация реально доходит до Facebook под тем же профилем:
       // сессия мертва → Facebook уводит на вход.
-      replacementUrl = "https://www.facebook.com/login.php?next=x";
+      mappedUrl = "https://www.facebook.com/login.php?next=x";
     },
     close: async () => undefined,
   };
+  let newPageCalls = 0;
   const context = {
     pages: () => [staleMapped],
     newPage: async () => {
       newPageCalls += 1;
-      return replacement;
+      return assert.fail("вторая вкладка того же кабинета не открывается");
     },
   };
   const browser = { isConnected: () => true, contexts: () => [context] };
@@ -1851,8 +1853,54 @@ test("mapped control page whose live probe answers a login sign is not handed ou
   );
 
   assert.equal(probeCalls, 1, "мутация обязана проверить живой признак, не только URL");
-  assert.equal(newPageCalls, 1, "молчаливая отдача кэшированной control-страницы запрещена");
+  assert.equal(newPageCalls, 0, "молчаливая отдача кэшированной control-страницы запрещена");
   assert.equal(session.controlPages.has("111"), false);
+});
+
+// #218: та же проверка при ЖИВОЙ сессии Facebook. Пропавший в DOM токен — повод
+// обновить свою вкладку, а не открыть рядом ещё одну: именно так один кабинет
+// набирал по три-четыре копии за серию заливов.
+test("control page without a live token is refreshed in place, not duplicated", async () => {
+  const manager = new SessionManager();
+  const cabinetUrl = adsManagerUrlForAct("111");
+  let tokenPresent = true;
+  let gotoCalls = 0;
+  let createdPages = 0;
+  const pages: any[] = [];
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      createdPages += 1;
+      let currentUrl = "about:blank";
+      const page = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          gotoCalls += 1;
+          currentUrl = url;
+          // Навигация под живой сессией возвращает кабинет с токеном в DOM.
+          tokenPresent = true;
+        },
+        evaluate: async () => ({ present: tokenPresent }),
+        close: async () => undefined,
+      };
+      pages.push(page);
+      return page;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  const first = await manager.ensureControlPage(session, { actId: "111" });
+  tokenPresent = false;
+  const second = await manager.ensureControlPage(session, { actId: "111" });
+
+  assert.equal(first, second, "операция работает на той же вкладке кабинета");
+  assert.equal(createdPages, 1, "вторая вкладка того же кабинета не открывается");
+  assert.equal(pages.length, 1);
+  assert.equal(gotoCalls, 2, "потерянный токен чинится обновлением своей вкладки");
+  assert.equal(first.url(), cabinetUrl);
+  assert.equal(session.controlPages.get("111"), first);
 });
 
 test("concurrent missing scan and control create distinct agent-owned pages", async () => {
@@ -2277,6 +2325,261 @@ test("ensureInteractivePage переиспользует собственную 
   assert.equal(first, own as any);
   assert.equal(second, own as any);
   assert.equal(created, 1, "вторая вкладка под ту же роль и кабинет не нужна");
+});
+
+// #218: серия операций по двум кабинетам не увеличивает число вкладок. Кабинет
+// живёт в своих вкладках ролей (scan, control, interactive физически разделены,
+// иначе перезагрузка скана убивает контекст идущей мутации), и каждая следующая
+// операция переиспользует их, а не открывает копию.
+test("серия операций по кабинету оставляет по одной вкладке на роль", async () => {
+  const manager = new SessionManager();
+  const openTabs: any[] = [];
+  // Признак живой сессии читается со страницы и мигает: чтение падает по
+  // отмене, таймауту и посреди навигации, и любая такая осечка отвечает
+  // «токена нет». Ровно это и превращало серию заливов в набор копий кабинета.
+  let tokenPresent = true;
+  const context = {
+    pages: () => openTabs,
+    newPage: async () => {
+      let currentUrl = "about:blank";
+      const page = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          currentUrl = url;
+          tokenPresent = true;
+        },
+        evaluate: async () => ({ present: tokenPresent }),
+        close: async () => undefined,
+      };
+      openTabs.push(page);
+      return page;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  for (let round = 0; round < 5; round += 1) {
+    for (const actId of ["111", "222"]) {
+      await manager.ensureScanPage(session, { actId });
+      tokenPresent = round % 2 === 0;
+      await manager.ensureControlPage(session, { actId });
+      await manager.ensureInteractivePage(session, { actId });
+    }
+  }
+
+  assert.equal(
+    openTabs.length,
+    6,
+    "два кабинета × три роли: по одной вкладке, сколько бы операций ни прошло",
+  );
+  assert.equal(new Set(openTabs).size, 6);
+  for (const actId of ["111", "222"]) {
+    assert.equal(
+      new Set([
+        session.scanPages.get(actId),
+        session.controlPages.get(actId),
+        session.interactivePages.get(actId),
+      ]).size,
+      3,
+      `кабинет ${actId} держит ровно три собственные вкладки`,
+    );
+  }
+});
+
+// #218: вкладка кабинета, которую SPA увела с адреса кабинета, возвращается на
+// место обновлением. Раньше она оставалась открытой навсегда, а операция уходила
+// в свежую вкладку — по вкладкам было не понять, где идёт залив.
+test("уехавшая с кабинета вкладка возвращается обновлением, а не второй вкладкой", async () => {
+  const manager = new SessionManager();
+  let currentUrl = adsManagerUrlForAct("333");
+  let gotoCalls = 0;
+  const own = {
+    isClosed: () => false,
+    url: () => currentUrl,
+    goto: async (url: string) => {
+      gotoCalls += 1;
+      currentUrl = url;
+    },
+    evaluate: async () => ({ present: true }),
+    close: async () => undefined,
+  };
+  let newPageCalls = 0;
+  const context = {
+    pages: () => [own],
+    newPage: async () => {
+      newPageCalls += 1;
+      return assert.fail("вторая вкладка того же кабинета не открывается");
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+  session.interactivePages.set("333", own as any);
+
+  currentUrl = "https://www.facebook.com/business_locations/";
+  const page = await manager.ensureInteractivePage(session, { actId: "333" });
+
+  assert.equal(page, own as any);
+  assert.equal(newPageCalls, 0);
+  assert.equal(gotoCalls, 1);
+  assert.equal(currentUrl, adsManagerUrlForAct("333"));
+});
+
+// #218: реестр вкладок принадлежит сессии, поэтому вторая сессия того же
+// профиля открывала СВОИ вкладки тех же кабинетов. Перезапуск воркера или
+// второй потребитель канала так удваивали набор вкладок, а прежние оставались
+// в браузере. Профиль один — значит и сессия одна.
+test("повторный StartBrowser того же профиля переиспользует сессию и её вкладки", async () => {
+  const manager = new SessionManager();
+  const cabinetTab = {
+    isClosed: () => false,
+    url: () => adsManagerUrlForAct("111"),
+    evaluate: async () => ({ present: true }),
+  };
+  let newPageCalls = 0;
+  const browser = {
+    isConnected: () => true,
+    contexts: () => [
+      {
+        addInitScript: async () => {},
+        pages: () => [cabinetTab],
+        newPage: async () => {
+          newPageCalls += 1;
+          return assert.fail("вкладки живого профиля не открываются заново");
+        },
+      },
+    ],
+  };
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  let connectCalls = 0;
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return "folder-1";
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: "folder-1", profile_id: "profile-1", port: 7001 };
+  };
+  VisionClient.prototype.waitUntilCdpReady =
+    async function waitUntilCdpReady() {
+      return true;
+    };
+  (chromium as any).connectOverCDP = async () => {
+    connectCalls += 1;
+    return browser as any;
+  };
+
+  try {
+    const first = await manager.startBrowser({
+      visionXToken: "token-old",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+    const scan = await manager.ensureScanPage(first, { actId: "111" });
+
+    const second = await manager.startBrowser({
+      visionXToken: "token-fresh",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+
+    assert.equal(second.id, first.id, "второй потребитель канала — та же сессия");
+    assert.equal(connectCalls, 1, "второе CDP-подключение к тому же профилю не нужно");
+    assert.equal(
+      await manager.ensureScanPage(second, { actId: "111" }),
+      scan,
+      "вкладка кабинета переиспользуется, а не открывается заново",
+    );
+    assert.equal(newPageCalls, 0);
+    assert.equal(
+      second.visionXToken,
+      "token-fresh",
+      "восстановление профиля пойдёт по свежим реквизитам, а не по прошлым",
+    );
+    assert.equal(manager.listSessions().length, 1);
+
+    const otherProfile = await manager.startBrowser({
+      visionXToken: "token-fresh",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-2",
+    });
+    assert.notEqual(
+      otherProfile.id,
+      first.id,
+      "другой профиль Vision — другая сессия",
+    );
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
+});
+
+// Сессию с оборванным CDP переиспользовать нечем: её страницы мертвы.
+test("сессия с мёртвым CDP не переиспользуется при StartBrowser", async () => {
+  const manager = new SessionManager();
+  const adsPage = {
+    isClosed: () => false,
+    url: () => adsManagerUrlForAct("111"),
+  };
+  let connected = true;
+  const deadBrowser = {
+    isConnected: () => connected,
+    contexts: () => [{ addInitScript: async () => {}, pages: () => [adsPage] }],
+    removeAllListeners: () => {},
+  };
+  const freshBrowser = {
+    isConnected: () => true,
+    contexts: () => [{ addInitScript: async () => {}, pages: () => [adsPage] }],
+  };
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  let connectCalls = 0;
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return "folder-1";
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: "folder-1", profile_id: "profile-1", port: 7001 };
+  };
+  VisionClient.prototype.waitUntilCdpReady =
+    async function waitUntilCdpReady() {
+      return true;
+    };
+  (chromium as any).connectOverCDP = async () => {
+    connectCalls += 1;
+    return (connectCalls === 1 ? deadBrowser : freshBrowser) as any;
+  };
+
+  try {
+    const first = await manager.startBrowser({
+      visionXToken: "token",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+    connected = false;
+
+    const second = await manager.startBrowser({
+      visionXToken: "token",
+      visionApiUrl: "http://127.0.0.1:3030",
+      visionProfileId: "profile-1",
+    });
+
+    assert.notEqual(second.id, first.id);
+    assert.equal(connectCalls, 2);
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
 });
 
 // #205: профиль, который забрала другая машина, НЕ запускается заново.
