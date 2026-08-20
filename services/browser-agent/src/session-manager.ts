@@ -194,9 +194,24 @@ export function canonicalAdsManagerUrl(
  */
 const _agentMoneyPages = new WeakSet<Page>();
 
-/** Пометить страницу как money-владение агента. Синхронно, до первой навигации. */
-function reserveMoneyPage(page: Page): void {
+/**
+ * Подмножество: страницы роли control — те, на которых идёт необратимая
+ * мутация под control page-lock. Отделены от остального реестра намеренно.
+ * Роль interactive тоже не отдаётся чужому скану, но наблюдать её можно и
+ * нужно: именно её создаёт лечащая ручка ensure-cdp, и именно её видит
+ * релизный предикат, читающий канал без кабинета.
+ */
+const _agentControlPages = new WeakSet<Page>();
+
+/** Пометить страницу как владение агента под ролью. Синхронно, до навигации. */
+function reserveAgentRolePage(page: Page, role: BrowserPageRole): void {
+  if (role === "scan") {
+    return;
+  }
   _agentMoneyPages.add(page);
+  if (role === "control") {
+    _agentControlPages.add(page);
+  }
 }
 
 /** Найти среди ВСЕХ открытых вкладок живую вкладку Ads Manager нужного кабинета. */
@@ -269,6 +284,16 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
  * Отличие от findPreferredPrimaryPage: здесь нет отката на первую попавшуюся
  * вкладку. Проба здоровья без явно названного кабинета должна честно ответить
  * «нет страницы», а не выдать за Ads Manager чужую вкладку оператора.
+ *
+ * Не отдаётся ровно одно: control-страница. Проба готовности ходит раз в две
+ * секунды и под СВОИМ page-lock — взяв control-страницу, она читала бы DOM
+ * вкладки, которая в этот момент несёт необратимую мутацию под другим замком.
+ *
+ * Роль interactive здесь остаётся видимой намеренно. Наблюдателей без кабинета
+ * трое: проба готовности, полная проба канала в watchdog и чтение
+ * `GET /api/settings/vision`, на котором стоит релизный предикат. Последним
+ * двум показывать нечего, кроме вкладки, созданной лечащей ручкой ensure-cdp, —
+ * а она создаётся именно под ролью interactive.
  */
 export function findLiveAdsManagerPage(browser: Browser | null): Page | null {
   if (!browser) {
@@ -277,7 +302,7 @@ export function findLiveAdsManagerPage(browser: Browser | null): Page | null {
 
   for (const context of safeBrowserContexts(browser)) {
     for (const page of safeContextPages(context)) {
-      if (isPageClosed(page)) {
+      if (isPageClosed(page) || _agentControlPages.has(page)) {
         continue;
       }
       if (isAdsManagerUrl(safePageUrl(page))) {
@@ -1176,17 +1201,15 @@ export class SessionManager {
       // Проба после паузы переиспользует удержанную страницу входа: если человек
       // уже вошёл в ней, там теперь живая сессия, а вкладка остаётся одна.
       page = this.takeRetainedLoginPage(session);
-      if (page && role !== "scan") {
-        reserveMoneyPage(page);
+      if (page) {
+        reserveAgentRolePage(page, role);
       }
       if (!page) {
         try {
           page = await createPageWithinOperation(context, opts.signal);
           // Резервируем ДО навигации и до любого следующего await: иначе между
           // созданием и регистрацией страницу успевает выбрать чужая сессия.
-          if (role !== "scan") {
-            reserveMoneyPage(page);
-          }
+          reserveAgentRolePage(page, role);
         } catch {
           if (opts.signal?.aborted) {
             throw new Error("Browser operation cancelled");

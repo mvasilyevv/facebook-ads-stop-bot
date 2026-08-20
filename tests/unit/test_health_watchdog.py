@@ -812,3 +812,303 @@ async def test_login_required_is_never_answered_by_reattaching(monkeypatch) -> N
     await hw.check_meta_api_channel(client, engine=object(), reattach_session=reattach)
 
     reattach.assert_not_awaited()
+
+
+# ====================== явная подготовка рабочего места (issue #189) ======================
+#
+# Проба готовности только наблюдает. Значит вкладку кабинета кто-то обязан
+# открыть явно — и делает это watchdog: observer'ский цикл живёт задачами
+# observer_scan, а при выключенном сканировании они не публикуются вовсе.
+
+
+def _workspace_fakes(monkeypatch, *, ready: bool, accounts: list[str]) -> AsyncMock:
+    """Общая обвязка: наблюдаемая готовность канала, набор кабинетов и RPC."""
+    from core.meta_api import browser_readiness
+    from core.observer import accounts as observer_accounts
+
+    monkeypatch.setattr(
+        browser_readiness,
+        "browser_channel_ready_now",
+        AsyncMock(return_value=ready),
+    )
+    monkeypatch.setattr(
+        observer_accounts,
+        "resolve_configured_ad_account_ids",
+        AsyncMock(return_value=list(accounts)),
+    )
+    return AsyncMock(
+        return_value=[
+            {"ad_account_id": account_id, "opened": True, "url": "", "error": ""}
+            for account_id in accounts
+        ]
+    )
+
+
+_WORKSPACE_DONE = "подготовка рабочего места"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_channel_never_touches_the_browser(monkeypatch) -> None:
+    """Готовность подтверждена наблюдением — готовить нечего и трогать нечего."""
+    open_tabs = _workspace_fakes(monkeypatch, ready=True, accounts=["100000000000001"])
+
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    open_tabs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_opens_exactly_the_configured_cabinets(monkeypatch, caplog) -> None:
+    """Два кабинета в офферах — вкладки ровно этих двух, а не случайного третьего."""
+    accounts = ["100000000000001", "100000000000002"]
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=accounts)
+
+    with caplog.at_level(logging.INFO, logger=hw.logger.name):
+        await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    assert open_tabs.await_count == 1
+    assert open_tabs.await_args.args[0] == accounts
+    assert any(_WORKSPACE_DONE in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_workspace_without_configured_cabinets_opens_nothing(monkeypatch) -> None:
+    """Кабинета нет ни в одном активном оффере — открывать наугад нечего."""
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=[])
+
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    open_tabs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_defers_to_vision_maintenance(monkeypatch) -> None:
+    """Пока идёт обслуживание профиля, подготовка не лезет в браузер."""
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=["100000000000001"])
+
+    class BlockedFence:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise hw.BrowserOperationBlocked("browser maintenance active")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(hw, "BrowserOperationFence", BlockedFence)
+
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    open_tabs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_lost_fence_is_never_reported_as_prepared(
+    monkeypatch,
+    caplog,
+) -> None:
+    """Аренда потеряна — рабочее место не считается подготовленным.
+
+    Вкладки могла открыть не наша аренда, а следом за нами уже шло обслуживание.
+    Без проверки аренды после вызова подготовка отчиталась бы об успехе, которого
+    не было, и оператор искал бы вкладки, которых нет.
+    """
+    open_tabs = _workspace_fakes(monkeypatch, ready=False, accounts=["100000000000001"])
+
+    class LostFence:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def assert_held(self):
+            raise hw.BrowserFenceLeaseLost("lease lost")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(hw, "BrowserOperationFence", LostFence)
+
+    with caplog.at_level(logging.INFO, logger=hw.logger.name):
+        await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert open_tabs.await_count == 1
+    assert not any(_WORKSPACE_DONE in message for message in messages)
+    assert any("fence lost" in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_workspace_carries_a_deadline_into_the_browser_call(monkeypatch) -> None:
+    """Дедлайн доходит до самого вызова, а аренда отпускается после него.
+
+    Живая строка в browser_operation_leases считается активной работой для drain
+    обслуживания: неограниченная подготовка уронила бы операторский ensure-cdp по
+    таймауту ровно тогда, когда канал сломан. Потолок тот же, что у близнеца в
+    observer: 20 секунд на кабинет, но не меньше минуты.
+    """
+    from core.deadlines import remaining_deadline_seconds
+
+    accounts = ["100000000000001", "100000000000002"]
+    _workspace_fakes(monkeypatch, ready=False, accounts=accounts)
+    released: list[str] = []
+    observed: list[float | None] = []
+
+    class TrackingFence:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def assert_held(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            released.append("released")
+            return False
+
+    async def _observe_deadline(_accounts):
+        observed.append(remaining_deadline_seconds())
+        return []
+
+    monkeypatch.setattr(hw, "BrowserOperationFence", TrackingFence)
+
+    await hw.prepare_browser_workspace(
+        SimpleNamespace(),
+        open_cabinet_tabs=_observe_deadline,
+    )
+
+    assert released == ["released"]
+    assert observed and observed[0] is not None
+    assert 0 < observed[0] <= max(60, 20 * len(accounts))
+
+
+@pytest.mark.asyncio
+async def test_workspace_loop_waits_out_the_startup_grace(monkeypatch) -> None:
+    """До конца startup grace цикл не трогает браузер.
+
+    browser-agent и Vision поднимаются дольше воркеров: без паузы каждый рестарт
+    начинался бы с предупреждения о недоступном браузере, которое ничего не
+    означает. Числа маленькие и с большим запасом — проверка порядка, не времени.
+    """
+    stop = asyncio.Event()
+    calls: list[int] = []
+
+    async def _prepare(_engine, *, open_cabinet_tabs):
+        calls.append(1)
+        stop.set()
+
+    monkeypatch.setattr(hw, "STARTUP_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(hw, "prepare_browser_workspace", _prepare)
+
+    task = asyncio.create_task(
+        hw.browser_workspace_loop(
+            stop=stop,
+            engine=SimpleNamespace(),
+            open_cabinet_tabs=AsyncMock(),
+            interval=0.01,
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert calls == [], "подготовка стартовала раньше, чем поднялся browser-agent"
+    await asyncio.wait_for(task, timeout=5)
+
+    assert calls == [1]
+
+
+def test_workspace_cadence_rejects_a_probe_sized_interval() -> None:
+    """Каденция порядка пробы готовности — это цикл вкладок, и её не принимают."""
+    with pytest.raises(RuntimeError):
+        hw._validated_browser_workspace_interval(2)
+    with pytest.raises(RuntimeError):
+        hw._validated_browser_workspace_interval(0.06)
+    with pytest.raises(RuntimeError):
+        hw._validated_browser_workspace_interval(7200)
+
+    assert hw._validated_browser_workspace_interval(60) == 60.0
+
+
+@pytest.mark.asyncio
+async def test_main_loop_hands_the_workspace_loop_the_real_cabinet_tabs_rpc(
+    monkeypatch,
+) -> None:
+    """Проводка проверяется вызовом: инжектируемая ручка обязана звать OpenCabinetTabs."""
+    import clients.python_grpc.client as grpc_client
+    import core.config as core_config
+    import core.meta_api.client as meta_api_client_module
+    import core.vision_runtime as vision_runtime
+
+    opened: list[list[str]] = []
+    closed: list[str] = []
+
+    class FakeBrowserAgentClient:
+        def __init__(self, _config):
+            pass
+
+        async def start(self):
+            return None
+
+        async def open_cabinet_tabs(self, ad_account_ids):
+            opened.append(list(ad_account_ids))
+            return [{"ad_account_id": item, "opened": True} for item in ad_account_ids]
+
+        async def close(self):
+            closed.append("closed")
+
+    monkeypatch.setattr(grpc_client, "BrowserAgentClient", FakeBrowserAgentClient)
+    monkeypatch.setattr(grpc_client, "BrowserAgentConfig", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        core_config,
+        "get_settings",
+        lambda: SimpleNamespace(vision_api_url="http://vision.invalid"),
+    )
+    monkeypatch.setattr(
+        vision_runtime,
+        "load_vision_runtime_config",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                x_token="token",
+                profile_id="profile-1",
+                folder_id="folder-1",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        meta_api_client_module,
+        "MetaApiClient",
+        lambda **_kwargs: SimpleNamespace(start=AsyncMock(), close=AsyncMock()),
+    )
+    monkeypatch.setattr(hw, "_get_database_url", lambda: "postgresql+asyncpg://x/y")
+    monkeypatch.setattr(hw, "_get_vision_cloud_url", lambda: "http://cloud.invalid")
+    monkeypatch.setattr(
+        hw,
+        "create_async_engine",
+        lambda *_args, **_kwargs: SimpleNamespace(dispose=AsyncMock()),
+    )
+
+    async def _run_once(_name, factory, _stop):
+        await factory()
+
+    monkeypatch.setattr(hw, "_supervised", _run_once)
+    for loop_name in (
+        "metrics_loop",
+        "browser_readiness_loop",
+        "check_loop",
+        "meta_probe_loop",
+        "vision_token_refresh_loop",
+        "shadow_spend_loop",
+    ):
+        monkeypatch.setattr(hw, loop_name, AsyncMock(return_value=None))
+
+    async def _capture(*, stop, engine, open_cabinet_tabs, interval=None):
+        await open_cabinet_tabs(["100000000000001"])
+
+    monkeypatch.setattr(hw, "browser_workspace_loop", _capture)
+
+    await hw.main_loop()
+
+    assert opened == [["100000000000001"]]
+    assert closed == ["closed"]

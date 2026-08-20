@@ -1271,6 +1271,75 @@ test("money page of one session is invisible to another session's scan", async (
   assert.equal(scan, secondCreated);
 });
 
+function singlePageBrowser(): { browser: any; created: any } {
+  let createdUrl = "about:blank";
+  const created = {
+    isClosed: () => false,
+    url: () => createdUrl,
+    goto: async (url: string) => {
+      createdUrl = url;
+    },
+  };
+  const pages: any[] = [];
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      pages.push(created);
+      return created;
+    },
+  };
+  return {
+    browser: { isConnected: () => true, contexts: () => [context] },
+    created,
+  };
+}
+
+// Проба готовности идёт раз в две секунды и кабинет больше не называет: без
+// кабинета она смотрит на уже живую вкладку Ads Manager. Control-страница такой
+// вкладкой быть не может — на ней в этот момент идёт необратимая мутация под
+// другим page-lock.
+test("наблюдаемая вкладка никогда не control-страница агента", async () => {
+  const manager = new SessionManager();
+  const { browser, created } = singlePageBrowser();
+  const session = makeSession({ browser, primaryPage: null });
+
+  const control = await manager.ensureControlPage(session, { actId: "444" });
+
+  assert.equal(control, created as any);
+  assert.equal(findLiveAdsManagerPage(browser as any), null);
+});
+
+// Лечащая ручка ensure-cdp создаёт вкладку под ролью interactive, и ровно её
+// потом читают полная проба канала и релизный предикат — оба без кабинета.
+// Спрятать её значило бы «оператор чинит канал, канал не чинится», а релиз при
+// этом всегда уходил бы в DEGRADED.
+test("вкладка, созданную лечащей ручкой, наблюдатель без кабинета видит", async () => {
+  const manager = new SessionManager();
+  const { browser, created } = singlePageBrowser();
+  const session = makeSession({ browser, primaryPage: null });
+
+  const interactive = await manager.ensureInteractivePage(session, {
+    actId: "444",
+  });
+
+  assert.equal(interactive, created as any);
+  assert.equal(findLiveAdsManagerPage(browser as any), created as any);
+});
+
+// Обычная вкладка кабинета (её открывает подготовка рабочего места) пробе
+// доступна: отказ должен наступать из-за отсутствия вкладки, а не из-за того,
+// что helper перестал видеть вкладки вообще.
+test("наблюдаемая вкладка — вкладка, за которую никто не отвечает деньгами", () => {
+  const scanPage = {
+    isClosed: () => false,
+    url: () =>
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=444",
+  };
+  const browser = { contexts: () => [{ pages: () => [scanPage] }] };
+
+  assert.equal(findLiveAdsManagerPage(browser as any), scanPage);
+});
+
 // Чужой/несуществующий кабинет и закрытые вкладки → null (вкладку откроет ensureScanPage).
 test("findAdsManagerPageByAct: нет вкладки → null, закрытая не считается", () => {
   const closedCab = {
