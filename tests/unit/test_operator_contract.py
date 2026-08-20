@@ -702,6 +702,70 @@ async def test_system_section_background_worker_idle_with_fresh_poll_is_healthy(
     assert not any(issue.code.startswith("background_worker_") for issue in section.issues)
 
 
+@pytest.mark.asyncio
+async def test_system_section_background_worker_fresh_but_never_polled_is_unknown_not_critical(
+    monkeypatch,
+) -> None:
+    """Review issue #176 Б3: right after a deploy every one of the eleven
+    workers restarts at once. A fresh heartbeat with no poll confirmed yet
+    (health_watchdog's own STARTUP_GRACE_SECONDS is >= 90s before its first
+    check) must read as unknown, not as a false CRITICAL "stalled" — null
+    means unknown, not a confirmed failure.
+    """
+    now = datetime.now(UTC)
+    rows = _worker_rows(
+        now,
+        health_watchdog={"last_heartbeat_at": now, "last_poll_success_at": None},
+    )
+    await _setup_system_section(monkeypatch, now=now, worker_rows=rows)
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    background = {w.id: w for w in section.data.background_workers}
+    watchdog = background["worker:health_watchdog"]
+    assert watchdog.status == "unknown"
+    assert watchdog.status != "stalled"
+    assert watchdog.severity == OperatorSeverity.UNKNOWN
+    assert any(issue.code == "background_worker_poll_unconfirmed" for issue in section.issues)
+    assert not any(issue.code == "background_worker_stalled" for issue in section.issues)
+
+
+@pytest.mark.asyncio
+async def test_system_section_degrades_to_unknown_workers_when_heartbeat_read_fails(
+    monkeypatch,
+) -> None:
+    """Review issue #176 Л3: the write side already swallows its own DB
+    failures (core/worker_liveness.record_worker_heartbeat); the read side
+    must be equally resilient. A broken/missing worker_heartbeats table must
+    degrade only this section (background workers -> unknown), not propagate
+    and take down the entire /api/operator/snapshot response.
+    """
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_scan_state",
+        AsyncMock(return_value=_healthy_scan_state(now)),
+    )
+    monkeypatch.setattr(
+        operator_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123"])
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_worker_heartbeats",
+        AsyncMock(side_effect=RuntimeError('relation "worker_heartbeats" does not exist')),
+    )
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    background = {w.id: w for w in section.data.background_workers}
+    assert len(background) == len(WORKER_POLL_INTERVAL_SECONDS)
+    for worker in background.values():
+        assert worker.status == "unknown"
+        assert worker.severity == OperatorSeverity.UNKNOWN
+    assert section.data is not None
+    assert section.state == DataState.PARTIAL
+
+
 @pytest.mark.parametrize(
     (
         "meta_as_of",

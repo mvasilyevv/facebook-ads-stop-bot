@@ -1207,9 +1207,17 @@ async def _system_section(
     # операторский снимок. «Не отвечает» (heartbeat не тикает) и «отвечает,
     # но простаивает» (heartbeat тикает, реальный рабочий цикл тоже — просто
     # очередь пуста) — разные состояния; см. poll_stale_after_seconds.
-    heartbeat_rows = {
-        str(row.get("worker_name")): row for row in await fetch_worker_heartbeats(engine)
-    }
+    try:
+        heartbeat_rows = {
+            str(row.get("worker_name")): row for row in await fetch_worker_heartbeats(engine)
+        }
+    except Exception:  # noqa: BLE001 — read-side asymmetry with the write side's
+        # best-effort contract (core/worker_liveness.record_worker_heartbeat):
+        # a broken/missing worker_heartbeats table must degrade this ONE
+        # section to "unknown per worker", not take down the whole operator
+        # snapshot (economy/portfolio/actions/...) with it (review issue #176 Л3).
+        logger.warning("fetch_worker_heartbeats failed; background workers unknown", exc_info=True)
+        heartbeat_rows = {}
     background_workers: list[OperatorWorkerState] = []
     for worker_name in sorted(WORKER_POLL_INTERVAL_SECONDS):
         label = _BACKGROUND_WORKER_LABELS.get(worker_name, worker_name)
@@ -1241,12 +1249,19 @@ async def _system_section(
         if heartbeat_age is None or heartbeat_age > heartbeat_stale_after_seconds():
             worker_severity = OperatorSeverity.CRITICAL
             worker_status = "offline"
-        elif poll_age is None or poll_age > poll_stale_after_seconds(worker_name):
-            # Процесс жив (heartbeat свежий), но его рабочий цикл — тот,
-            # что реально разбирает очередь/выполняет плановую проверку —
-            # не подтверждён. Ровно этот разрыв скрыл инцидент 18.08: у
-            # campaign_creator heartbeat шёл из отдельной корутины, не
-            # зависящей от зависшего task_loop.
+        elif poll_age is None:
+            # Процесс жив (heartbeat свежий), но рабочий цикл ЕЩЁ НИ РАЗУ не
+            # подтвердил опрос — например, только что поднялся после деплоя:
+            # у health_watchdog STARTUP_GRACE_SECONDS перед первой проверкой
+            # гарантированно ≥ 90с, и каждый деплой перезапускает все 11
+            # воркеров разом. Это неизвестно, а не отказ — null не равен нулю.
+            worker_severity = OperatorSeverity.UNKNOWN
+            worker_status = "unknown"
+        elif poll_age > poll_stale_after_seconds(worker_name):
+            # Рабочий цикл — тот, что реально разбирает очередь/выполняет
+            # плановую проверку — раньше подтверждался, а теперь нет. Ровно
+            # этот разрыв скрыл инцидент 18.08: у campaign_creator heartbeat
+            # шёл из отдельной корутины, не зависящей от зависшего task_loop.
             worker_severity = OperatorSeverity.CRITICAL
             worker_status = "stalled"
         else:
@@ -1282,10 +1297,18 @@ async def _system_section(
                 OperatorIssue(
                     code="background_worker_stalled",
                     title=f"{label}: не разбирает очередь",
-                    detail=None
-                    if poll_age is None
-                    else f"Возраст последнего опроса: {poll_age} с.",
+                    detail=f"Возраст последнего опроса: {poll_age} с.",
                     severity=OperatorSeverity.CRITICAL,
+                    correlation_id=None,
+                )
+            )
+        elif worker_status == "unknown":
+            issues.append(
+                OperatorIssue(
+                    code="background_worker_poll_unconfirmed",
+                    title=f"{label}: рабочий цикл ещё не подтверждён",
+                    detail="Heartbeat свежий, но ни один опрос очереди/проверки ещё не прошёл.",
+                    severity=OperatorSeverity.UNKNOWN,
                     correlation_id=None,
                 )
             )

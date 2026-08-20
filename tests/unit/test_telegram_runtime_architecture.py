@@ -230,8 +230,12 @@ def test_new_telegram_runtime_has_no_legacy_transport_or_zero_sentinel() -> None
         assert forbidden not in source
     assert re.search(r"\bmessage_id\s*=\s*0\b", source) is None
 
-    # Telegram workers expose Prometheus liveness only; Redis heartbeat
-    # compatibility paths are physically absent.
+    # Telegram workers expose Prometheus liveness (core/worker_metrics.py) and
+    # durable PostgreSQL liveness (core/worker_liveness.py, issue #176); Redis
+    # heartbeat compatibility paths remain physically absent. `core.worker_heartbeat`
+    # was never a real module — it is a reserved, forbidden dotted path from an
+    # earlier "safety-first" branch's Redis-backed heartbeat shim that was never
+    # merged; keep it unimportable so it cannot be reintroduced under that name.
     for relative in (
         "apps/telegram_delivery_worker/main.py",
         "apps/telegram_update_worker/main.py",

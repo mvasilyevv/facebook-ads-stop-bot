@@ -140,3 +140,53 @@ async def test_task_loop_does_not_mark_db_poll_when_claim_fails(monkeypatch) -> 
 
     mark_db_poll_success.assert_not_called()
     durable_heartbeat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_loop_survives_a_liveness_write_failure_on_the_money_lane(
+    monkeypatch,
+) -> None:
+    """Review issue #176 Б1: on autopause (money lane), an unhandled exception
+    here means auto-stop is claimed but never executed while the ad keeps
+    spending. A raw connection failure from record_worker_heartbeat must not
+    stop task_loop from running an already-claimed, leased task. Fails on
+    8fe0696e, where this call sat outside any try/except.
+    """
+    stop = asyncio.Event()
+    task = SimpleNamespace(
+        id=7,
+        task_type="meta_api_mutation",
+        requested_by="bot_auto_stop",
+        lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000007"),
+        lease_token=1,
+    )
+    monkeypatch.setattr(
+        meta,
+        "claim_browser_ready_mutation_task",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                task=task,
+                queue_empty=False,
+                browser_profile_id="vision-profile-1",
+                browser_readiness_generation=1,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        meta,
+        "record_worker_heartbeat",
+        AsyncMock(side_effect=ConnectionRefusedError("connection refused")),
+    )
+    processed: list[int] = []
+
+    async def _process(*_args, **_kwargs) -> None:
+        processed.append(task.id)
+        stop.set()
+
+    monkeypatch.setattr(meta, "process_one_task", _process)
+    client = MagicMock()
+    client.operation_authority.return_value = nullcontext()
+
+    await meta.task_loop(object(), stop, client=client, alert_ctx=None)
+
+    assert processed == [task.id]

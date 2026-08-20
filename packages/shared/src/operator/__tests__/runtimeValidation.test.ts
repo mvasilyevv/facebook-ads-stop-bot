@@ -117,6 +117,41 @@ describe("operator semantic runtime validation", () => {
     ).toBe(snapshot);
   });
 
+  it("rejects a system section missing the background_workers field (issue #176)", () => {
+    const snapshot = makeOperatorSnapshot();
+    const { background_workers: _dropped, ...dataWithoutBackgroundWorkers } =
+      snapshot.system.data!;
+
+    expect(() =>
+      validateOperatorPayload("/api/operator/snapshot", {
+        ...snapshot,
+        system: {
+          ...snapshot.system,
+          data: dataWithoutBackgroundWorkers,
+        },
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+  });
+
+  it("rejects a background worker entry missing a required field", () => {
+    const snapshot = makeOperatorSnapshot();
+    const worker = snapshot.system.data!.background_workers[0]!;
+    const { status: _dropped, ...workerWithoutStatus } = worker;
+
+    expect(() =>
+      validateOperatorPayload("/api/operator/snapshot", {
+        ...snapshot,
+        system: {
+          ...snapshot.system,
+          data: {
+            ...snapshot.system.data,
+            background_workers: [workerWithoutStatus],
+          },
+        },
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+  });
+
   it("rejects contradictory or unsafe portfolio evidence", () => {
     const snapshot = makeOperatorSnapshot();
     const group = snapshot.portfolio.data!.currency_groups[0]!;

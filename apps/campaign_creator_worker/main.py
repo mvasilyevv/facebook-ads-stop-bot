@@ -105,7 +105,7 @@ from core.tasks.queue import (
 )
 from core.telegram.worker_notify import notify_recurring_incident, resolve_recurring_incident
 from core.wording import human_bytes_ru
-from core.worker_liveness import record_worker_heartbeat
+from core.worker_liveness import poll_heartbeat_while_running, record_worker_heartbeat
 from core.worker_metrics import (
     mark_worker_heartbeat,
     record_irreversible_safety_event,
@@ -1812,7 +1812,14 @@ async def task_loop(
         # Единственное доказательство, что рабочий цикл реально трогает
         # очередь, а не просто числится живым по отдельной корутине heartbeat
         # (issue #176). Отмечается независимо от того, нашлась ли задача.
-        await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
+        # record_worker_heartbeat уже не пробрасывает ничего, кроме
+        # CancelledError, но этот вызов — единственный неограниченный await
+        # между claim и началом залива на дедлайн-полосе: локальный guard —
+        # defense in depth, а не замена внутреннего (review issue #176 Б1).
+        try:
+            await record_worker_heartbeat(engine, WORKER_NAME, poll_success=True)
+        except Exception:  # noqa: BLE001
+            logger.warning("worker heartbeat write failed in task_loop", exc_info=True)
 
         if claim.queue_empty or claim.task is None:
             # Пустой claim при непустой очереди означает закрытый гейт готовности.
@@ -1866,7 +1873,13 @@ async def task_loop(
                     vision_profile_id=vision_profile_id,
                     browser_readiness_generation=claim.browser_readiness_generation,
                 ):
-                    await process_one_task(engine, claim.task, client=client, uploader=uploader)
+                    # Залив может исполняться минуты (загрузка видео,
+                    # медленная обработка Meta) — дольше poll_stale_after_seconds.
+                    # Периодический тик доказывает «воркер занят настоящей
+                    # работой», а не тем же самым claim'ом минуту назад
+                    # (review issue #176 Б2).
+                    async with poll_heartbeat_while_running(engine, WORKER_NAME):
+                        await process_one_task(engine, claim.task, client=client, uploader=uploader)
             finally:
                 client.session_id = previous_session_id
         except Exception:  # noqa: BLE001 — неожиданная ошибка (напр. БД в фазе pre-execute гардов)
