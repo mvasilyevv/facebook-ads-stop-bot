@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { components } from "@fb/shared/api/generated";
+
 import {
   aggregateCampaignLaunchState,
   applyCampaignPreset,
   buildCampaignConfig,
   campaignPresetPayload,
+  campaignLaunchUnits,
   campaignPresetsDataState,
   campaignWizardFromDraft,
   campaignWizardReducer,
@@ -20,11 +23,120 @@ import {
   type CampaignWizardState,
 } from "./campaigns";
 
+describe("campaignLaunchUnits", () => {
+  type LaunchAccount = components["schemas"]["LaunchAccountOut"];
+
+  const account = (overrides: Partial<LaunchAccount>): LaunchAccount => ({
+    account_id: "123",
+    status: "queued",
+    replayed: false,
+    ...overrides,
+  });
+
+  it("разворачивает кампании кабинета в отдельные единицы залива", () => {
+    const units = campaignLaunchUnits([
+      account({
+        campaigns: [
+          {
+            campaign_key: "camp1",
+            run_id: "run-1",
+            status: "queued",
+            replayed: false,
+          },
+          {
+            campaign_key: "camp2",
+            status: "rejected",
+            error: "Концепт кампании не найден",
+            replayed: false,
+          },
+        ],
+      }),
+    ]);
+
+    expect(units).toEqual([
+      {
+        accountId: "123",
+        campaignKey: "camp1",
+        runId: "run-1",
+        status: "queued",
+        error: null,
+      },
+      {
+        accountId: "123",
+        campaignKey: "camp2",
+        runId: null,
+        status: "rejected",
+        error: "Концепт кампании не найден",
+      },
+    ]);
+  });
+
+  // Кабинет, отвергнутый до разбора плана, кампаний не имеет — но исчезнуть из
+  // знаменателя он не должен, иначе запрос без единой постановки выглядел бы
+  // принятым.
+  it("кабинет без кампаний остаётся одной единицей без ключа кампании", () => {
+    expect(
+      campaignLaunchUnits([account({ status: "rejected", error: "Кабинет не привязан к офферу" })]),
+    ).toEqual([
+      {
+        accountId: "123",
+        campaignKey: null,
+        runId: null,
+        status: "rejected",
+        error: "Кабинет не привязан к офферу",
+      },
+    ]);
+  });
+
+  it("пустой receipt не даёт ни одной единицы", () => {
+    expect(campaignLaunchUnits(null)).toEqual([]);
+    expect(campaignLaunchUnits(undefined)).toEqual([]);
+    expect(campaignLaunchUnits([])).toEqual([]);
+  });
+
+  it("сохраняет порядок кабинетов и кампаний внутри них", () => {
+    const units = campaignLaunchUnits([
+      account({
+        account_id: "111",
+        campaigns: [
+          {
+            campaign_key: "camp1",
+            run_id: "run-1",
+            status: "queued",
+            replayed: false,
+          },
+        ],
+      }),
+      account({
+        account_id: "222",
+        campaigns: [
+          {
+            campaign_key: "camp1",
+            run_id: "run-2",
+            status: "queued",
+            replayed: false,
+          },
+          {
+            campaign_key: "camp2",
+            run_id: "run-3",
+            status: "queued",
+            replayed: false,
+          },
+        ],
+      }),
+    ]);
+
+    expect(units.map((unit) => [unit.accountId, unit.campaignKey])).toEqual([
+      ["111", "camp1"],
+      ["222", "camp1"],
+      ["222", "camp2"],
+    ]);
+  });
+});
+
 describe("aggregateCampaignLaunchState", () => {
   it("не показывает общий успех при частичном результате", () => {
-    expect(aggregateCampaignLaunchState(["succeeded", "failed"])).toBe(
-      "partial",
-    );
+    expect(aggregateCampaignLaunchState(["succeeded", "failed"])).toBe("partial");
   });
 
   it("UNKNOWN остаётся отдельным состоянием и не становится retry/success", () => {
@@ -32,9 +144,7 @@ describe("aggregateCampaignLaunchState", () => {
   });
 
   it("зелёный итог возможен только когда успешны все кабинеты", () => {
-    expect(aggregateCampaignLaunchState(["succeeded", "succeeded"])).toBe(
-      "succeeded",
-    );
+    expect(aggregateCampaignLaunchState(["succeeded", "succeeded"])).toBe("succeeded");
   });
 });
 

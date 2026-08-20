@@ -18,17 +18,32 @@ from __future__ import annotations
 from core.campaign_builder.config import CampaignConfig
 
 
+class DuplicateCampaignKeyError(ValueError):
+    """Две кампании плана носят один ключ, то есть одну идентичность."""
+
+
 def campaign_plan_slices(config: CampaignConfig) -> list[CampaignConfig]:
     """План из N кампаний → N конфигов, в каждом ровно одна кампания.
 
     Порядок сохраняется: он задаёт порядок резервирования диапазонов кодов и
     порядок постановки задач.
 
+    Ключи кампаний обязаны быть уникальными, и проверяет это сам разрез, а не
+    валидатор входа API. Ключ кампании входит в её ключ идемпотентности, а срезы
+    адресуются ключом: два блока с одним именем молча схлопнулись бы в одну
+    задачу, и оператор получил бы на кампанию меньше, чем подтвердил в превью.
+    Доменная модель уникальности не требует, поэтому money-путь не имеет права
+    рассчитывать на чужую проверку. Валидатор на входе API остаётся — он
+    отвечает за понятный отказ оператору, а не за эту безопасность.
+
     Каждый срез проходит валидацию заново, а не собирается копированием полей:
     именно он попадёт в `campaign_run.config` и будет прочитан воркером как
     самостоятельный конфиг. Срез, который не проходит собственную валидацию,
     обязан быть отвергнут здесь — до создания чего-либо в Meta.
     """
+    keys = [block.key for block in config.campaigns]
+    if len(keys) != len(set(keys)):
+        raise DuplicateCampaignKeyError("ключи кампаний плана должны быть уникальными")
     shared = config.model_dump()
     slices: list[CampaignConfig] = []
     for block in config.campaigns:
@@ -36,4 +51,4 @@ def campaign_plan_slices(config: CampaignConfig) -> list[CampaignConfig]:
     return slices
 
 
-__all__ = ["campaign_plan_slices"]
+__all__ = ["DuplicateCampaignKeyError", "campaign_plan_slices"]

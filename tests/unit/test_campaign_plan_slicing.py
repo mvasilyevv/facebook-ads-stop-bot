@@ -19,10 +19,12 @@ Money-инварианты, которые фиксирует этот файл:
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from apps.api.routers.v1.campaigns_create import (
     _compute_campaign_idempotency_key,
     _launch_request_state,
+    _operator_launch_detail,
     _run_launches_independently,
 )
 from apps.api.routers.v1.schemas.campaigns_create import (
@@ -38,7 +40,7 @@ from core.campaign_builder.config import (
     CampaignConfig,
     Targeting,
 )
-from core.campaign_builder.plan import campaign_plan_slices
+from core.campaign_builder.plan import DuplicateCampaignKeyError, campaign_plan_slices
 
 
 def _block(key: str, *, concepts: int = 2, adsets: int = 2) -> CampaignBlock:
@@ -109,13 +111,45 @@ def test_slice_keeps_every_shared_setting_of_the_plan() -> None:
 
 
 def test_slicing_a_single_campaign_plan_changes_nothing() -> None:
-    """План из одной кампании остаётся ровно одной задачей."""
+    """Срез плана из одной кампании побитово равен самому плану.
+
+    Это несущее утверждение, а не приятное совпадение: ключ идемпотентности
+    считается хешем канонического JSON конфига, поэтому равенство снимков —
+    единственное, что гарантирует одиночному заливу ТОТ ЖЕ ключ, что был до
+    разреза. Новое поле `CampaignConfig`, не переживающее roundtrip
+    `model_dump → model_validate`, молча переклеймило бы все такие заливы.
+    """
 
     plan = _plan(("c1",))
     slices = campaign_plan_slices(plan)
 
     assert len(slices) == 1
-    assert slices[0].campaigns == plan.campaigns
+    assert slices[0].model_dump(mode="json") == plan.model_dump(mode="json")
+
+
+def test_single_campaign_plan_keeps_its_idempotency_key_after_slicing() -> None:
+    """Разрез не сдвигает ключ одиночного залива — иначе выкат его задвоит."""
+
+    plan = _plan(("c1",))
+
+    assert _compute_campaign_idempotency_key(
+        campaign_plan_slices(plan)[0]
+    ) == _compute_campaign_idempotency_key(plan)
+
+
+def test_slicing_rejects_two_campaigns_with_one_key() -> None:
+    """Разрез защищает себя сам, не полагаясь на валидатор входа API.
+
+    Ключ кампании входит в её ключ идемпотентности, а срезы адресуются ключом:
+    два блока с одним именем схлопнулись бы в одну задачу, и оператор получил
+    бы на кампанию меньше, чем подтвердил в превью.
+    """
+
+    plan = _plan(("c1", "c2"))
+    plan.campaigns[1] = _block("c1", concepts=3)
+
+    with pytest.raises(DuplicateCampaignKeyError):
+        campaign_plan_slices(plan)
 
 
 # ---------------------- ключ идемпотентности ----------------------
@@ -260,3 +294,41 @@ def test_cabinet_rejected_before_plan_is_one_rejected_unit() -> None:
 
     account = LaunchAccountOut(account_id="111", status="rejected", error="отказ")
     assert _launch_request_state([account]) == "rejected"
+
+
+# ---------------------- язык оператора ----------------------
+
+
+def test_raw_validation_error_never_reaches_the_operator() -> None:
+    """Сырой текст pydantic не уезжает в интерфейс, хотя он и ValueError.
+
+    ``ValidationError`` наследует ``ValueError``, а её сообщение многострочное,
+    со значениями входа и ссылкой на документацию. Проверка «это ValueError»
+    пропустила бы его прямо на экран оператора.
+    """
+
+    with pytest.raises(ValidationError) as raised:
+        CampaignConfig.model_validate({"offer_code": "GH_CR"})
+
+    detail = _operator_launch_detail(
+        raised.value,
+        fallback="Кампания не поставлена в очередь",
+        unit="campaign=c1",
+    )
+
+    assert detail == "Кампания не поставлена в очередь"
+    assert "pydantic" not in detail
+    assert "\n" not in detail
+
+
+def test_our_own_refusal_reaches_the_operator_as_written() -> None:
+    """Отказ, который мы сформулировали сами, оператор видит дословно."""
+
+    assert (
+        _operator_launch_detail(
+            ValueError("Кабинет не привязан к офферу"),
+            fallback="Кампания не поставлена в очередь",
+            unit="campaign=c1",
+        )
+        == "Кабинет не привязан к офферу"
+    )

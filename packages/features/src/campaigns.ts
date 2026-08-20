@@ -593,24 +593,16 @@ export interface CampaignLaunchUnit {
   error: string | null;
 }
 
-interface CampaignLaunchAccountLike {
-  account_id: string;
-  run_id?: string | null;
-  status: string;
-  error?: string | null;
-  campaigns?:
-    | {
-        campaign_key: string;
-        run_id?: string | null;
-        status: string;
-        error?: string | null;
-      }[]
-    | null;
-}
-
-/** Разложить receipt залива в плоский список кампаний по кабинетам. */
+/**
+ * Разложить receipt залива в плоский список кампаний по кабинетам.
+ *
+ * Тип входа берётся из сгенерированного контракта, а не описывается здесь
+ * заново: своя копия формы разошлась бы с сервером молча — переименованное
+ * поле прошло бы и `gen:api`, и `typecheck`, а оба фронта прочитали бы
+ * `undefined`.
+ */
 export function campaignLaunchUnits(
-  accounts: CampaignLaunchAccountLike[] | null | undefined,
+  accounts: components["schemas"]["LaunchAccountOut"][] | null | undefined,
 ): CampaignLaunchUnit[] {
   return (accounts ?? []).flatMap((account): CampaignLaunchUnit[] => {
     const campaigns = account.campaigns ?? [];

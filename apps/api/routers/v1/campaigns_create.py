@@ -1047,21 +1047,40 @@ async def _launch_one_campaign(
     )
 
 
+def _operator_launch_detail(exc: Exception, *, fallback: str, unit: str) -> str:
+    """Причина отказа словами оператора; сырое исключение остаётся в логе.
+
+    ``ValueError`` сюда приходит и как наш собственный внятный текст, и как
+    ``pydantic.ValidationError`` — она наследует ``ValueError``, а её сообщение
+    многострочное, со значениями входа и ссылкой на документацию. Такой текст в
+    интерфейс оператора не попадает: узнаваем только тот отказ, который мы
+    сформулировали сами.
+    """
+
+    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
+        return exc.detail
+    if type(exc) is ValueError:
+        return str(exc)
+    logger.error(
+        "campaign launch failed before enqueue for %s error_type=%s",
+        unit,
+        type(exc).__name__,
+    )
+    return fallback
+
+
 def _campaign_launch_error(campaign_key: str, exc: Exception) -> LaunchCampaignOut:
     """Отказ до постановки одной кампании — отдельный receipt, а не молчание."""
 
-    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
-        detail = exc.detail
-    elif isinstance(exc, ValueError):
-        detail = str(exc)
-    else:
-        logger.error(
-            "campaign launch failed before enqueue for campaign=%s error_type=%s",
-            campaign_key,
-            type(exc).__name__,
-        )
-        detail = "Кампания не поставлена в очередь"
-    return LaunchCampaignOut(campaign_key=campaign_key, status="rejected", error=detail)
+    return LaunchCampaignOut(
+        campaign_key=campaign_key,
+        status="rejected",
+        error=_operator_launch_detail(
+            exc,
+            fallback="Кампания не поставлена в очередь",
+            unit=f"campaign={campaign_key}",
+        ),
+    )
 
 
 async def _launch_account_plan(
@@ -1082,9 +1101,14 @@ async def _launch_account_plan(
     """
 
     config, preset_uuid = await _resolve_account_plan(body, engine, account_id=account_id)
-    slices = {
-        slice_config.campaigns[0].key: slice_config for slice_config in campaign_plan_slices(config)
-    }
+    # Разрез — часть предполёта: он отвергает кабинет целиком и до постановки
+    # чего-либо. Сырой текст отказа (в том числе ``pydantic.ValidationError``)
+    # остаётся в исключении-причине и в лог, оператор видит закрытую формулировку.
+    try:
+        plan_slices = campaign_plan_slices(config)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Невалидный конфиг кампании") from exc
+    slices = {slice_config.campaigns[0].key: slice_config for slice_config in plan_slices}
 
     async def launch_slice(campaign_key: str) -> LaunchCampaignOut:
         return await _launch_one_campaign(
@@ -1131,18 +1155,15 @@ async def _configured_offer_accounts(engine: DepEngine, *, offer_code: str) -> s
 
 
 def _account_launch_error(account_id: str, exc: Exception) -> LaunchAccountOut:
-    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
-        detail = exc.detail
-    elif isinstance(exc, ValueError):
-        detail = str(exc)
-    else:
-        logger.error(
-            "campaign launch failed before enqueue for account=%s error_type=%s",
-            account_id,
-            type(exc).__name__,
-        )
-        detail = "Запуск кабинета не поставлен в очередь"
-    return LaunchAccountOut(account_id=account_id, status="rejected", error=detail)
+    return LaunchAccountOut(
+        account_id=account_id,
+        status="rejected",
+        error=_operator_launch_detail(
+            exc,
+            fallback="Запуск кабинета не поставлен в очередь",
+            unit=f"account={account_id}",
+        ),
+    )
 
 
 async def _clear_launch_draft(

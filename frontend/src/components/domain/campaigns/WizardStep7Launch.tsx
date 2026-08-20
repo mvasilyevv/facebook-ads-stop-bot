@@ -240,7 +240,12 @@ function LaunchBatchProgress({ receipt, onFinish }: { receipt: LaunchOut; onFini
                 act_{account.account_id}
               </strong>
               <span className="text-[12px] text-bg-9">
-                {formatRussianCount(accountUnits.length, "кампания", "кампании", "кампаний")}
+                {/* Кабинет, отвергнутый до разбора плана, кампаний не имеет:
+                    его единица — заглушка без ключа, и считать её кампанией
+                    значит показать оператору число, которого не существует. */}
+                {account.campaigns?.length
+                  ? formatRussianCount(account.campaigns.length, "кампания", "кампании", "кампаний")
+                  : "Не поставлен в очередь"}
               </span>
             </div>
             <div className="space-y-4">

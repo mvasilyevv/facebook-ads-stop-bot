@@ -117,7 +117,9 @@ export function CampaignWizard() {
   const state = wizard.state;
   const selectedPreset =
     presets.data?.find((preset) => preset.id === state.start.preset_id) ?? null;
-  const selectedOffer = offers.data?.find((offer) => offer.code === state.identity.offer_code);
+  const selectedOffer = offers.data?.find(
+    (offer) => offer.code === state.identity.offer_code,
+  );
   const offerAccounts = selectedOffer?.ad_account_ids?.filter(Boolean) ?? [];
   const presetsState = campaignPresetsDataState({
     isPending: presets.isPending,
@@ -173,15 +175,24 @@ export function CampaignWizard() {
       value: {
         ad_account_ids: accountIds,
         act_id: primary,
-        page_id: primary === state.identity.act_id ? state.identity.page_id : "",
+        page_id:
+          primary === state.identity.act_id ? state.identity.page_id : "",
         account_context_state:
-          primary === state.identity.act_id ? state.identity.account_context_state : "unavailable",
-        timezone_name: primary === state.identity.act_id ? state.identity.timezone_name : "",
-        currency: primary === state.identity.act_id ? state.identity.currency : "",
+          primary === state.identity.act_id
+            ? state.identity.account_context_state
+            : "unavailable",
+        timezone_name:
+          primary === state.identity.act_id ? state.identity.timezone_name : "",
+        currency:
+          primary === state.identity.act_id ? state.identity.currency : "",
         currency_exponent:
-          primary === state.identity.act_id ? state.identity.currency_exponent : null,
+          primary === state.identity.act_id
+            ? state.identity.currency_exponent
+            : null,
         account_context_observed_at:
-          primary === state.identity.act_id ? state.identity.account_context_observed_at : null,
+          primary === state.identity.act_id
+            ? state.identity.account_context_observed_at
+            : null,
         account_context_issue: null,
       },
     });
@@ -517,7 +528,9 @@ export function CampaignWizard() {
                   label: accountId,
                 }))}
                 onChange={chooseAccounts}
-                selectAllLabel={offerAccounts.length > 1 ? "Выбрать все" : undefined}
+                selectAllLabel={
+                  offerAccounts.length > 1 ? "Выбрать все" : undefined
+                }
                 errorMessage={errors.ad_account_ids ?? errors.act_id}
                 disabled={offerAccounts.length === 0}
                 emptyLabel="Сначала выберите оффер"
@@ -795,8 +808,7 @@ function GoalStep({
           </div>
         ) : null}
         <div className="rounded-[var(--radius-2)] border border-accent/25 bg-accent/5 p-3 text-[13px] text-bg-9">
-          Все денежные значения — только USD. Кампании, группы объявлений и объявления будут созданы
-          выключенными.
+          Все денежные значения — только USD. Кампании, группы объявлений и объявления будут созданы выключенными.
         </div>
         <Input
           label="Дневной бюджет, USD"
@@ -903,7 +915,9 @@ function GoalStep({
             disabled={state.goal.advantage_audience}
             value={state.goal.advantage_audience ? 65 : state.goal.age_max}
             helpText={
-              state.goal.advantage_audience ? "Advantage+ сам расширяет аудиторию" : undefined
+              state.goal.advantage_audience
+                ? "Advantage+ сам расширяет аудиторию"
+                : undefined
             }
             onChange={(event) =>
               patch({
@@ -1293,11 +1307,13 @@ function LaunchStep({
 }) {
   // Единица залива — кампания: у каждой своя задача и свой исход.
   const units = campaignLaunchUnits(receipt?.accounts);
-  const queued = units.filter((unit): unit is typeof unit & { runId: string } =>
-    Boolean(unit.runId),
+  const queued = units.filter(
+    (unit): unit is typeof unit & { runId: string } => Boolean(unit.runId),
   );
   const detailQueries = useCampaignRunDetails(queued.map((unit) => unit.runId));
-  const details = new Map(queued.map((unit, index) => [unit.runId, detailQueries[index]?.data]));
+  const details = new Map(
+    queued.map((unit, index) => [unit.runId, detailQueries[index]?.data]),
+  );
   const observedStates: CampaignLaunchObservedState[] = units.map((unit) => {
     if (!unit.runId) return "rejected";
     const detail = details.get(unit.runId);
@@ -1305,25 +1321,35 @@ function LaunchStep({
     return (detail?.status ?? unit.status) as CampaignLaunchObservedState;
   });
   const aggregate = aggregateCampaignLaunchState(observedStates);
-  const succeeded = observedStates.filter((state) => state === "succeeded").length;
+  const succeeded = observedStates.filter(
+    (state) => state === "succeeded",
+  ).length;
 
   if (receipt) {
     const aggregateCopy = {
       working: ["Кампании заливаются", "border-warning/35 text-warning"],
-      succeeded: ["Все кампании подтверждены", "border-success/35 text-success"],
+      succeeded: [
+        "Все кампании подтверждены",
+        "border-success/35 text-success",
+      ],
       partial: ["Частичный результат", "border-warning/40 text-warning"],
       failed: ["Кампании не подтверждены", "border-danger/35 text-danger"],
       unknown: ["Результат неизвестен", "border-danger/35 text-danger"],
     }[aggregate];
     return (
-      <Card eyebrow="ПО КАМПАНИЯМ" title={aggregateCopy[0]} className={aggregateCopy[1]}>
+      <Card
+        eyebrow="ПО КАМПАНИЯМ"
+        title={aggregateCopy[0]}
+        className={aggregateCopy[1]}
+      >
         <p role="status" className="text-[13px] leading-5 text-bg-9">
-          Подтверждено {succeeded} из {units.length}. Зелёный итог появится только после
-          подтверждённого успеха каждой кампании.
+          Подтверждено {succeeded} из {units.length}. Зелёный итог появится
+          только после подтверждённого успеха каждой кампании.
         </p>
         <div className="mt-4 space-y-2">
           {units.map((unit, index) => {
-            const state: CampaignLaunchObservedState = observedStates[index] ?? "rejected";
+            const state: CampaignLaunchObservedState =
+              observedStates[index] ?? "rejected";
             return (
               <div
                 key={`${unit.accountId}:${unit.campaignKey ?? "—"}`}
@@ -1334,7 +1360,9 @@ function LaunchStep({
                     act_{unit.accountId}
                     {unit.campaignKey ? ` · ${unit.campaignKey}` : ""}
                   </strong>
-                  <span className="text-[12px] text-bg-9">{launchStateLabel(state)}</span>
+                  <span className="text-[12px] text-bg-9">
+                    {launchStateLabel(state)}
+                  </span>
                 </div>
                 {unit.error ? (
                   <p role="alert" className="mt-1 text-[12px] text-danger">
@@ -1363,7 +1391,10 @@ function LaunchStep({
     <Card eyebrow="ШАГ 7 · ПОДТВЕРЖДЕНИЕ" title="Поставить в очередь">
       <dl className="space-y-2 text-[13px]">
         <Fact label="Оффер" value={config.offer_code} />
-        <Fact label="Кабинеты" value={accountIds.map((id) => `act_${id}`).join(", ")} />
+        <Fact
+          label="Кабинеты"
+          value={accountIds.map((id) => `act_${id}`).join(", ")}
+        />
         <Fact label="Бюджет" value={`$${config.daily_budget} / день`} />
         <Fact label="Кампаний" value={String(config.campaigns.length)} />
         <Fact label="Статус объектов" value="Выключены (PAUSED)" />
