@@ -41,6 +41,25 @@ def _asset() -> str:
     return ASSET_PATH.read_text(encoding="utf-8")
 
 
+def _forward_revision_tables() -> set[str]:
+    """Таблицы, созданные форвард-ревизиями поверх замороженного baseline.
+
+    ``migrations/README.md``: baseline не переписывается, схема развивается
+    форвард-ревизиями. Значит ORM-метаданные — это baseline ПЛЮС то, что
+    добавили ревизии после него, и набор считается по самим ревизиям, а не
+    списком в тесте: забытая ORM-модель к новой таблице обязана уронить
+    сверку, а не тихо расширить ожидание.
+    """
+    tables: set[str] = set()
+    for path in sorted(VERSIONS_DIR.glob("*.py")):
+        if path == REVISION_PATH:
+            continue
+        source = path.read_text(encoding="utf-8")
+        tables.update(re.findall(r"CREATE TABLE (?:public\.)?([a-z0-9_]+)", source))
+        tables.update(re.findall(r"op\.create_table\(\s*[\"']([a-z0-9_]+)[\"']", source))
+    return tables
+
+
 def test_revision_chain_keeps_one_linear_head_on_the_immutable_baseline() -> None:
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
@@ -74,11 +93,22 @@ def test_baseline_is_frozen_checksum_verified_and_runtime_independent() -> None:
     assert "alembic stamp" not in revision_source
 
 
-def test_asset_is_exact_current_orm_schema_plus_default_partitions() -> None:
-    tables = set(re.findall(r"^CREATE TABLE public\.([a-z0-9_]+) \(", _asset(), re.MULTILINE))
+def test_baseline_plus_forward_revisions_is_exact_current_orm_schema() -> None:
+    """Установка = baseline + форвард-ревизии, и ровно это описано в ORM.
 
-    assert tables == set(Base.metadata.tables) | DEFAULT_PARTITIONS
-    assert len(Base.metadata.tables) == 50
+    Равенство работает в обе стороны: таблица в схеме без ORM-модели ломает
+    ``alembic check`` в CI, а ORM-модель без миграции ломает установку. До
+    ``0009_worker_heartbeats`` ни одна форвард-ревизия таблиц не создавала,
+    и baseline совпадал с ORM буквально; это было совпадением, а не
+    контрактом (``migrations/README.md``: baseline не переписывается).
+    """
+    tables = set(re.findall(r"^CREATE TABLE public\.([a-z0-9_]+) \(", _asset(), re.MULTILINE))
+    forward = _forward_revision_tables()
+
+    assert forward == {"worker_heartbeats"}
+    assert tables & forward == set()
+    assert tables | forward == set(Base.metadata.tables) | DEFAULT_PARTITIONS
+    assert len(Base.metadata.tables) == 51
     assert len(tables) == 55
 
 
