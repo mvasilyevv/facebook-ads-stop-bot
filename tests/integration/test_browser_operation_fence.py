@@ -119,15 +119,24 @@ async def test_maintenance_sees_and_drains_account_context_refresh(
 
     class BlockingClient:
         async def execute_graph_call(self, **kwargs):
+            # Статус кабинета входит в запрашиваемый набор с миграции 0008: он
+            # часть того же денежного контекста, что пояс и валюта, и берётся
+            # тем же снимком. Сверка точным равенством намеренная — она и
+            # поймала, что двойник отстал от контракта.
             assert kwargs == {
                 "method": "GET",
                 "endpoint": "/act_123456",
-                "query_params": {"fields": "timezone_name,currency"},
+                "query_params": {"fields": "timezone_name,currency,account_status"},
                 "ad_account_id": "123456",
             }
             graph_started.set()
             await release_graph.wait()
-            return {"timezone_name": "Europe/Kaliningrad", "currency": "USD"}
+            return {
+                "timezone_name": "Europe/Kaliningrad",
+                "currency": "USD",
+                # 1 = ACCOUNT_STATUS_ACTIVE, подтверждённое значение.
+                "account_status": 1,
+            }
 
     async def active_accounts(_engine):
         return ["123456"]
@@ -137,6 +146,7 @@ async def test_maintenance_sees_and_drains_account_context_refresh(
             "account_id": "123456",
             "timezone_name": "Europe/Kaliningrad",
             "currency": "USD",
+            "account_status": 1,
         }
         persistence_started.set()
         await release_persistence.wait()
