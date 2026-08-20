@@ -778,10 +778,19 @@ function MiniActionJournal({
                     </span>
                   ) : null}
                 </div>
-                <Link to="/actions/$actionId" params={{ actionId: item.id }}>
-                  Открыть действие
-                  <ArrowRight size={14} aria-hidden="true" />
-                </Link>
+                {item.run_id ? (
+                  // У залива есть свой экран: состав, созданные объекты и
+                  // управление. Карточка действия показала бы конвейер обработки.
+                  <Link to="/campaigns" search={{ run: item.run_id }}>
+                    Открыть залив
+                    <ArrowRight size={14} aria-hidden="true" />
+                  </Link>
+                ) : (
+                  <Link to="/actions/$actionId" params={{ actionId: item.id }}>
+                    Открыть действие
+                    <ArrowRight size={14} aria-hidden="true" />
+                  </Link>
+                )}
               </li>
             );
           })}

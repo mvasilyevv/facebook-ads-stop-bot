@@ -4,11 +4,20 @@ import { Layers3, Plus } from "lucide-react";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { RunsHistory } from "./RunsHistory";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const Route = createFileRoute("/campaigns/")({
   component: CampaignRunsPage,
+  // ?run=<uuid> открывает залив сразу развёрнутым — так же, как в веб-интерфейсе.
+  // Значение из адресной строки не доверенное: что не идентификатор, то отброшено.
+  validateSearch: (search: Record<string, unknown>): { run?: string } => {
+    const raw = search.run;
+    return typeof raw === "string" && UUID_RE.test(raw) ? { run: raw.toLowerCase() } : {};
+  },
 });
 
 function CampaignRunsPage() {
+  const { run } = Route.useSearch();
   return (
     <div className="flex min-h-full flex-col pb-20">
       <MiniHeader
@@ -34,7 +43,7 @@ function CampaignRunsPage() {
           Управлять пресетами
         </Link>
       </div>
-      <RunsHistory />
+      <RunsHistory openRunId={run ?? null} />
     </div>
   );
 }

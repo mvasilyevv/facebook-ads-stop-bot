@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   adsManagerCampaignUrl,
   campaignMetaIdGroups,
@@ -678,9 +678,15 @@ function RunCard({
   );
 }
 
-export function RunsHistory() {
+export function RunsHistory({ openRunId = null }: { openRunId?: string | null }) {
   const query = useCampaignRuns();
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(openRunId);
+
+  // Оператор пришёл по ссылке за конкретным заливом — раскрываем именно его.
+  // Только раскрываем: закрытое вручную не открываем заново.
+  useEffect(() => {
+    if (openRunId) setSelectedRunId(openRunId);
+  }, [openRunId]);
 
   const runs = query.data ?? [];
   return (
