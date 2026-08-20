@@ -16,7 +16,7 @@ import math
 import os
 import signal
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -54,6 +54,7 @@ from core.meta_api.shadow_spend import (
 from core.models.settings.vision_config import VisionConfig
 from core.observer.login_required import notify_login_required_incident
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -528,10 +529,68 @@ async def check_autostop_channel(
     )
 
 
+async def _reattach_and_reprobe(
+    meta_client: _MetaProbeClient,
+    reattach_session: Callable[[], Awaitable[None]],
+    *,
+    engine: AsyncEngine,
+    expected_profile_id: str,
+    reason: str,
+) -> tuple[bool, str]:
+    """Одна попытка вернуть сессию канала. Возвращает ``(канал жив, причина)``.
+
+    Живое наблюдение 20.08.2026: browser-agent перезапустили, Vision-профиль
+    остался жив и виден в ``/list``, но процесс-локальной сессии у него больше не
+    было. Проба честно сказала «канал мёртв» и завела CRITICAL — и на этом всё.
+    Очередь заливов встала на «ждут готовности браузера»: проба намеренно не
+    открывает кабинет (issue #189), а сессию больше никто не просил.
+
+    ``StartBrowser`` присоединяется к **уже живому** профилю, не перезапуская его,
+    поэтому «профиль забран другой машиной» здесь не автоматизируется: этот случай
+    browser-agent отклоняет сам, и отказ доходит сюда исключением.
+
+    Попытка ровно одна за проход. Молчаливый бесконечный ретрай хуже честного
+    отказа: он прячет причину и не даёт оператору повода вмешаться.
+    """
+    try:
+        await reattach_session()
+    except Exception as exc:  # noqa: BLE001 — причина отказа известна только по факту
+        logger.warning(
+            "meta probe: присоединить сессию не удалось (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        return False, reason
+
+    try:
+        async with BrowserOperationFence(
+            engine,
+            operation_kind="health_meta_probe",
+            target="full_probe",
+        ) as fence:
+            probe = await meta_client.check_health(
+                full_probe=True,
+                expected_profile_id=expected_profile_id,
+            )
+            await fence.assert_held()
+    except Exception as exc:  # noqa: BLE001 — повторная проба best-effort, как основная
+        logger.warning(
+            "meta probe: повторная проба после присоединения не прошла (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        return False, reason
+
+    is_down, retry_reason = classify_meta_probe(probe, expected_profile_id=expected_profile_id)
+    if is_down:
+        return False, retry_reason
+    logger.info("meta probe: сессия восстановлена присоединением (%s)", retry_reason)
+    return True, retry_reason
+
+
 async def check_meta_api_channel(
     meta_client: _MetaProbeClient,
     *,
     engine: AsyncEngine,
+    reattach_session: Callable[[], Awaitable[None]] | None = None,
 ) -> bool:
     """Проактивный probe канала Marketing API. Возвращает True, если алерт отправлен.
 
@@ -624,6 +683,22 @@ async def check_meta_api_channel(
             reason,
         )
         return False
+
+    if reattach_session is not None:
+        recovered, reason = await _reattach_and_reprobe(
+            meta_client,
+            reattach_session,
+            engine=engine,
+            expected_profile_id=expected_profile_id,
+            reason=reason,
+        )
+        if recovered:
+            await _resolve_critical_notification(
+                incident_key=META_CHANNEL_INCIDENT_KEY,
+                engine=engine,
+                summary="Сессия канала восстановлена без вмешательства.",
+            )
+            return False
 
     logger.error("канал Marketing API мёртв (probe): %s", reason)
     return await _enqueue_critical_notification(
@@ -1316,6 +1391,7 @@ async def meta_probe_loop(
     stop: asyncio.Event,
     engine: AsyncEngine,
     interval: int = META_PROBE_INTERVAL_SECONDS,
+    reattach_session: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Цикл сетевого probe канала Marketing API раз в ``interval`` секунд.
 
@@ -1330,7 +1406,9 @@ async def meta_probe_loop(
 
     while not stop.is_set():
         try:
-            await check_meta_api_channel(meta_client, engine=engine)
+            await check_meta_api_channel(
+                meta_client, engine=engine, reattach_session=reattach_session
+            )
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в meta_probe_loop")
         try:
@@ -1462,6 +1540,35 @@ async def main_loop(database_url: str | None = None) -> None:
     )
     await meta_client.start()
 
+    async def reattach_browser_session() -> None:
+        """Присоединить процесс-локальную сессию к уже живому Vision-профилю.
+
+        Клиент создаётся на попытку: держать второй gRPC-канал ради события,
+        которого может не случиться неделями, незачем. Реквизиты Vision читаются
+        каждый раз — они меняются при обновлении токена.
+        """
+        from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+        from core.config import get_settings
+        from core.vision_runtime import load_vision_runtime_config
+
+        settings = get_settings()
+        vision = await load_vision_runtime_config(engine)
+        client = BrowserAgentClient(
+            BrowserAgentConfig(
+                vision_x_token=vision.x_token,
+                vision_api_url=settings.vision_api_url,
+                vision_profile_id=vision.profile_id,
+                vision_folder_id=vision.folder_id,
+                grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
+                grpc_port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
+            )
+        )
+        await client.start()
+        try:
+            await client.start_browser()
+        finally:
+            await client.close()
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig_name in ("SIGTERM", "SIGINT"):
@@ -1499,6 +1606,7 @@ async def main_loop(database_url: str | None = None) -> None:
                     meta_client,
                     stop=stop,
                     engine=engine,
+                    reattach_session=reattach_browser_session,
                 ),
                 stop,
             ),

@@ -695,3 +695,120 @@ async def test_browser_readiness_loop_logs_only_transitions(monkeypatch, caplog)
         "browser readiness: ready",
         "browser readiness: not ready",
     ]
+
+
+# ====================== самовосстановление канала (issue #213) ======================
+#
+# Живое наблюдение 20.08.2026: browser-agent перезапустили, Vision-профиль остался
+# жив и виден в /list, но процесс-локальной сессии у него больше не было. Проба
+# честно сказала «канал мёртв», завела CRITICAL — и на этом всё. Очередь заливов
+# встала на «ждут готовности браузера», и её не сдвинуло бы ничто, кроме
+# разработчика: проба намеренно не открывает кабинет (issue #189), а сессию
+# больше никто не просит. Присоединение к живому профилю занимает миллисекунды.
+
+
+async def test_dead_channel_reattaches_before_calling_a_human(monkeypatch) -> None:
+    """Канал, потерявший сессию при живом профиле, поднимается сам.
+
+    Инцидент заводится только если присоединение не помогло: иначе оператор
+    получает CRITICAL о поломке, которая уже починена.
+    """
+    from core.observer import queries as observer_queries
+
+    monkeypatch.setattr(
+        observer_queries,
+        "load_observer_config",
+        AsyncMock(return_value={"is_scanning_enabled": True}),
+    )
+    client = SimpleNamespace(
+        check_health=AsyncMock(
+            side_effect=[
+                {"healthy": False, "detail": "session_not_found"},
+                {
+                    "healthy": True,
+                    "browser_contract_version": hw.BROWSER_CONTRACT_VERSION,
+                    "vision_profile_id": "vision-profile-1",
+                    "probe_performed": True,
+                    "probe_ok": True,
+                },
+            ]
+        )
+    )
+    notify = AsyncMock(return_value=True)
+    reattach = AsyncMock(return_value=None)
+    monkeypatch.setattr(hw, "_enqueue_critical_notification", notify)
+    monkeypatch.setattr(hw, "_resolve_critical_notification", AsyncMock(return_value=True))
+
+    sent = await hw.check_meta_api_channel(client, engine=object(), reattach_session=reattach)
+
+    reattach.assert_awaited_once()
+    assert sent is False
+    notify.assert_not_awaited()
+
+
+async def test_reattach_that_did_not_help_still_calls_a_human(monkeypatch) -> None:
+    """Одна попытка, затем инцидент. Молчаливый бесконечный ретрай хуже отказа."""
+    from core.observer import queries as observer_queries
+
+    monkeypatch.setattr(
+        observer_queries,
+        "load_observer_config",
+        AsyncMock(return_value={"is_scanning_enabled": True}),
+    )
+    client = SimpleNamespace(
+        check_health=AsyncMock(return_value={"healthy": False, "detail": "session_not_found"})
+    )
+    notify = AsyncMock(return_value=True)
+    reattach = AsyncMock(return_value=None)
+    monkeypatch.setattr(hw, "_enqueue_critical_notification", notify)
+    monkeypatch.setattr(hw, "_resolve_critical_notification", AsyncMock(return_value=True))
+
+    sent = await hw.check_meta_api_channel(client, engine=object(), reattach_session=reattach)
+
+    assert reattach.await_count == 1
+    assert sent is True
+    assert notify.await_args.kwargs["event_type"] == "meta_channel_unavailable"
+
+
+async def test_reattach_failure_is_not_swallowed_into_a_healthy_channel(monkeypatch) -> None:
+    """Отказ присоединения не превращает мёртвый канал в живой."""
+    from core.observer import queries as observer_queries
+
+    monkeypatch.setattr(
+        observer_queries,
+        "load_observer_config",
+        AsyncMock(return_value={"is_scanning_enabled": True}),
+    )
+    client = SimpleNamespace(
+        check_health=AsyncMock(return_value={"healthy": False, "detail": "session_not_found"})
+    )
+    notify = AsyncMock(return_value=True)
+    reattach = AsyncMock(side_effect=RuntimeError("профиль забран другой машиной"))
+    monkeypatch.setattr(hw, "_enqueue_critical_notification", notify)
+    monkeypatch.setattr(hw, "_resolve_critical_notification", AsyncMock(return_value=True))
+
+    sent = await hw.check_meta_api_channel(client, engine=object(), reattach_session=reattach)
+
+    assert sent is True
+    assert notify.await_args.kwargs["event_type"] == "meta_channel_unavailable"
+
+
+async def test_login_required_is_never_answered_by_reattaching(monkeypatch) -> None:
+    """Разлогин чинит человек. Присоединение к сессии тут бесполезно и скрывает причину."""
+    from core.observer import queries as observer_queries
+
+    monkeypatch.setattr(
+        observer_queries,
+        "load_observer_config",
+        AsyncMock(return_value={"is_scanning_enabled": True}),
+    )
+    client = SimpleNamespace(
+        check_health=AsyncMock(return_value={"healthy": False, "detail": "LOGIN_REQUIRED"})
+    )
+    reattach = AsyncMock(return_value=None)
+    monkeypatch.setattr(hw, "_alert_login_required_accounts", AsyncMock(return_value=True))
+    monkeypatch.setattr(hw, "_resolve_critical_notification", AsyncMock(return_value=True))
+
+    await hw.check_meta_api_channel(client, engine=object(), reattach_session=reattach)
+
+    reattach.assert_not_awaited()
