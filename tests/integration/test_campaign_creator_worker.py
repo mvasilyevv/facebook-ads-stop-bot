@@ -1146,3 +1146,44 @@ async def test_volume_cap_removes_oldest_unreferenced_dirs_first(
     assert newest.is_dir()
     assert held.is_dir()
     assert total_bytes == 100 + held_total_size
+
+
+# Сессия браузера доезжает от подтверждения готовности до клиента залива.
+# Раньше это утверждение держалось на чтении текста claim-SQL и исходника
+# task_loop (`inspect.getsource`) — такая опора ломается от переименования и
+# ничего не доказывает. Здесь наблюдается результат: клиент на время задачи
+# привязан ровно к той сессии, которую записал гейт готовности (#251).
+@pytest.mark.asyncio
+async def test_worker_pins_the_client_to_the_session_the_gate_confirmed(
+    pg_engine, clean_campaigns, monkeypatch
+):
+    import asyncio
+    from contextlib import nullcontext
+    from unittest.mock import MagicMock
+
+    import apps.campaign_creator_worker.main as worker
+
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    await _seed_task(pg_engine, run_id, idem)
+
+    stop = asyncio.Event()
+    client = MagicMock()
+    client.operation_authority.return_value = nullcontext()
+    pinned: list[str] = []
+
+    async def _capture_pin(*_args, **_kwargs) -> None:
+        pinned.append(client.session_id)
+        stop.set()
+
+    async def _stop_instead_of_sleeping(_stop) -> None:
+        # Любой другой исход цикла тоже обязан закончиться, а не крутиться:
+        # тест должен падать на внятном assert'е, а не по таймауту.
+        stop.set()
+
+    monkeypatch.setattr(worker, "process_one_task", _capture_pin)
+    monkeypatch.setattr(worker, "_sleep_or_stop", _stop_instead_of_sleeping)
+
+    await worker.task_loop(pg_engine, stop, client=client, uploader=object())
+
+    assert pinned == ["campaign-test-session"]

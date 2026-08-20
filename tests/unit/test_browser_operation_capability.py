@@ -3208,20 +3208,13 @@ async def test_identity_probe_names_the_operation_cabinet(monkeypatch) -> None:
     assert request.ad_account_id == "123"
 
 
-def test_campaign_claim_projects_and_pins_the_browser_session() -> None:
-    """Сессия доезжает от гейта готовности до клиента, а не выбирается заново."""
-    import inspect
-
-    import core.tasks.queue as task_queue
-    from apps.campaign_creator_worker import main as creator_main
-
-    claim_sql = str(task_queue._BROWSER_READY_CLAIM_SQL)
-    assert "channel.observed_session_id AS browser_session_id" in claim_sql
-    assert "candidate.browser_session_id" in claim_sql
-
-    loop_source = inspect.getsource(creator_main.task_loop)
-    assert "claim.browser_session_id" in loop_source
-    assert "client.session_id = claimed_session_id" in loop_source
+# «Сессия доезжает от гейта готовности до клиента» раньше проверялось поиском
+# подстрок в тексте claim-SQL и в исходнике task_loop через inspect.getsource.
+# Опора ложная: она ломается от переименования и при этом не доказывает, что
+# сессия действительно доехала. Инвариант закреплён поведением —
+# tests/integration/test_campaign_creator_worker.py::
+# test_worker_pins_the_client_to_the_session_the_gate_confirmed: клиент на время
+# задачи привязан ровно к сессии из строки готовности (#251).
 
 
 # Признак «нужен повторный вход» собирается в client.py, а читается в воркере
