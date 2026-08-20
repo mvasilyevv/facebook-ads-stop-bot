@@ -4,6 +4,7 @@ import {
   CAMPAIGN_GENDER_OPTIONS,
   CAMPAIGN_PLACEMENT_OPTIONS,
   buildCampaignConfig,
+  campaignLaunchUnits,
   campaignPresetsDataState,
   nextCampaignKey,
   validateCampaignStep,
@@ -1304,75 +1305,68 @@ function LaunchStep({
   loading: boolean;
   onLaunch: () => void;
 }) {
-  const accounts = receipt?.accounts ?? [];
-  const accepted = accounts.filter(
-    (account): account is typeof account & { run_id: string } =>
-      Boolean(account.run_id),
+  // Единица залива — кампания: у каждой своя задача и свой исход.
+  const units = campaignLaunchUnits(receipt?.accounts);
+  const queued = units.filter(
+    (unit): unit is typeof unit & { runId: string } => Boolean(unit.runId),
   );
-  const detailQueries = useCampaignRunDetails(
-    accepted.map((account) => account.run_id),
-  );
+  const detailQueries = useCampaignRunDetails(queued.map((unit) => unit.runId));
   const details = new Map(
-    accepted.map((account, index) => [
-      account.run_id,
-      detailQueries[index]?.data,
-    ]),
+    queued.map((unit, index) => [unit.runId, detailQueries[index]?.data]),
   );
-  const observedStates: CampaignLaunchObservedState[] = accounts.map(
-    (account) => {
-      if (!account.run_id) return "rejected";
-      const detail = details.get(account.run_id);
-      if (detail?.task?.state === "unknown") return "unknown";
-      return (detail?.status ?? account.status) as CampaignLaunchObservedState;
-    },
-  );
+  const observedStates: CampaignLaunchObservedState[] = units.map((unit) => {
+    if (!unit.runId) return "rejected";
+    const detail = details.get(unit.runId);
+    if (detail?.task?.state === "unknown") return "unknown";
+    return (detail?.status ?? unit.status) as CampaignLaunchObservedState;
+  });
   const aggregate = aggregateCampaignLaunchState(observedStates);
+  const succeeded = observedStates.filter(
+    (state) => state === "succeeded",
+  ).length;
 
   if (receipt) {
     const aggregateCopy = {
-      working: ["Запуски выполняются", "border-warning/35 text-warning"],
+      working: ["Кампании заливаются", "border-warning/35 text-warning"],
       succeeded: [
-        "Все кабинеты подтверждены",
+        "Все кампании подтверждены",
         "border-success/35 text-success",
       ],
       partial: ["Частичный результат", "border-warning/40 text-warning"],
-      failed: ["Запуски не подтверждены", "border-danger/35 text-danger"],
+      failed: ["Кампании не подтверждены", "border-danger/35 text-danger"],
       unknown: ["Результат неизвестен", "border-danger/35 text-danger"],
     }[aggregate];
     return (
       <Card
-        eyebrow="ПО КАБИНЕТАМ"
+        eyebrow="ПО КАМПАНИЯМ"
         title={aggregateCopy[0]}
         className={aggregateCopy[1]}
       >
         <p role="status" className="text-[13px] leading-5 text-bg-9">
-          Зелёный итог появится только после подтверждённого успеха всех
-          кабинетов.
+          Подтверждено {succeeded} из {units.length}. Зелёный итог появится
+          только после подтверждённого успеха каждой кампании.
         </p>
         <div className="mt-4 space-y-2">
-          {accounts.map((account) => {
-            const detail = account.run_id ? details.get(account.run_id) : null;
-            const state = !account.run_id
-              ? "rejected"
-              : detail?.task?.state === "unknown"
-                ? "unknown"
-                : (detail?.status ?? account.status);
+          {units.map((unit, index) => {
+            const state: CampaignLaunchObservedState =
+              observedStates[index] ?? "rejected";
             return (
               <div
-                key={account.account_id}
+                key={`${unit.accountId}:${unit.campaignKey ?? "—"}`}
                 className="border-y border-[var(--color-hairline)] px-1 py-3"
               >
                 <div className="flex items-center justify-between gap-3">
                   <strong className="font-numeric text-[13px] text-bg-11">
-                    act_{account.account_id}
+                    act_{unit.accountId}
+                    {unit.campaignKey ? ` · ${unit.campaignKey}` : ""}
                   </strong>
                   <span className="text-[12px] text-bg-9">
                     {launchStateLabel(state)}
                   </span>
                 </div>
-                {account.error ? (
+                {unit.error ? (
                   <p role="alert" className="mt-1 text-[12px] text-danger">
-                    {account.error}
+                    {unit.error}
                   </p>
                 ) : null}
                 {state === "unknown" ? (

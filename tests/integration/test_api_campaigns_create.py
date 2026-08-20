@@ -24,6 +24,11 @@ from sqlalchemy import text
 
 from apps.api.deps import get_engine, get_redis
 from apps.api.main import create_app
+from apps.api.routers.v1 import campaigns_create
+
+# Состояние черновика берётся из модуля, который им владеет: своя копия формы
+# разошлась бы с контрактом молча.
+from tests.integration.test_campaign_draft import _state as _draft_state
 
 
 def _make_app(*, engine=None, redis=None):
@@ -57,18 +62,26 @@ async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
             await conn.execute(text("DELETE FROM offer_creative_seq"))
             await conn.execute(text("DELETE FROM campaign_run"))
             await conn.execute(text("DELETE FROM campaign_preset"))
+            await conn.execute(text("DELETE FROM campaign_draft"))
             await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
             if seed_account_context:
                 await conn.execute(
+                    # Статус кабинета — часть подтверждённого контекста с
+                    # миграции 0008: без него создание кампаний отвергается ещё
+                    # на предполёте (`campaign_account_status_unknown`), и весь
+                    # модуль падал бы 422 вместо проверки самого залива.
                     text(
                         """
                         INSERT INTO meta_account_snapshot(
                             account_id,
                             timezone_name,
                             currency,
-                            currency_observed_at
+                            currency_observed_at,
+                            account_status,
+                            account_status_observed_at
                         )
-                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp())
+                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp(),
+                                1, clock_timestamp())
                         """
                     )
                 )
@@ -410,6 +423,290 @@ async def test_launch_rejects_block_without_concepts(pg_engine, fake_redis_clien
     async with pg_engine.connect() as conn:
         cnt = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
     assert cnt == 0
+
+
+# ─────────────────────── одна кампания — одна задача ───────────────────────
+
+
+def _plan_config(keys: tuple[str, ...]) -> dict:
+    """Тот же кабинет и те же настройки, несколько кампаний в плане."""
+    config = _valid_config()
+    config["campaigns"] = [
+        {"key": key, "adset_count": 2, "concept_refs": ["a.jpg"]} for key in keys
+    ]
+    return config
+
+
+async def _campaign_rows(pg_engine) -> dict[str, tuple[str, str]]:
+    """Кампания плана → (id прогона, его статус), по ключу кампании из конфига."""
+    async with pg_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT id::text AS id, status, config#>>'{campaigns,0,key}' AS campaign_key "
+                    "FROM campaign_run"
+                )
+            )
+        ).all()
+    return {row.campaign_key: (row.id, row.status) for row in rows}
+
+
+# Одна кампания плана — одна задача и один наблюдаемый прогон (issue #214).
+@pytest.mark.asyncio
+async def test_plan_of_four_campaigns_creates_four_runs_and_tasks(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _plan_config(("c1", "c2", "c3", "c4"))},
+        )
+    assert resp.status_code == 202
+    out = resp.json()
+    assert out["request_state"] == "accepted"
+    # План из нескольких кампаний не сводится к одному run: сводить его к первой
+    # значило бы показать исход одной кампании как исход всего залива.
+    assert out["run_id"] is None
+    assert out["task_id"] is None
+
+    campaigns = out["accounts"][0]["campaigns"]
+    assert [campaign["campaign_key"] for campaign in campaigns] == ["c1", "c2", "c3", "c4"]
+    assert all(campaign["run_id"] for campaign in campaigns)
+    assert all(campaign["task_id"] for campaign in campaigns)
+    assert len({campaign["idempotency_key"] for campaign in campaigns}) == 4
+    assert len({campaign["run_id"] for campaign in campaigns}) == 4
+
+    async with pg_engine.connect() as conn:
+        runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
+        tasks = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'campaign_create'")
+            )
+        ).scalar()
+        # Каждая кампания получила свой диапазон кодов, а сумма диапазонов равна
+        # диапазону всего плана: 4 кампании × 1 концепт.
+        next_seq = (
+            await conn.execute(
+                text("SELECT next_seq FROM offer_creative_seq WHERE offer_code = 'GH_CR'")
+            )
+        ).scalar()
+        code_starts = (
+            await conn.execute(
+                text(
+                    "SELECT (config->>'code_start')::int AS code_start FROM campaign_run "
+                    "ORDER BY created_at"
+                )
+            )
+        ).scalars()
+    assert runs == 4
+    assert tasks == 4
+    assert next_seq == 4
+    assert sorted(code_starts) == [1, 2, 3, 4]
+
+
+# Критерий 6: отказ одной кампании не меняет исход остальных, а повторный
+# запуск того же плана не задваивает ни одной кампании.
+@pytest.mark.asyncio
+async def test_failed_campaign_does_not_duplicate_confirmed_siblings_on_relaunch(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    plan = _plan_config(("c1", "c2", "c3", "c4"))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        first = (await ac.post("/api/tools/campaigns/launch", json={"config": plan})).json()
+
+    before = await _campaign_rows(pg_engine)
+    assert set(before) == {"c1", "c2", "c3", "c4"}
+
+    # Искусственный отказ второй кампании; остальные три подтверждены.
+    async with pg_engine.begin() as conn:
+        for campaign_key, (run_id, _status) in before.items():
+            terminal = "failed" if campaign_key == "c2" else "succeeded"
+            await conn.execute(
+                text("UPDATE campaign_run SET status = :status WHERE id = CAST(:rid AS UUID)"),
+                {"status": terminal, "rid": run_id},
+            )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        second = (await ac.post("/api/tools/campaigns/launch", json={"config": plan})).json()
+
+    after = await _campaign_rows(pg_engine)
+    # Ни одного нового прогона: те же четыре, с теми же id и теми же исходами.
+    assert after == {
+        "c1": (before["c1"][0], "succeeded"),
+        "c2": (before["c2"][0], "failed"),
+        "c3": (before["c3"][0], "succeeded"),
+        "c4": (before["c4"][0], "succeeded"),
+    }
+
+    replayed = second["accounts"][0]["campaigns"]
+    assert all(campaign["replayed"] for campaign in replayed)
+    assert {campaign["campaign_key"]: campaign["run_id"] for campaign in replayed} == {
+        campaign["campaign_key"]: campaign["run_id"]
+        for campaign in first["accounts"][0]["campaigns"]
+    }
+
+    async with pg_engine.connect() as conn:
+        runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
+        tasks = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'campaign_create'")
+            )
+        ).scalar()
+        # Повтор не жжёт диапазон кодов заново: аллокация идёт только на реально
+        # новом прогоне.
+        next_seq = (
+            await conn.execute(
+                text("SELECT next_seq FROM offer_creative_seq WHERE offer_code = 'GH_CR'")
+            )
+        ).scalar()
+    assert runs == 4
+    assert tasks == 4
+    assert next_seq == 4
+
+
+# Убрав из плана одну кампанию, остальные остаются теми же задачами.
+@pytest.mark.asyncio
+async def test_relaunch_without_one_campaign_keeps_sibling_runs(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _plan_config(("c1", "c2", "c3", "c4"))},
+        )
+        before = await _campaign_rows(pg_engine)
+        await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _plan_config(("c1", "c3", "c4"))},
+        )
+
+    after = await _campaign_rows(pg_engine)
+    assert after == before
+
+
+def _reject_campaign_at_enqueue(monkeypatch, *, reject: set[str] | None):
+    """Отказ постановки конкретных кампаний плана; остальные ставятся по-настоящему.
+
+    Патчится постановка ОДНОЙ кампании — тот самый шов, который появился после
+    разреза. ``reject=None`` означает «отвергать все». Фейк принимает любую
+    сигнатуру намеренно: на коде до разреза постановка звалась один раз на весь
+    кабинет, и тест обязан краснеть поведением (ноль кампаний в receipt'е), а
+    не несовпадением аргументов.
+    """
+
+    original = campaigns_create._launch_one_campaign
+
+    async def fake(*args, **kwargs):
+        config = kwargs.get("config")
+        campaign_key = config.campaigns[0].key if config is not None else None
+        if reject is None or (campaign_key is not None and campaign_key in reject):
+            raise ValueError("Концепт кампании не найден")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(campaigns_create, "_launch_one_campaign", fake)
+
+
+# Критерий 4: отказ одной кампании не отменяет постановку соседних, и оператор
+# видит причину именно у неё.
+@pytest.mark.asyncio
+async def test_rejected_campaign_keeps_sibling_campaigns_queued(
+    pg_engine, fake_redis_client, clean_campaigns, monkeypatch
+):
+    _reject_campaign_at_enqueue(monkeypatch, reject={"c2"})
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _plan_config(("c1", "c2", "c3", "c4"))},
+        )
+
+    assert resp.status_code == 202
+    out = resp.json()
+    assert out["request_state"] == "partial"
+    account = out["accounts"][0]
+    # Кабинет не считается отвергнутым, пока хоть одна его кампания встала в очередь.
+    assert account["status"] == "queued"
+
+    by_key = {campaign["campaign_key"]: campaign for campaign in account["campaigns"]}
+    assert set(by_key) == {"c1", "c2", "c3", "c4"}
+    assert all(by_key[key]["run_id"] for key in ("c1", "c3", "c4"))
+    assert by_key["c2"]["run_id"] is None
+    assert by_key["c2"]["task_id"] is None
+    assert by_key["c2"]["status"] == "rejected"
+    assert by_key["c2"]["error"] == "Концепт кампании не найден"
+
+    async with pg_engine.connect() as conn:
+        runs = (
+            await conn.execute(
+                text("SELECT config#>>'{campaigns,0,key}' AS campaign_key FROM campaign_run")
+            )
+        ).scalars()
+        tasks = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'campaign_create'")
+            )
+        ).scalar()
+    # Отвергнутая кампания не оставила ни прогона, ни задачи; соседи встали.
+    assert sorted(runs) == ["c1", "c3", "c4"]
+    assert tasks == 3
+
+
+# Черновик оператора переживает запуск, в котором не встало ни одной кампании.
+@pytest.mark.asyncio
+async def test_draft_survives_a_launch_where_no_campaign_was_queued(
+    pg_engine, fake_redis_client, clean_campaigns, monkeypatch
+):
+    _reject_campaign_at_enqueue(monkeypatch, reject=None)
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        created = await ac.put(
+            "/api/tools/campaigns/draft",
+            json={"expected_revision": 0, "state": _draft_state(step=7)},
+        )
+        assert created.status_code == 200
+        resp = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={
+                "config": _plan_config(("c1", "c2")),
+                "draft_revision": created.json()["revision"],
+            },
+        )
+
+    assert resp.status_code == 202
+    out = resp.json()
+    assert out["request_state"] == "rejected"
+    assert out["draft_cleared"] is False
+    account = out["accounts"][0]
+    assert account["status"] == "rejected"
+    assert [campaign["run_id"] for campaign in account["campaigns"]] == [None, None]
+    assert all(campaign["error"] for campaign in account["campaigns"])
+
+    async with pg_engine.connect() as conn:
+        drafts = (await conn.execute(text("SELECT COUNT(*) FROM campaign_draft"))).scalar()
+        runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
+    assert drafts == 1
+    assert runs == 0
+
+
+# Две кампании с одним ключом — две кампании с одной идентичностью: отказ до
+# создания чего-либо, иначе вторая молча слилась бы с первой.
+@pytest.mark.asyncio
+async def test_launch_rejects_duplicate_campaign_keys(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _plan_config(("c1", "c1"))},
+        )
+    assert resp.status_code == 422
+    async with pg_engine.connect() as conn:
+        runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
+    assert runs == 0
 
 
 # ─────────────────────────── upload ───────────────────────────

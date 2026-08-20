@@ -320,11 +320,7 @@ function campaignWizardFromWireWithoutRecursion(
 ): CampaignWizardState {
   const draftAccounts = draft.identity.ad_account_ids ?? [];
   const selectedAccounts =
-    draftAccounts.length > 0
-      ? draftAccounts
-      : draft.identity.act_id
-        ? [draft.identity.act_id]
-        : [];
+    draftAccounts.length > 0 ? draftAccounts : draft.identity.act_id ? [draft.identity.act_id] : [];
   // Черновики, созданные до появления таргета шаблонов, этих ключей не имеют.
   // Поднимаем их к тем же явным значениям, что и у нового визарда.
   const goal = draft.goal as CampaignWizardGoal & {
@@ -581,7 +577,57 @@ export type CampaignLaunchAggregateState =
   | "failed"
   | "unknown";
 
-/** Green is possible only when every selected cabinet is confirmed succeeded. */
+/**
+ * Одна кампания залива: то, что оператор видит как отдельный прогон.
+ *
+ * Единица знаменателя «3 из 4» — кампания, а не кабинет: после разреза плана
+ * каждая кампания получает свою задачу и свой исход. Кабинет, отвергнутый до
+ * разбора плана, кампаний не имеет и остаётся одной отвергнутой единицей —
+ * иначе запрос, где не поставлено ничего, показал бы пустой знаменатель.
+ */
+export interface CampaignLaunchUnit {
+  accountId: string;
+  campaignKey: string | null;
+  runId: string | null;
+  status: string;
+  error: string | null;
+}
+
+/**
+ * Разложить receipt залива в плоский список кампаний по кабинетам.
+ *
+ * Тип входа берётся из сгенерированного контракта, а не описывается здесь
+ * заново: своя копия формы разошлась бы с сервером молча — переименованное
+ * поле прошло бы и `gen:api`, и `typecheck`, а оба фронта прочитали бы
+ * `undefined`.
+ */
+export function campaignLaunchUnits(
+  accounts: components["schemas"]["LaunchAccountOut"][] | null | undefined,
+): CampaignLaunchUnit[] {
+  return (accounts ?? []).flatMap((account): CampaignLaunchUnit[] => {
+    const campaigns = account.campaigns ?? [];
+    if (campaigns.length === 0) {
+      return [
+        {
+          accountId: account.account_id,
+          campaignKey: null,
+          runId: account.run_id ?? null,
+          status: account.status,
+          error: account.error ?? null,
+        },
+      ];
+    }
+    return campaigns.map((campaign) => ({
+      accountId: account.account_id,
+      campaignKey: campaign.campaign_key,
+      runId: campaign.run_id ?? null,
+      status: campaign.status,
+      error: campaign.error ?? null,
+    }));
+  });
+}
+
+/** Green is possible only when every launched campaign is confirmed succeeded. */
 export function aggregateCampaignLaunchState(
   states: CampaignLaunchObservedState[],
 ): CampaignLaunchAggregateState {

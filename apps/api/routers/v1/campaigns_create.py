@@ -54,6 +54,7 @@ from apps.api.routers.v1.schemas.campaigns_create import (
     AdsetPlanOut,
     CampaignPlanOut,
     LaunchAccountOut,
+    LaunchCampaignOut,
     LaunchIn,
     LaunchOut,
     PresetIn,
@@ -85,6 +86,7 @@ from core.campaign_builder.creative_ledger import (
     peek_next_seq,
     reconcile_offer_seq,
 )
+from core.campaign_builder.plan import campaign_plan_slices
 from core.campaign_drafts import (
     CampaignDraftConflictError,
     CampaignDraftDocument,
@@ -120,26 +122,34 @@ _LaunchValue = TypeVar("_LaunchValue")
 
 
 @dataclass(frozen=True, slots=True)
-class _AccountLaunchAttempt(Generic[_LaunchValue]):
-    account_id: str
+class _LaunchAttempt(Generic[_LaunchValue]):
+    """Исход постановки одной единицы веера: кабинета или кампании."""
+
+    key: str
     value: _LaunchValue | None = None
     error: Exception | None = None
 
 
-async def _run_account_launches_independently(
-    account_ids: tuple[str, ...],
+async def _run_launches_independently(
+    keys: tuple[str, ...],
     launch_one: Callable[[str], Awaitable[_LaunchValue]],
-) -> list[_AccountLaunchAttempt[_LaunchValue]]:
-    """Execute every unique cabinet even when an earlier cabinet is rejected."""
+) -> list[_LaunchAttempt[_LaunchValue]]:
+    """Поставить каждую единицу веера, даже если предыдущая отвергнута.
 
-    attempts: list[_AccountLaunchAttempt[_LaunchValue]] = []
-    for account_id in dict.fromkeys(account_ids):
+    Веер идёт по двум уровням — кабинеты плана и кампании внутри кабинета — и
+    контракт у обоих один: отказ одной единицы не меняет исход остальных.
+    Единица, поставленная в очередь, остаётся поставленной; отвергнутая
+    возвращает свою причину и не откатывает соседей.
+    """
+
+    attempts: list[_LaunchAttempt[_LaunchValue]] = []
+    for key in dict.fromkeys(keys):
         try:
-            value = await launch_one(account_id)
+            value = await launch_one(key)
         except Exception as exc:  # noqa: BLE001 - isolation is the fan-out contract
-            attempts.append(_AccountLaunchAttempt(account_id=account_id, error=exc))
+            attempts.append(_LaunchAttempt(key=key, error=exc))
             continue
-        attempts.append(_AccountLaunchAttempt(account_id=account_id, value=value))
+        attempts.append(_LaunchAttempt(key=key, value=value))
     return attempts
 
 
@@ -250,12 +260,25 @@ def _safe_filename(name: str, index: int) -> str:
     return cleaned or f"concept_{index}"
 
 
-def _compute_idempotency_key(config: CampaignConfig) -> str:
-    """Детерминированный ключ залива: offer + date + хеш структуры (money-safety).
+def _compute_campaign_idempotency_key(config: CampaignConfig) -> str:
+    """Ключ ОДНОЙ кампании плана: offer + date + хеш её конфига (money-safety).
 
-    Один и тот же конфиг → один и тот же ключ → повторный launch не задвоит залив.
-    Хешируем канонический JSON конфига (порядок ключей фиксирован).
+    Одна кампания — одна задача, поэтому и ключ считается на кампанию, а не на
+    план. Ключ, посчитанный по всему плану, ловил дубль только целого залива:
+    стоило убрать из плана одну кампанию и запустить снова, как менялся ключ
+    ВСЕХ остальных — и уже подтверждённые кампании заливались второй раз.
+
+    На вход обязан приходить срез плана (`campaign_plan_slices`) — ровно одна
+    кампания. Целый план сюда не проходит: посчитанный по нему ключ был бы
+    ключом другой сущности и молча разрешил бы дубль.
+
+    Хешируется канонический JSON конфига среза (порядок ключей фиксирован), то
+    есть кабинет, бюджет, таргет, набор креативов и сама кампания вместе с её
+    ключом. Для плана из одной кампании срез совпадает с планом, поэтому такой
+    залив сохраняет РОВНО тот же ключ, что и до разреза.
     """
+    if len(config.campaigns) != 1:
+        raise ValueError("ключ идемпотентности считается на одну кампанию плана")
     canonical_data = config.model_dump(mode="json")
     # Evidence time is persisted for audit but must not let a routine account
     # refresh bypass duplicate-launch protection.  Timezone and currency remain
@@ -826,13 +849,18 @@ async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOu
 # ─────────────────────────────── launch ────────────────────────────────
 
 
-async def _launch_one_campaign(
+async def _resolve_account_plan(
     body: LaunchIn,
     engine: DepEngine,
     *,
     account_id: str,
-) -> LaunchAccountOut:
-    """Create or replay exactly one cabinet-scoped run and worker task."""
+) -> tuple[CampaignConfig, uuid.UUID | None]:
+    """Подтвердить кабинет и план целиком до постановки хотя бы одной кампании.
+
+    Контекст кабинета читается один раз на кабинет, а не на кампанию: он общий
+    для всего плана, и разные кампании одного залива не имеют права уехать в
+    Meta с разными снимками валюты и таймзоны.
+    """
 
     account_body = body.model_copy(
         update={
@@ -855,19 +883,35 @@ async def _launch_one_campaign(
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail="Невалидный конфиг кампании") from exc
 
-    ikey = _compute_idempotency_key(config)
-    # В БД пишем КАНОНИЧЕСКИЙ доменный снимок (воркер ждёт вложенный CampaignConfig).
-    config_json = config.model_dump_json()
-    account_context_observed_at = config.model_dump(mode="json")["account"][
-        "account_context_observed_at"
-    ]
-
     preset_uuid: uuid.UUID | None = None
     if account_body.preset_id:
         try:
             preset_uuid = uuid.UUID(account_body.preset_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="preset_id не UUID") from exc
+    return config, preset_uuid
+
+
+async def _launch_one_campaign(
+    engine: DepEngine,
+    *,
+    config: CampaignConfig,
+    preset_uuid: uuid.UUID | None,
+) -> LaunchCampaignOut:
+    """Create or replay exactly one campaign run and its worker task.
+
+    ``config`` — срез плана ровно с одной кампанией (`campaign_plan_slices`).
+    Отдельная транзакция на кампанию — это и есть разрез: соседняя кампания,
+    отвергнутая до постановки, не откатывает уже созданную здесь строку.
+    """
+
+    campaign_key = config.campaigns[0].key
+    ikey = _compute_campaign_idempotency_key(config)
+    # В БД пишем КАНОНИЧЕСКИЙ доменный снимок (воркер ждёт вложенный CampaignConfig).
+    config_json = config.model_dump_json()
+    account_context_observed_at = config.model_dump(mode="json")["account"][
+        "account_context_observed_at"
+    ]
 
     async with engine.begin() as conn:
         # Preset is provenance only. Its values are already copied into config;
@@ -927,8 +971,8 @@ async def _launch_one_campaign(
                 )
             ).first()
             logger.info("campaign launch idempotent: run_id=%s ikey=%s", existing.id, ikey)
-            return LaunchAccountOut(
-                account_id=config.account.act_num,
+            return LaunchCampaignOut(
+                campaign_key=campaign_key,
                 run_id=existing.id,
                 task_id=int(task_row.id) if task_row else None,
                 status=existing.status,
@@ -941,6 +985,9 @@ async def _launch_one_campaign(
         # Per-offer нумерация: резервируем диапазон кодов ТОЛЬКО для реально нового
         # run'а (на конфликт-ветке аллокации нет → без gap'ов на повторах). code_start
         # фиксируется в config → воркер и retry берут одни и те же коды (preview==launch).
+        # Диапазон — на ОДНУ кампанию среза. Кампании плана ставятся по порядку, каждая
+        # берёт следующий диапазон у того же атомарного аллокатора, поэтому сумма
+        # диапазонов равна диапазону всего плана и коды совпадают с превью.
         span = total_code_span(config)
         # Перед резервом приводим счётчик к реальности: прошлые НЕУДАЧНЫЕ заливы жгли span
         # (allocate) без отката → next_seq инфлировал выше числа реально созданных
@@ -991,12 +1038,105 @@ async def _launch_one_campaign(
             task_id = int(existing_task.id) if existing_task else None
 
     logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_id, ikey)
-    return LaunchAccountOut(
-        account_id=config.account.act_num,
+    return LaunchCampaignOut(
+        campaign_key=campaign_key,
         run_id=run_id,
         task_id=task_id,
         status="queued",
         idempotency_key=ikey,
+    )
+
+
+def _operator_launch_detail(exc: Exception, *, fallback: str, unit: str) -> str:
+    """Причина отказа словами оператора; сырое исключение остаётся в логе.
+
+    ``ValueError`` сюда приходит и как наш собственный внятный текст, и как
+    ``pydantic.ValidationError`` — она наследует ``ValueError``, а её сообщение
+    многострочное, со значениями входа и ссылкой на документацию. Такой текст в
+    интерфейс оператора не попадает: узнаваем только тот отказ, который мы
+    сформулировали сами.
+    """
+
+    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
+        return exc.detail
+    if type(exc) is ValueError:
+        return str(exc)
+    logger.error(
+        "campaign launch failed before enqueue for %s error_type=%s",
+        unit,
+        type(exc).__name__,
+    )
+    return fallback
+
+
+def _campaign_launch_error(campaign_key: str, exc: Exception) -> LaunchCampaignOut:
+    """Отказ до постановки одной кампании — отдельный receipt, а не молчание."""
+
+    return LaunchCampaignOut(
+        campaign_key=campaign_key,
+        status="rejected",
+        error=_operator_launch_detail(
+            exc,
+            fallback="Кампания не поставлена в очередь",
+            unit=f"campaign={campaign_key}",
+        ),
+    )
+
+
+async def _launch_account_plan(
+    body: LaunchIn,
+    engine: DepEngine,
+    *,
+    account_id: str,
+) -> LaunchAccountOut:
+    """Разложить план кабинета на независимые кампании и поставить каждую.
+
+    Одна кампания — одна задача и один наблюдаемый прогон. Контекст кабинета и
+    полнота набора креативов проверяются один раз на весь план: отказ здесь
+    отвергает кабинет целиком и ничего не создаёт. Дальше кампании независимы —
+    отказ одной не отменяет постановку остальных.
+
+    Диапазоны кодов резервируются в порядке плана, кампания за кампанией,
+    поэтому нумерация креативов остаётся ровно той, что показало превью.
+    """
+
+    config, preset_uuid = await _resolve_account_plan(body, engine, account_id=account_id)
+    # Разрез — часть предполёта: он отвергает кабинет целиком и до постановки
+    # чего-либо. Сырой текст отказа (в том числе ``pydantic.ValidationError``)
+    # остаётся в исключении-причине и в лог, оператор видит закрытую формулировку.
+    try:
+        plan_slices = campaign_plan_slices(config)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Невалидный конфиг кампании") from exc
+    slices = {slice_config.campaigns[0].key: slice_config for slice_config in plan_slices}
+
+    async def launch_slice(campaign_key: str) -> LaunchCampaignOut:
+        return await _launch_one_campaign(
+            engine,
+            config=slices[campaign_key],
+            preset_uuid=preset_uuid,
+        )
+
+    attempts = await _run_launches_independently(tuple(slices), launch_slice)
+    campaigns = [
+        attempt.value
+        if attempt.error is None and attempt.value is not None
+        else _campaign_launch_error(attempt.key, attempt.error or RuntimeError())
+        for attempt in attempts
+    ]
+    queued = [campaign for campaign in campaigns if campaign.run_id is not None]
+    only = campaigns[0] if len(campaigns) == 1 else None
+    return LaunchAccountOut(
+        account_id=config.account.act_num,
+        # Кабинет с несколькими кампаниями не сводится к одному run: сводить
+        # его к первому значило бы показать оператору исход одной кампании как
+        # исход кабинета. Перечень — в ``campaigns``.
+        run_id=only.run_id if only else None,
+        task_id=only.task_id if only else None,
+        idempotency_key=only.idempotency_key if only else None,
+        status="queued" if queued else "rejected",
+        replayed=bool(campaigns) and all(campaign.replayed for campaign in campaigns),
+        campaigns=campaigns,
     )
 
 
@@ -1015,18 +1155,15 @@ async def _configured_offer_accounts(engine: DepEngine, *, offer_code: str) -> s
 
 
 def _account_launch_error(account_id: str, exc: Exception) -> LaunchAccountOut:
-    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
-        detail = exc.detail
-    elif isinstance(exc, ValueError):
-        detail = str(exc)
-    else:
-        logger.error(
-            "campaign launch failed before enqueue for account=%s error_type=%s",
-            account_id,
-            type(exc).__name__,
-        )
-        detail = "Запуск кабинета не поставлен в очередь"
-    return LaunchAccountOut(account_id=account_id, status="rejected", error=detail)
+    return LaunchAccountOut(
+        account_id=account_id,
+        status="rejected",
+        error=_operator_launch_detail(
+            exc,
+            fallback="Запуск кабинета не поставлен в очередь",
+            unit=f"account={account_id}",
+        ),
+    )
 
 
 async def _clear_launch_draft(
@@ -1040,32 +1177,64 @@ async def _clear_launch_draft(
         return await campaign_drafts.clear_if_revision(conn, revision=revision)
 
 
+def _launch_request_state(
+    accounts: list[LaunchAccountOut],
+) -> Literal["accepted", "partial", "rejected"]:
+    """Состояние запроса считается по КАМПАНИЯМ — они и есть единицы залива.
+
+    Кабинет, отвергнутый до разбора плана, кампаний не имеет и считается одной
+    отвергнутой единицей: иначе запрос, где не поставлено ничего, выглядел бы
+    принятым.
+    """
+
+    queued = 0
+    total = 0
+    for account in accounts:
+        if not account.campaigns:
+            total += 1
+            continue
+        total += len(account.campaigns)
+        queued += sum(1 for campaign in account.campaigns if campaign.run_id is not None)
+    if queued == 0:
+        return "rejected"
+    return "accepted" if queued == total else "partial"
+
+
 @router.post(
     "/tools/campaigns/launch",
     response_model=LaunchOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
-    """Fan out one operator request into independent cabinet-scoped runs.
+    """Fan out one operator request into independent per-campaign runs.
 
-    Each accepted cabinet still uses the existing atomic ``campaign_run + task``
-    transaction. An explicit multi-account request is restricted to
-    ``offer_ad_accounts`` and converts per-cabinet preflight failures into
-    per-cabinet receipts instead of rolling back successful siblings.
+    Веер идёт на двух уровнях: кабинеты плана, а внутри кабинета — кампании.
+    Каждая кампания получает свой ``campaign_run`` и свою задачу в той же
+    атомарной транзакции, что и раньше. Отказ до постановки — что кабинета,
+    что кампании — превращается в отдельный receipt и не откатывает соседей.
     """
 
     # Old clients retain the original fail-fast single-account contract. New
     # clients always send ad_account_ids sourced from the selected catalog offer.
     if body.ad_account_ids is None:
-        receipt = await _launch_one_campaign(body, engine, account_id=body.config.act_id)
-        draft_cleared = await _clear_launch_draft(engine, revision=body.draft_revision)
+        receipt = await _launch_account_plan(body, engine, account_id=body.config.act_id)
+        request_state = _launch_request_state([receipt])
+        # Черновик снимается только когда в очередь встало хоть что-то. До
+        # разреза этой ветке нечего было отвергать: кабинет либо ставился, либо
+        # падал исключением. Теперь план может быть отвергнут покампанийно — и
+        # стереть черновик, не поставив ни одной кампании, значит отобрать у
+        # оператора то, что он собирал, ровно в момент, когда это ему нужнее.
+        draft_cleared = await _clear_launch_draft(
+            engine,
+            revision=body.draft_revision if request_state != "rejected" else None,
+        )
         return LaunchOut(
             run_id=receipt.run_id,
             task_id=receipt.task_id,
             status=receipt.status,
             idempotency_key=receipt.idempotency_key,
             draft_cleared=draft_cleared,
-            request_state="accepted",
+            request_state=request_state,
             accounts=[receipt],
         )
 
@@ -1079,30 +1248,23 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
             raise ValueError("Оффер не найден в каталоге")
         if account_id not in configured_accounts:
             raise ValueError("Кабинет не привязан к офферу")
-        return await _launch_one_campaign(body, engine, account_id=account_id)
+        return await _launch_account_plan(body, engine, account_id=account_id)
 
-    attempts = await _run_account_launches_independently(
+    attempts = await _run_launches_independently(
         tuple(body.ad_account_ids),
         launch_selected,
     )
     accounts = [
         attempt.value
         if attempt.error is None and attempt.value is not None
-        else _account_launch_error(attempt.account_id, attempt.error or RuntimeError())
+        else _account_launch_error(attempt.key, attempt.error or RuntimeError())
         for attempt in attempts
     ]
-    accepted = [account for account in accounts if account.run_id is not None]
-    request_state: Literal["accepted", "partial", "rejected"]
-    if len(accepted) == len(accounts):
-        request_state = "accepted"
-    elif accepted:
-        request_state = "partial"
-    else:
-        request_state = "rejected"
+    request_state = _launch_request_state(accounts)
 
     draft_cleared = await _clear_launch_draft(
         engine,
-        revision=body.draft_revision if accepted else None,
+        revision=body.draft_revision if request_state != "rejected" else None,
     )
     only = accounts[0] if len(accounts) == 1 else None
     return LaunchOut(
