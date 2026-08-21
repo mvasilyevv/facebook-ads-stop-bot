@@ -636,7 +636,7 @@ describe('MetaApiService exact-profile health', () => {
           session_id: '',
           full_probe: true,
           expected_vision_profile_id: 'profile-exact',
-          ad_account_id: '2108857220005012',
+          ad_account_id: '1234567890123456',
         }),
         (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
       );
@@ -644,7 +644,7 @@ describe('MetaApiService exact-profile health', () => {
 
     assert.equal(requestedProfile, 'profile-exact');
     assert.equal(preferredCalls, 0);
-    assert.deepEqual(requestedActs, ['2108857220005012']);
+    assert.deepEqual(requestedActs, ['1234567890123456']);
     assert.equal(response.healthy, true);
     assert.equal(response.browser_contract_version, 5);
     assert.equal(response.session_id, 'session-exact');
@@ -796,7 +796,7 @@ describe('MetaApiService exact-profile health', () => {
     let createdPages = 0;
     const adsPage = {
       isClosed: () => false,
-      url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012',
+      url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=1234567890123456',
     };
     const session = {
       id: 'session-exact',
@@ -816,7 +816,7 @@ describe('MetaApiService exact-profile health', () => {
         assert.equal(page, adsPage as any);
         return {
           healthy: true,
-          currentUrl: 'https://adsmanager.facebook.com/?act=2108857220005012',
+          currentUrl: 'https://adsmanager.facebook.com/?act=1234567890123456',
           tokenPresent: true,
           tokenLength: 200,
           detail: 'ok',

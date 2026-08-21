@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 import core.meta_api.account_tz as account_tz
 
-_ACCOUNT_ID = "2108857220005012"
+_ACCOUNT_ID = "1234567890123456"
 _OFFER_CODE = "SCOPE_TST"
 
 

@@ -230,11 +230,11 @@ describe("operator ledger semantics", () => {
 // одинакова у всех строк, удлиняет их и мешает сверить номер глазами.
 describe("operatorCabinetDisplayName", () => {
   it("снимает транспортный префикс act_", () => {
-    expect(operatorCabinetDisplayName("act_2108857220005012")).toBe("2108857220005012");
+    expect(operatorCabinetDisplayName("act_1234567890123456")).toBe("1234567890123456");
   });
 
   it("оставляет чистый номер как есть", () => {
-    expect(operatorCabinetDisplayName("2108857220005012")).toBe("2108857220005012");
+    expect(operatorCabinetDisplayName("1234567890123456")).toBe("1234567890123456");
   });
 
   it("не падает на отсутствующем значении", () => {

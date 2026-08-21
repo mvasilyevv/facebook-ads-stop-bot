@@ -13,7 +13,7 @@ vi.mock("@/lib/api/offers", () => ({
       {
         code: "GH_AVI",
         name: "GH Aviator",
-        ad_account_ids: ["2108857220005012", "3570379159805007"],
+        ad_account_ids: ["1234567890123456", "9876543210987654"],
         countries: [],
       },
     ],
@@ -54,7 +54,7 @@ describe("WizardStep2Identity — контекст кабинета", () => {
   // объяснения отправляет его гадать, что именно не так с кабинетом.
   it("показывает причину недоступного контекста", () => {
     renderStep({
-      act_id: "2108857220005012",
+      act_id: "1234567890123456",
       account_context_state: "unavailable",
       account_context_issue: "Meta не отдала часовой пояс и валюту по кабинету",
     });
@@ -67,7 +67,7 @@ describe("WizardStep2Identity — контекст кабинета", () => {
   // Причины нет — остаётся честная общая формулировка, а не пустая строка.
   it("без причины оставляет общую формулировку", () => {
     renderStep({
-      act_id: "2108857220005012",
+      act_id: "1234567890123456",
       account_context_state: "unavailable",
       account_context_issue: null,
     });
@@ -82,17 +82,17 @@ describe("WizardStep2Identity — кабинеты оффера", () => {
   // Кабинеты оффера видны все сразу и отмечаются галочкой: добавление по одному
   // через выпадающий список заставляло искать нужный кабинет вслепую.
   it("показывает кабинеты оффера списком с отметками", () => {
-    renderStep({ offer_code: "GH_AVI", ad_account_ids: ["2108857220005012"] });
+    renderStep({ offer_code: "GH_AVI", ad_account_ids: ["1234567890123456"] });
 
-    const checked = screen.getByRole("checkbox", { name: /2108857220005012/ });
+    const checked = screen.getByRole("checkbox", { name: /1234567890123456/ });
     expect(checked).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /3570379159805007/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /9876543210987654/ })).not.toBeChecked();
   });
 
   // act_ — префикс транспорта Meta, а не часть идентичности кабинета. В интерфейсе
   // он только удлинял строку и мешал сверить ID глазами.
   it("не показывает префикс act_", () => {
-    renderStep({ offer_code: "GH_AVI", ad_account_ids: ["2108857220005012"] });
+    renderStep({ offer_code: "GH_AVI", ad_account_ids: ["1234567890123456"] });
 
     expect(screen.queryByText(/act_/)).toBeNull();
   });

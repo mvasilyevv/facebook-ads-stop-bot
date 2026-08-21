@@ -77,7 +77,7 @@ async def _seed_config(pg_engine, *, profile_id: str = "profile-ready"):
     return identity
 
 
-async def _seed_offer_cabinet(pg_engine, *, account_id: str = "2108857220005012") -> str:
+async def _seed_offer_cabinet(pg_engine, *, account_id: str = "1234567890123456") -> str:
     """Активный оффер с кабинетом — источник identity для пробы готовности.
 
     Проба не имеет права выводить кабинет из адреса открытой вкладки, поэтому

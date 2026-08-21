@@ -236,7 +236,7 @@ git commit -m "feat(browser-agent): поиск живой вкладки Ads Man
         assert.equal(options?.fullProbe, true);
         return {
           healthy: true,
-          currentUrl: 'https://adsmanager.facebook.com/?act=2108857220005012',
+          currentUrl: 'https://adsmanager.facebook.com/?act=1234567890123456',
           tokenPresent: true,
           tokenLength: 200,
           detail: 'ok',
@@ -255,13 +255,13 @@ git commit -m "feat(browser-agent): поиск живой вкладки Ads Man
           session_id: '',
           full_probe: true,
           expected_vision_profile_id: 'profile-exact',
-          ad_account_id: '2108857220005012',
+          ad_account_id: '1234567890123456',
         }),
         (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
       );
     });
 
-    assert.deepEqual(requestedActs, ['2108857220005012']);
+    assert.deepEqual(requestedActs, ['1234567890123456']);
     assert.equal(response.healthy, true);
     assert.equal(response.browser_contract_version, 5);
     assert.equal(response.session_id, 'session-exact');
@@ -272,7 +272,7 @@ git commit -m "feat(browser-agent): поиск живой вкладки Ads Man
     let createdPages = 0;
     const adsPage = {
       isClosed: () => false,
-      url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012',
+      url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=1234567890123456',
     };
     const session = {
       id: 'session-exact',
@@ -292,7 +292,7 @@ git commit -m "feat(browser-agent): поиск живой вкладки Ads Man
         assert.equal(page, adsPage as any);
         return {
           healthy: true,
-          currentUrl: 'https://adsmanager.facebook.com/?act=2108857220005012',
+          currentUrl: 'https://adsmanager.facebook.com/?act=1234567890123456',
           tokenPresent: true,
           tokenLength: 200,
           detail: 'ok',
@@ -515,8 +515,8 @@ def test_check_health_contract_carries_explicit_cabinet() -> None:
 
     assert "ad_account_id" in protocol_params
     assert "ad_account_id" in client_params
-    request = meta_api_pb2.CheckMetaApiHealthRequest(ad_account_id="2108857220005012")
-    assert request.ad_account_id == "2108857220005012"
+    request = meta_api_pb2.CheckMetaApiHealthRequest(ad_account_id="1234567890123456")
+    assert request.ad_account_id == "1234567890123456"
 ```
 
 - [ ] **Step 2: Убедиться, что тест падает**
@@ -680,7 +680,7 @@ def _async_return(value):
 async def test_readiness_probe_uses_cabinet_from_active_offers(monkeypatch) -> None:
     """Кабинет пробы — детерминированный первый кабинет активных офферов."""
     published = _install_readiness_fakes(
-        monkeypatch, accounts=["2108857220005012", "3570379159805007"]
+        monkeypatch, accounts=["1234567890123456", "9876543210987654"]
     )
     client = _RecordingProbeClient()
 
@@ -692,7 +692,7 @@ async def test_readiness_probe_uses_cabinet_from_active_offers(monkeypatch) -> N
 
     assert result is True
     assert len(client.calls) == 1
-    assert client.calls[0]["ad_account_id"] == "2108857220005012"
+    assert client.calls[0]["ad_account_id"] == "1234567890123456"
     assert published == [{"kind": "persist", "state": "ready"}]
 
 
@@ -931,7 +931,7 @@ test("ensureInteractivePage переиспользует вкладку каби
   const adsPage = {
     isClosed: () => false,
     url: () =>
-      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012",
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=1234567890123456",
     goto: async () => {
       gotoCalls += 1;
     },
@@ -946,7 +946,7 @@ test("ensureInteractivePage переиспользует вкладку каби
   const session = makeSession({ browser });
 
   const page = await manager.ensureInteractivePage(session, {
-    actId: "2108857220005012",
+    actId: "1234567890123456",
   });
 
   assert.equal(page, adsPage as any);
@@ -1046,7 +1046,7 @@ Expected: пустой вывод `git status` — сгенерированны�
 ```bash
 ssh root@62.60.150.133 'docker exec fb_agent_desktop-vision-webtop-1 python3 /tmp/tabtest.py'
 ```
-Expected: вкладка возвращается, и её адрес содержит один из кабинетов активных офферов (`2108857220005012` или `3570379159805007`), а не посторонний кабинет.
+Expected: вкладка возвращается, и её адрес содержит один из кабинетов активных офферов (`1234567890123456` или `9876543210987654`), а не посторонний кабинет.
 
 Убедиться, что money-канал остался готов:
 

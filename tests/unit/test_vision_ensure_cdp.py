@@ -25,7 +25,7 @@ def configured_vision_runtime(monkeypatch):
     # Кабинет пробы приходит из активных офферов; тесты этого файла проверяют
     # fail-closed контракт эндпоинта, а не резолв каталога.
     async def fake_readiness_cabinet(_engine):
-        return "2108857220005012"
+        return "1234567890123456"
 
     monkeypatch.setattr(m, "resolve_readiness_ad_account_id", fake_readiness_cabinet)
 
@@ -489,7 +489,7 @@ async def test_ensure_cdp_names_the_cabinet_from_active_offers(monkeypatch):
         return m._BrowserChannelProbe("READY", None, 1, True)
 
     async def fake_resolve(_engine):
-        return "2108857220005012"
+        return "1234567890123456"
 
     monkeypatch.setattr(m, "_probe_browser_channel", fake_probe)
     monkeypatch.setattr(m, "resolve_readiness_ad_account_id", fake_resolve)
@@ -502,7 +502,7 @@ async def test_ensure_cdp_names_the_cabinet_from_active_offers(monkeypatch):
     )
 
     assert resp.ok is True
-    assert seen == ["2108857220005012"]
+    assert seen == ["1234567890123456"]
 
 
 # Без настроенного кабинета открывать наугад нечего: деплой должен получить

@@ -435,7 +435,7 @@ class _FakeFence:
 @pytest.mark.asyncio
 async def test_empty_meta_answer_is_logged_not_swallowed(monkeypatch, caplog) -> None:
     async def _accounts(_engine):
-        return ["2108857220005012"]
+        return ["1234567890123456"]
 
     async def _fetch(_client, _account_id):
         return account_tz.FetchedAccountContext(timezone_name=None, currency=None)
@@ -453,7 +453,7 @@ async def test_empty_meta_answer_is_logged_not_swallowed(monkeypatch, caplog) ->
 
     assert updated == 0
     messages = [record.getMessage() for record in caplog.records]
-    assert any("2108857220005012" in message for message in messages)
+    assert any("1234567890123456" in message for message in messages)
     assert any("пояс" in message or "валют" in message for message in messages)
 ```
 
@@ -568,7 +568,7 @@ describe("WizardStep2Identity — контекст кабинета", () => {
   // объяснения отправляет его гадать, что именно не так с кабинетом.
   it("показывает причину недоступного контекста", () => {
     renderStep({
-      act_id: "2108857220005012",
+      act_id: "1234567890123456",
       account_context_state: "unavailable",
       account_context_issue: "Meta не отдала часовой пояс и валюту по кабинету",
     });
@@ -581,7 +581,7 @@ describe("WizardStep2Identity — контекст кабинета", () => {
   // Причины нет — остаётся честная общая формулировка, а не пустая строка.
   it("без причины оставляет общую формулировку", () => {
     renderStep({
-      act_id: "2108857220005012",
+      act_id: "1234567890123456",
       account_context_state: "unavailable",
       account_context_issue: null,
     });

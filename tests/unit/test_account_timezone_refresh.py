@@ -32,7 +32,7 @@ class _FakeFence:
 @pytest.mark.asyncio
 async def test_empty_meta_answer_is_logged_not_swallowed(monkeypatch, caplog) -> None:
     async def _accounts(_engine):
-        return ["2108857220005012"]
+        return ["1234567890123456"]
 
     async def _fetch(_client, _account_id):
         return account_tz.FetchedAccountContext(
@@ -52,7 +52,7 @@ async def test_empty_meta_answer_is_logged_not_swallowed(monkeypatch, caplog) ->
 
     assert updated == 0
     messages = [record.getMessage() for record in caplog.records]
-    assert any("2108857220005012" in message for message in messages)
+    assert any("1234567890123456" in message for message in messages)
     assert any("пояс" in message or "валют" in message for message in messages)
 
 
@@ -66,7 +66,7 @@ async def test_refresh_scope_comes_from_offers(monkeypatch) -> None:
     seen: list[str] = []
 
     async def _configured(_engine):
-        return ["2108857220005012", "3570379159805007"]
+        return ["1234567890123456", "9876543210987654"]
 
     async def _fetch(_client, account_id):
         seen.append(account_id)
@@ -88,7 +88,7 @@ async def test_refresh_scope_comes_from_offers(monkeypatch) -> None:
     updated = await account_tz.refresh_account_timezones(object(), object())
 
     assert updated == 2
-    assert seen == ["2108857220005012", "3570379159805007"]
+    assert seen == ["1234567890123456", "9876543210987654"]
 
 
 def test_account_tz_never_derives_scope_from_scan_results() -> None:
