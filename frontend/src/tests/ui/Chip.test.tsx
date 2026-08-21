@@ -10,7 +10,7 @@ import { Chip } from "@/components/ui/Pill";
 
 describe("Chip", () => {
   it("кнопка × компактна, а не 44px-таргет", () => {
-    render(<Chip onRemove={() => undefined}>2108857220005012</Chip>);
+    render(<Chip onRemove={() => undefined}>1234567890123456</Chip>);
 
     const remove = screen.getByRole("button", { name: "Удалить" });
     expect(remove).toHaveClass("size-[18px]");

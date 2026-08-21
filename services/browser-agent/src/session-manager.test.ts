@@ -2331,7 +2331,7 @@ test("ensureInteractivePage не трогает вкладку оператор�
   const operatorPage = {
     isClosed: () => false,
     url: () =>
-      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012",
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=1234567890123456",
     goto: async () => {
       gotoCalls += 1;
     },
@@ -2354,7 +2354,7 @@ test("ensureInteractivePage не трогает вкладку оператор�
   const session = makeSession({ browser });
 
   const page = await manager.ensureInteractivePage(session, {
-    actId: "2108857220005012",
+    actId: "1234567890123456",
   });
 
   assert.equal(page, created as any);

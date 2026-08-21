@@ -57,8 +57,8 @@ async def active_account_ids(engine: AsyncEngine) -> list[str]:
 fb_campaigns:            0 строк (сканирование выключено)
 meta_account_snapshot:   0 строк
 живой Graph по кабинетам оффера:
-  2108857220005012: timezone='America/Dawson_Creek' currency='USD'
-  3570379159805007: timezone='America/Dawson_Creek' currency='USD'
+  1234567890123456: timezone='America/Dawson_Creek' currency='USD'
+  9876543210987654: timezone='America/Dawson_Creek' currency='USD'
 ```
 
 Данные у Meta есть. Не было пути, по которому они попадали бы в базу.
@@ -126,7 +126,7 @@ async def test_refresh_scope_comes_from_offers(monkeypatch) -> None:
     seen: list[str] = []
 
     async def _configured(_engine):
-        return ["2108857220005012", "3570379159805007"]
+        return ["1234567890123456", "9876543210987654"]
 
     async def _fetch(_client, account_id):
         seen.append(account_id)
@@ -143,7 +143,7 @@ async def test_refresh_scope_comes_from_offers(monkeypatch) -> None:
     updated = await account_tz.refresh_account_timezones(object(), object())
 
     assert updated == 2
-    assert seen == ["2108857220005012", "3570379159805007"]
+    assert seen == ["1234567890123456", "9876543210987654"]
 
 
 def test_account_tz_never_derives_scope_from_scan_results() -> None:
@@ -311,13 +311,13 @@ async def test_configured_cabinet_gets_snapshot_without_any_scan(pg_engine) -> N
             )
         ).scalar_one()
         await conn.execute(
-            text("INSERT INTO ad_accounts (account_id) VALUES ('2108857220005012')")
+            text("INSERT INTO ad_accounts (account_id) VALUES ('1234567890123456')")
         )
         await conn.execute(
             text(
                 """
                 INSERT INTO offer_ad_accounts (offer_id, account_id)
-                VALUES (:offer_id, '2108857220005012')
+                VALUES (:offer_id, '1234567890123456')
                 """
             ),
             {"offer_id": offer_id},
@@ -338,7 +338,7 @@ async def test_configured_cabinet_gets_snapshot_without_any_scan(pg_engine) -> N
                     """
                     SELECT timezone_name, currency
                     FROM meta_account_snapshot
-                    WHERE account_id = '2108857220005012'
+                    WHERE account_id = '1234567890123456'
                     """
                 )
             )

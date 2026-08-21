@@ -106,7 +106,7 @@
 # -*- coding: utf-8 -*-
 """Оператор не читает транспортный префикс кабинета.
 
-18.08.2026 владелец увидел в «Портфеле» строку `act_2108857220005012`. Префикс
+18.08.2026 владелец увидел в «Портфеле» строку `act_1234567890123456`. Префикс
 `act_` — приставка адреса Meta: он одинаков во всех строках, удлиняет их и
 мешает сверить номер глазами. В полях идентичности он законен, в тексте для
 человека — нет.
@@ -301,7 +301,7 @@ def test_issue_is_operator_text_not_machine_code() -> None:
 # в логах нужна грепаемая английская строка, а не операторская фраза.
 def test_context_error_message_stays_greppable() -> None:
     context = CampaignAccountContext(
-        account_id="2108857220005012",
+        account_id="1234567890123456",
         state="unavailable",
         timezone_name=None,
         currency=None,
@@ -312,7 +312,7 @@ def test_context_error_message_stays_greppable() -> None:
     )
     message = str(account_context.CampaignAccountContextError(context))
     assert "campaign account context is unavailable" in message
-    assert "act_2108857220005012" in message
+    assert "act_1234567890123456" in message
 
 
 - [ ] **Step 2: Убедиться, что тест падает**
@@ -398,7 +398,7 @@ git commit -m "fix(campaigns): причина недоступного конт�
   // «account_context_request_failed» и шёл гадать (18.08.2026).
   it("не показывает машинный код причины", () => {
     renderStep({
-      act_id: "2108857220005012",
+      act_id: "1234567890123456",
       account_context_state: "unavailable",
       account_context_issue: "account_context_request_failed",
     });
@@ -625,7 +625,7 @@ Expected: пустой вывод — менялись значения поле
 - [ ] **Step 5: Проверка глазами после выката**
 
 Открыть «Сейчас» и убедиться, что строка кабинета читается как
-`2108857220005012 · USD · America/Dawson_Creek`. Открыть аналитику и проверить
+`1234567890123456 · USD · America/Dawson_Creek`. Открыть аналитику и проверить
 выпадающий фильтр «Кабинет» — номера без `act_`.
 
 ---
