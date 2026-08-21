@@ -1112,3 +1112,47 @@ async def test_main_loop_hands_the_workspace_loop_the_real_cabinet_tabs_rpc(
 
     assert opened == [["100000000000001"]]
     assert closed == ["closed"]
+
+
+# #233: канал browser-agent закрывается и после таймаута подготовки.
+#
+# Голого `finally: await client.close()` для этого мало, и уже этого не видно:
+# один сработавший дедлайн подготовки закрытие переживает. Ломается пара —
+# дедлайн подготовки и остановка воркера, пришедшая пока закрытие идёт. Цикл
+# ходит раз в минуту, поэтому канал утекает медленно, но утекает.
+
+
+@pytest.mark.asyncio
+async def test_channel_closes_when_cancelled_mid_close() -> None:
+    """Отмена во время закрытия канала не оставляет его открытым."""
+    closed: list[str] = []
+
+    class SlowClosingClient:
+        async def close(self) -> None:
+            # Закрытие gRPC-канала — не мгновенное: без точки приостановки
+            # тест не отличал бы защищённое закрытие от незащищённого.
+            await asyncio.sleep(0.05)
+            closed.append("closed")
+
+    async def open_client() -> SlowClosingClient:
+        return SlowClosingClient()
+
+    async def one_attempt() -> None:
+        # Дедлайн подготовки той же формы, что в prepare_browser_workspace:
+        # он срабатывает первым и уводит вызов в закрытие канала.
+        async with asyncio.timeout(0.05):
+            async with hw.browser_agent_client_scope(open_client):
+                await asyncio.sleep(10)
+
+    task = asyncio.create_task(one_attempt())
+    # Ждём, пока дедлайн уже сработал и закрытие канала идёт прямо сейчас:
+    # отмена, пришедшая именно в это окно, и оставляет канал открытым.
+    await asyncio.sleep(0.06)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Закрытие защищено, поэтому доезжает уже после отмены — дожидаемся его.
+    await asyncio.sleep(0.2)
+    assert closed == ["closed"]
