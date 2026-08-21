@@ -23,6 +23,7 @@ import {
   type AmScanConfig,
 } from './am-config.js';
 import { adsManagerColumnsQs } from './am-columns-preset.js';
+import { tracePageNav } from '../trace.js';
 import type { ScannedAdRow } from '../types.js';
 import {
   bindAbortSignalToPage,
@@ -148,6 +149,15 @@ function cabinetCampaignsUrl(
 // т.к. уже загруженная страница пассивно ничего не шлёт). sniffed=true → был reload.
 // expectedActId — sanity-check мульти-кабинета: act из сниффа обязан совпасть с запрошенным
 // кабинетом, иначе сканировали бы чужой кабинет под видом своего (money-критично).
+/** Адрес вкладки для следа: закрытая страница не должна ронять скан. */
+function safeCurrentUrl(page: Page): string {
+  try {
+    return page.url() || '';
+  } catch {
+    return '';
+  }
+}
+
 export async function acquireGraphContext(
   page: Page,
   sessionId: string,
@@ -161,6 +171,16 @@ export async function acquireGraphContext(
   }
   const ctxPromise = extractGraphContext(page, 20000, opts.signal);
   try {
+    // Скан перезагружает ту же вкладку, которую под ролью держит money-путь:
+    // разбор 19.08 упёрся в вопрос, был ли этот reload в окне отказа залива.
+    tracePageNav({
+      session: sessionId,
+      role: 'scan',
+      act: expectedActId,
+      kind: 'reload',
+      url: safeCurrentUrl(page),
+      by: 'scan',
+    });
     await raceWithAbort(page.reload({ waitUntil: 'domcontentloaded' }), opts.signal);
   } catch {
     /* ignore — listener всё равно может поймать запрос */

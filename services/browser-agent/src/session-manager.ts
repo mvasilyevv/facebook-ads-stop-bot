@@ -15,6 +15,7 @@ import {
 import { raceWithAbort } from "./in-page-abort.js";
 import { withPageRoleLock } from "./page-lock.js";
 import { pageHasMetaApiToken } from "./meta-api/client.js";
+import { tracePageNav } from "./trace.js";
 import type { BrowserPageRole, BrowserSession, HumanProfile } from "./types.js";
 
 const EXISTING_PROFILE_PORT_GRACE_SECONDS = 8;
@@ -769,14 +770,30 @@ export class SessionManager {
       const page = opts.page;
       const closed = typeof page?.isClosed === "function" && page.isClosed();
       if (page && !closed) {
-        await reloadPageWithinOperation(page, opts.signal);
+        await reloadPageWithinOperation(
+          page,
+          {
+            session: sessionId,
+            role: opts.role,
+            act: opts.actId ?? "",
+            by: "heal",
+          },
+          opts.signal,
+        );
       }
     } catch (err) {
       if (opts.signal?.aborted) {
         throw err;
       }
       ok = false;
-      console.error(`[heal] session=${sessionId} page reload failed:`, err);
+      // Текст исключения сюда не попадает: в нём встречается содержимое
+      // страницы. Класса отказа хватает, чтобы отличить закрытую вкладку от
+      // мёртвого CDP, а подробности живут в записи навигации выше.
+      console.error(
+        `[heal] session=${sessionId} page reload failed: ${
+          err instanceof Error ? err.name : "unknown"
+        }`,
+      );
     }
     session.lastHealAt = new Date();
     session.netFailureStreak = 0;
@@ -1239,7 +1256,17 @@ export class SessionManager {
       (role === "control" && !(await pageHasMetaApiToken(page, opts.signal)));
     if (needsNavigation) {
       try {
-        await navigatePageWithinOperation(page, targetUrl, opts.signal);
+        await navigatePageWithinOperation(
+          page,
+          targetUrl,
+          {
+            session: session.id,
+            role,
+            act: resolvedAct,
+            by: "operation",
+          },
+          opts.signal,
+        );
         if (!isConfirmedAdsManagerPage(page, resolvedAct)) {
           throw new Error(
             `cabinet_not_confirmed: final Ads Manager URL does not confirm act=${resolvedAct}`,
@@ -1407,12 +1434,27 @@ function throwIfOperationAborted(signal?: AbortSignal): void {
   }
 }
 
+/**
+ * Контекст навигации для следа: без него запись «страницу увели» не отвечает
+ * на единственный вопрос, ради которого её читают, — чью и кто.
+ */
+interface NavigationTraceContext {
+  session: string;
+  role: string;
+  act: string;
+  by: string;
+}
+
 async function navigatePageWithinOperation(
   page: Page,
   targetUrl: string,
+  ctx: NavigationTraceContext,
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfOperationAborted(signal);
+  // Запись уходит ДО навигации: зависшая навигация тоже должна быть видна, а
+  // разбор 19.08 упёрся именно в вопрос «был ли reload в эти десять секунд».
+  tracePageNav({ ...ctx, kind: "goto", url: targetUrl });
   await raceWithAbort(
     page.goto(targetUrl, { waitUntil: "domcontentloaded" }),
     signal,
@@ -1422,9 +1464,11 @@ async function navigatePageWithinOperation(
 
 async function reloadPageWithinOperation(
   page: Page,
+  ctx: NavigationTraceContext,
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfOperationAborted(signal);
+  tracePageNav({ ...ctx, kind: "reload", url: safePageUrl(page) });
   const onAbort = (): void => {
     // Playwright cannot cancel page.reload directly. Closing the isolated role
     // page terminates the navigation and guarantees no browser work survives
