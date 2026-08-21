@@ -37,6 +37,7 @@ import {
   assertGraphOperationOwnership,
   type GraphOwnershipPreflightOptions,
 } from './ownership.js';
+import { traceMetaCall, type MetaCallTrace, type MoneyPathOutcome } from '../trace.js';
 
 // v5 removes URL-backed image upload and requires capability-bound bytes.
 // It retains exact task/query/body semantics for every controlled operation.
@@ -184,6 +185,102 @@ export function grpcCodeForError(err: any): number {
   return message.includes('not found') || message.includes('не найден')
     ? grpc.status.NOT_FOUND
     : grpc.status.INTERNAL;
+}
+
+/**
+ * Накопитель следа одного вызова: поля дописываются по мере того, как они
+ * становятся доказанными, а запись уходит ровно одна — на первом же исходе.
+ *
+ * Ровно одна нужна потому, что вызов кончается в пяти местах (ранний отказ,
+ * исчерпанный дедлайн, ответ, потерянный транспорт, исключение), и запись из
+ * каждого превратила бы след в пересказ ветвлений вместо истории вызова.
+ */
+interface CallTracer {
+  describe(fields: Partial<MetaCallTrace>): void;
+  done(
+    outcome: MoneyPathOutcome,
+    extra?: { statusCode?: number; reason?: string },
+  ): void;
+  written(): boolean;
+}
+
+function createCallTracer(rpc: string): CallTracer {
+  const startedAt = Date.now();
+  const state: MetaCallTrace = {
+    rpc,
+    act: '',
+    method: '',
+    endpoint: '',
+    money: false,
+    session: '',
+    role: '',
+    outcome: 'REJECTED',
+    durationMs: 0,
+  };
+  let written = false;
+  return {
+    describe(fields: Partial<MetaCallTrace>): void {
+      Object.assign(state, fields);
+    },
+    done(
+      outcome: MoneyPathOutcome,
+      extra?: { statusCode?: number; reason?: string },
+    ): void {
+      if (written) return;
+      written = true;
+      traceMetaCall({
+        ...state,
+        outcome,
+        durationMs: Date.now() - startedAt,
+        statusCode: extra?.statusCode,
+        reason: extra?.reason,
+      });
+    },
+    written(): boolean {
+      return written;
+    },
+  };
+}
+
+/**
+ * Код причины для следа: словарь отказов, иначе общий код.
+ *
+ * Текст исключения сюда не попадает никогда — в нём встречается содержимое
+ * страницы и Graph-ответа.
+ */
+function traceReason(err: unknown, fallback: string): string {
+  return browserOperationRejectionReason(err) ?? fallback;
+}
+
+/**
+ * Исход загрузки медиа для следа.
+ *
+ * Загрузка возвращает свободный текст ошибки — в нём встречается кусок ответа
+ * Meta, поэтому в след он не попадает: классифицируем по закрытым префиксам, а
+ * при неизвестном тексте отвечаем UNKNOWN, если граница отправки уже пройдена.
+ * Неизвестное не округляется до отказа: это ровно та ложь, из-за которой
+ * осиротевшие объекты искали глазами в Ads Manager.
+ */
+function classifyUploadOutcome(
+  result: { ok: boolean; error: string },
+  consumed: boolean,
+): { outcome: MoneyPathOutcome; reason?: string } {
+  if (result.ok) return { outcome: 'CONFIRMED' };
+  const error = result.error || '';
+  if (error === 'cancelled') {
+    return { outcome: consumed ? 'UNKNOWN' : 'REJECTED', reason: 'cancelled' };
+  }
+  if (error.includes('TOKEN_NOT_FOUND_IN_PAGE')) {
+    return { outcome: 'REJECTED', reason: 'token_not_found' };
+  }
+  if (error.startsWith('INVALID_ARGUMENT') || error.startsWith('ad_account_id')) {
+    return { outcome: 'REJECTED', reason: 'invalid_argument' };
+  }
+  if (error.includes('GRAPH_ERROR_')) {
+    // Meta ответила отказом: исход известен, объект не создан.
+    return { outcome: 'CONFIRMED', reason: 'graph_error' };
+  }
+  return { outcome: consumed ? 'UNKNOWN' : 'REJECTED', reason: 'upload_failed' };
 }
 
 function normalizeActId(value: unknown): string {
@@ -486,15 +583,17 @@ export function createMetaApiServiceHandlers(
       grpcAbort.controller.signal,
       capabilityState,
     );
+    const tracer = createCallTracer('execute_graph_call');
     try {
       const req = call.request;
       const endpoint = String(req.endpoint || '/me');
       const requestedAccount = String(req.ad_account_id || '').trim();
       const actId = normalizeActId(req.ad_account_id) || actIdFromEndpoint(endpoint);
+      tracer.describe({ act: actId, endpoint });
       if (requestedAccount && !normalizeActId(requestedAccount)) {
-        responder.respond(grpcErrorForOperationFailure(
-          new Error('ad_account_id must be an explicit numeric account id'),
-        ));
+        const error = new Error('ad_account_id must be an explicit numeric account id');
+        tracer.done('REJECTED', { reason: traceReason(error, 'ad_account_id_invalid') });
+        responder.respond(grpcErrorForOperationFailure(error));
         return;
       }
 
@@ -507,6 +606,7 @@ export function createMetaApiServiceHandlers(
       }
       const requestMethod = String(req.method || 'GET').trim().toUpperCase();
       const requestBody = String(req.body_json || '');
+      tracer.describe({ method: requestMethod });
       assertCanonicalGraphMethodSemantics(
         requestMethod,
         endpoint,
@@ -517,6 +617,7 @@ export function createMetaApiServiceHandlers(
       const requestedTimeoutMs = req.timeout_ms && req.timeout_ms > 0 ? req.timeout_ms : 30_000;
       const remainingMs = remainingDeadlineMs(call);
       if (remainingMs !== undefined && remainingMs <= 0) {
+        tracer.done('REJECTED', { reason: 'deadline_exhausted' });
         responder.respond({
           code: grpc.status.DEADLINE_EXCEEDED,
           message: 'Graph deadline exhausted',
@@ -538,15 +639,17 @@ export function createMetaApiServiceHandlers(
         isMoneyControlGraphCall(params.method, endpoint, queryParams)
         || String(req.authorized_caller || '').trim() === 'campaign_creator'
       );
+      tracer.describe({ money: moneyControl });
       if (moneyControl && !normalizeActId(req.ad_account_id)) {
-        responder.respond(grpcErrorForOperationFailure(
-          new Error('money Graph call requires explicit ad_account_id'),
-        ));
+        const error = new Error('money Graph call requires explicit ad_account_id');
+        tracer.done('REJECTED', { reason: traceReason(error, 'ad_account_id_missing') });
+        responder.respond(grpcErrorForOperationFailure(error));
         return;
       }
       const session = moneyControl
         ? resolveExactOperationSession(req)
         : resolveSession(req.session_id);
+      tracer.describe({ session: session.id });
       const capabilityBinding: OperationCapabilityBinding | undefined = moneyControl
         ? {
             browserContractVersion: BROWSER_CONTRACT_VERSION,
@@ -568,6 +671,7 @@ export function createMetaApiServiceHandlers(
         _verifyOperationCapability(req, capabilityBinding!);
       }
       const role = moneyControl ? 'control' : 'interactive';
+      tracer.describe({ role });
       const operationId = `${role}:${session.id}:${actId || 'default'}:${randomUUID()}`;
       const result = await withPageRoleLock(session.id, role, actId, async () => {
         if (moneyControl) {
@@ -710,10 +814,25 @@ export function createMetaApiServiceHandlers(
         }
       }, { signal: grpcAbort.controller.signal });
 
+      // Ответ Meta есть: код больше нуля означает, что запрос доехал и был
+      // отвечен, ноль — что fetch внутри страницы сорвался и о судьбе запроса
+      // ничего не известно. Ноль в след не пишется: там он читался бы как
+      // подтверждённый нулевой ответ.
+      const answered = result.statusCode > 0;
+      const callOutcome: MoneyPathOutcome = answered ? 'CONFIRMED' : 'UNKNOWN';
+      const callStatus = answered ? result.statusCode : undefined;
+
       // The transport is gone. Never turn an aborted/closed gRPC into a false
       // confirmed response; upstream keeps the external outcome UNKNOWN.
-      if (grpcAbort.controller.signal.aborted) return;
+      if (grpcAbort.controller.signal.aborted) {
+        // Вызывающий этого ответа уже не увидит, и его исход останется
+        // неизвестным — но браузерный слой знает, чем всё кончилось на самом
+        // деле. Ради этого расхождения запись и нужна.
+        tracer.done(callOutcome, { statusCode: callStatus, reason: 'transport_gone' });
+        return;
+      }
 
+      tracer.done(callOutcome, { statusCode: callStatus });
       responder.respond(null, {
         status_code: result.statusCode,
         response_json: result.responseJson,
@@ -729,9 +848,22 @@ export function createMetaApiServiceHandlers(
           : undefined,
       });
     } catch (err: any) {
-      if (grpcAbort.controller.signal.aborted) return;
+      // Пересечённая граница отправки — единственное, что отличает доказанный
+      // отказ от неизвестного исхода: до неё наружу не ушло ничего.
+      const outcome: MoneyPathOutcome = capabilityState.consumed ? 'UNKNOWN' : 'REJECTED';
+      const aborted = grpcAbort.controller.signal.aborted;
+      tracer.done(outcome, { reason: traceReason(err, aborted ? 'cancelled' : 'failed') });
+      if (aborted) return;
       responder.respond(grpcErrorForOperationFailure(err));
     } finally {
+      // Ни один вызов не уходит без записи: молчание браузерного слоя и есть
+      // то, из-за чего разбор инцидента 19.08 упёрся в пустой лог.
+      if (!tracer.written()) {
+        tracer.done(
+          capabilityState.consumed ? 'UNKNOWN' : 'REJECTED',
+          { reason: 'no_outcome' },
+        );
+      }
       responder.dispose();
       grpcAbort.dispose();
     }
@@ -861,10 +993,15 @@ export function createMetaApiServiceHandlers(
       callback,
       grpcAbort.controller.signal,
     );
+    const tracer = createCallTracer('upload_image');
+    let capabilityConsumed = false;
+    tracer.describe({ method: 'POST', money: true, role: 'interactive' });
     try {
       const req = call.request;
       const actId = normalizeActId(req.ad_account_id);
+      tracer.describe({ act: actId, endpoint: `/act_${actId || 'unknown'}/adimages` });
       if (!actId) {
+        tracer.done('REJECTED', { reason: 'ad_account_id_missing' });
         responder.respond({
           code: grpc.status.INVALID_ARGUMENT,
           message: 'UploadImage requires explicit ad_account_id',
@@ -879,6 +1016,7 @@ export function createMetaApiServiceHandlers(
 
       // Reject a deterministic no-op before consuming its one-shot grant.
       if (buf.length === 0) {
+        tracer.done('REJECTED', { reason: 'empty_file' });
         responder.respond(null, {
           image_hash: '',
           ok: false,
@@ -889,6 +1027,7 @@ export function createMetaApiServiceHandlers(
         return;
       }
       const session = resolveExactOperationSession(req);
+      tracer.describe({ session: session.id });
       const capabilityBinding: OperationCapabilityBinding = {
         browserContractVersion: BROWSER_CONTRACT_VERSION,
         rpc: 'upload_image',
@@ -927,6 +1066,9 @@ export function createMetaApiServiceHandlers(
             capabilityBinding,
             grpcAbort.controller.signal,
           );
+          // Дальше начинается отправка: с этого места неудача больше не
+          // доказывает, что в кабинете ничего не создано.
+          capabilityConsumed = true;
           return _uploadImage(page, {
             adAccountId: `act_${actId}`,
             filename: String(req.filename || 'upload.jpg'),
@@ -944,7 +1086,12 @@ export function createMetaApiServiceHandlers(
         }
       }, { signal: grpcAbort.controller.signal });
 
-      if (grpcAbort.controller.signal.aborted) return;
+      const uploadOutcome = classifyUploadOutcome(result, capabilityConsumed);
+      if (grpcAbort.controller.signal.aborted) {
+        tracer.done(uploadOutcome.outcome, { reason: 'transport_gone' });
+        return;
+      }
+      tracer.done(uploadOutcome.outcome, { reason: uploadOutcome.reason });
       if (!result.ok && result.error.includes('TOKEN_NOT_FOUND_IN_PAGE')) {
         responder.respond({
           code: grpc.status.FAILED_PRECONDITION,
@@ -961,9 +1108,20 @@ export function createMetaApiServiceHandlers(
         duration_ms: result.durationMs,
       });
     } catch (err: any) {
-      if (grpcAbort.controller.signal.aborted) return;
+      const aborted = grpcAbort.controller.signal.aborted;
+      tracer.done(
+        capabilityConsumed ? 'UNKNOWN' : 'REJECTED',
+        { reason: traceReason(err, aborted ? 'cancelled' : 'failed') },
+      );
+      if (aborted) return;
       responder.respond(grpcErrorForOperationFailure(err));
     } finally {
+      if (!tracer.written()) {
+        tracer.done(
+          capabilityConsumed ? 'UNKNOWN' : 'REJECTED',
+          { reason: 'no_outcome' },
+        );
+      }
       responder.dispose();
       grpcAbort.dispose();
     }
@@ -976,6 +1134,9 @@ export function createMetaApiServiceHandlers(
   // 'Invalid parameter', а single-POST принимает (проверено живьём: 200 + video_id).
   function uploadVideoHandler(call: any, callback: any): void {
     const grpcAbort = bindGrpcAbort(call);
+    const tracer = createCallTracer('upload_video');
+    tracer.describe({ method: 'POST', money: true, role: 'interactive' });
+    let videoCapabilityConsumed = false;
     const t0 = Date.now();
     let chunksProcessed = 0;
     let isFinishing = false;
@@ -1001,6 +1162,10 @@ export function createMetaApiServiceHandlers(
     const cancelUpload = (): void => {
       if (respondedOnce) return;
       respondedOnce = true;
+      tracer.done(
+        videoCapabilityConsumed ? 'UNKNOWN' : 'REJECTED',
+        { reason: 'cancelled' },
+      );
       pendingChunks.length = 0;
       videoBuffers.length = 0;
       grpcAbort.dispose();
@@ -1015,6 +1180,11 @@ export function createMetaApiServiceHandlers(
         return;
       }
       respondedOnce = true;
+      const classified = classifyUploadOutcome(
+        { ok: false, error: msg },
+        videoCapabilityConsumed,
+      );
+      tracer.done(classified.outcome, { reason: classified.reason });
       grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
       grpcAbort.dispose();
       callback(null, {
@@ -1033,6 +1203,10 @@ export function createMetaApiServiceHandlers(
         return;
       }
       respondedOnce = true;
+      tracer.done(
+        videoCapabilityConsumed ? 'UNKNOWN' : 'REJECTED',
+        { reason: traceReason(err, 'failed') },
+      );
       grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
       grpcAbort.dispose();
       callback(grpcErrorForOperationFailure(err));
@@ -1045,6 +1219,7 @@ export function createMetaApiServiceHandlers(
         return;
       }
       respondedOnce = true;
+      tracer.done('CONFIRMED');
       grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
       grpcAbort.dispose();
       videoId = vid;
@@ -1079,8 +1254,13 @@ export function createMetaApiServiceHandlers(
               return;
             }
             adAccountId = `act_${numericActId}`;
+            tracer.describe({
+              act: numericActId,
+              endpoint: `/act_${numericActId}/advideos`,
+            });
             firstRequest = chunk as Record<string, unknown>;
             resolvedSession = resolveExactOperationSession(firstRequest);
+            tracer.describe({ session: resolvedSession.id });
             // The full content digest is not available until the stream ends.
             // Bound this unauthenticated phase to the strict RPC TTL; the exact
             // signature is consumed immediately before any browser upload.
@@ -1132,7 +1312,10 @@ export function createMetaApiServiceHandlers(
           };
           _verifyOperationCapability(firstRequest, capabilityBinding);
           const remainingMs = remainingDeadlineMs(call);
-          if (remainingMs === 0) return;
+          if (remainingMs === 0) {
+            tracer.done('REJECTED', { reason: 'deadline_exhausted' });
+            return;
+          }
           const timeoutMs = remainingMs === undefined ? 120_000 : Math.max(1, Math.min(120_000, remainingMs));
           const operationId = `video:${activeSession.id}:${numericActId}:${randomUUID()}`;
           const res = await withPageRoleLock(activeSession.id, 'interactive', numericActId, async () => {
@@ -1154,6 +1337,9 @@ export function createMetaApiServiceHandlers(
                 capabilityBinding,
                 grpcAbort.controller.signal,
               );
+              // Граница отправки пройдена: дальше молчание значит «неизвестно»,
+              // а не «ничего не создано».
+              videoCapabilityConsumed = true;
               return _uploadVideoSingle(
                 page,
                 { adAccountId, filename, fileBytes: full, timeoutMs },
