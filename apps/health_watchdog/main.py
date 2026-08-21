@@ -16,7 +16,8 @@ import math
 import os
 import signal
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -1387,6 +1388,29 @@ async def browser_readiness_loop(
             pass
 
 
+@asynccontextmanager
+async def browser_agent_client_scope(
+    open_client: Callable[[], Awaitable[Any]],
+) -> AsyncIterator[Any]:
+    """Клиент browser-agent на одну попытку: канал закрывается при любом исходе.
+
+    Голого `finally: await client.close()` для этого мало. Закрытие gRPC-канала
+    само по себе точка приостановки, поэтому вторая отмена, пришедшая пока оно
+    идёт, обрывает его и оставляет канал открытым. Проверено прогоном на трёх
+    сценариях: один сработавший дедлайн подготовки закрытие переживает, а
+    дедлайн плюс остановка воркера поверх него — уже нет. Цикл ходит раз в
+    минуту, поэтому утечка накапливается медленно, но накапливается.
+
+    `shield` снимает именно этот случай: отмена пробрасывается наверх, как и
+    должна, но закрытие уже не обрывается на полпути.
+    """
+    client = await open_client()
+    try:
+        yield client
+    finally:
+        await asyncio.shield(client.close())
+
+
 async def prepare_browser_workspace(
     engine: AsyncEngine,
     *,
@@ -1700,11 +1724,8 @@ async def main_loop(database_url: str | None = None) -> None:
 
     async def reattach_browser_session() -> None:
         """Присоединить процесс-локальную сессию к уже живому Vision-профилю."""
-        client = await new_browser_agent_client()
-        try:
+        async with browser_agent_client_scope(new_browser_agent_client) as client:
             await client.start_browser()
-        finally:
-            await client.close()
 
     async def open_cabinet_tabs(ad_account_ids: list[str]) -> list[dict[str, Any]]:
         """Открыть вкладку Ads Manager каждому настроенному кабинету.
@@ -1713,11 +1734,8 @@ async def main_loop(database_url: str | None = None) -> None:
         идемпотентный, per-cabinet, отказ одного кабинета не валит остальные.
         Сессию профиля вызов поднимает сам, если её не осталось.
         """
-        client = await new_browser_agent_client()
-        try:
+        async with browser_agent_client_scope(new_browser_agent_client) as client:
             return await client.open_cabinet_tabs(ad_account_ids)
-        finally:
-            await client.close()
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
