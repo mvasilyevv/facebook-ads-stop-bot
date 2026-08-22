@@ -6,7 +6,6 @@ import type { Page } from 'playwright';
 import {
   SessionManager,
   extractAdAccountId,
-  findLiveAdsManagerPage,
 } from '../session-manager.js';
 import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
@@ -480,6 +479,27 @@ export interface MetaApiServiceDeps {
   ) => Promise<void> | void;
 }
 
+// Порядок: scan → control → interactive. Scan-страница есть всегда, когда канал
+// вообще готов (openCabinetTabs открывает её первой). Ключ Map — numeric act id.
+function pickPageFromRegistries(
+  session: BrowserSession,
+): { page: Page; role: 'scan' | 'control' | 'interactive'; actId: string } | null {
+  const order: Array<['scan' | 'control' | 'interactive', Map<string, Page> | undefined]> = [
+    ['scan', session.scanPages],
+    ['control', session.controlPages],
+    ['interactive', session.interactivePages],
+  ];
+  for (const [role, map] of order) {
+    for (const [actId, page] of (map ?? new Map<string, Page>())) {
+      if (!page || (typeof (page as any).isClosed === 'function' && (page as any).isClosed())) {
+        continue;
+      }
+      return { page, role, actId };
+    }
+  }
+  return null;
+}
+
 export function createMetaApiServiceHandlers(
   sessionManager: SessionManager,
   deps: MetaApiServiceDeps = {},
@@ -900,13 +920,17 @@ export function createMetaApiServiceHandlers(
       const operationRole: 'control' | 'interactive' =
         String(req.operation_role || '').trim() === 'control' ? 'control' : 'interactive';
       const getRolePage = operationRole === 'control' ? _getControlPage : _getInteractivePage;
-      // Money-роль никогда не усыновляет случайную живую вкладку: кабинет
-      // должен быть назван явно, как и при самой мутации.
-      const reusablePage = requestedAct || operationRole === 'control'
+      // Проба без явного кабинета берёт страницу из реестров роли сессии
+      // (scanPages → controlPages → interactivePages). Реестры — единственный
+      // источник: агент владеет только этими страницами. Вкладки вне реестров
+      // (в т.ч. открытые оператором руками) пробе недоступны. Замок берётся
+      // по роли найденной страницы, поэтому проба сериализуется с операциями
+      // того же кабинета по той же роли — scan-reload не прерывает пробу.
+      const pickedEntry = (requestedAct || operationRole === 'control')
         ? null
-        : findLiveAdsManagerPage(session.browser ?? null);
+        : pickPageFromRegistries(session);
 
-      if (!requestedAct && !reusablePage) {
+      if (!requestedAct && !pickedEntry) {
         // Без явного кабинета проба ничего не открывает: отсутствие живой
         // вкладки Ads Manager — честный отказ, а не повод создать вкладку.
         if (grpcAbort.controller.signal.aborted) return;
@@ -928,19 +952,20 @@ export function createMetaApiServiceHandlers(
         return;
       }
 
-      const lockAct = requestedAct || extractAdAccountId(reusablePage?.url?.()) || '';
+      const lockAct = requestedAct || pickedEntry?.actId || '';
+      const lockRole = pickedEntry ? pickedEntry.role : operationRole;
 
       // Тот же page-lock (role + session + кабинет), что и последующая
       // мутация: проба обязана взять ровно ту страницу, что понесёт операцию,
       // а не рассуждать о ней издалека под чужим замком.
-      const result = await withPageRoleLockForSession(session, operationRole, lockAct, async () => {
+      const result = await withPageRoleLockForSession(session, lockRole, lockAct, async () => {
         const page = requestedAct
           ? await getRolePage(
             session,
             requestedAct,
             grpcAbort.controller.signal,
           )
-          : (reusablePage as any);
+          : pickedEntry!.page;
         return _checkMetaApiHealth(page, {
           fullProbe,
           signal: grpcAbort.controller.signal,
