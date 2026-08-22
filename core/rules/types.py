@@ -103,6 +103,8 @@ class RuleContext:
     cpl_stop_percent_of_base: Decimal | None = None
     cpr_warning_percent_of_stop: Decimal | None = None
     cpr_stop_percent_of_base: Decimal | None = None
+    spend_no_dep_warning_percent_of_stop: Decimal | None = None
+    spend_with_dep_warning_percent_of_stop: Decimal | None = None
 
     # Адаптивный CPA baseline: rolling median по офферу (если включено)
     use_adaptive_cpa: bool = False
@@ -278,4 +280,20 @@ class RuleContext:
             self.cpr_stop_percent_of_base
             if self.cpr_stop_percent_of_base is not None
             else self.stop_percent_of_base
+        )
+
+    @property
+    def effective_spend_no_dep_warning_percent_of_stop(self) -> Decimal:
+        return (
+            self.spend_no_dep_warning_percent_of_stop
+            if self.spend_no_dep_warning_percent_of_stop is not None
+            else self.warning_percent_of_stop
+        )
+
+    @property
+    def effective_spend_with_dep_warning_percent_of_stop(self) -> Decimal:
+        return (
+            self.spend_with_dep_warning_percent_of_stop
+            if self.spend_with_dep_warning_percent_of_stop is not None
+            else self.warning_percent_of_stop
         )

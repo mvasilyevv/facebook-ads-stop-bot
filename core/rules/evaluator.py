@@ -170,8 +170,8 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
             current_value=_ratio_percent(row.spend, ctx.cpa_amount),
             stop_from=ctx.spend_no_dep_from_percent,
             stop_to=ctx.spend_no_dep_to_percent,
-            warning_pct=ctx.effective_cpr_warning_percent_of_stop,
-            stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+            warning_pct=ctx.effective_spend_no_dep_warning_percent_of_stop,
+            stop_percent_of_base=ctx.stop_percent_of_base,
             code="spend_no_dep_range",
             title=rule_label("spend_no_dep_range"),
             summary_suffix="депозитов нет, цена регистрации в норме",
@@ -197,8 +197,8 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
         stop_from=ctx.spend_with_dep_from_percent,
         stop_to=ctx.spend_with_dep_to_percent,
-        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
-        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+        warning_pct=ctx.effective_spend_with_dep_warning_percent_of_stop,
+        stop_percent_of_base=ctx.stop_percent_of_base,
         code="spend_with_dep_range",
         title=rule_label("spend_with_dep_range"),
         summary_suffix=f"депозиты есть ({deposits_ru(total_deposits)}), кап по расходу",
@@ -430,8 +430,8 @@ def _spend_without_deposit_stop_candidate(
         enabled=ctx.spend_no_dep_enabled,
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
         stop_from=ctx.spend_no_dep_from_percent,
-        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
-        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+        warning_pct=ctx.effective_spend_no_dep_warning_percent_of_stop,
+        stop_percent_of_base=ctx.stop_percent_of_base,
         code="spend_no_dep_range",
     )
 
@@ -444,8 +444,8 @@ def _spend_with_deposit_stop_candidate(
         enabled=ctx.spend_with_dep_enabled,
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
         stop_from=ctx.spend_with_dep_from_percent,
-        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
-        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+        warning_pct=ctx.effective_spend_with_dep_warning_percent_of_stop,
+        stop_percent_of_base=ctx.stop_percent_of_base,
         code="spend_with_dep_range",
     )
 
