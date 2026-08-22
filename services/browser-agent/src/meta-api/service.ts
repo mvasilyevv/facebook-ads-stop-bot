@@ -11,7 +11,7 @@ import {
 import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
 import { uploadImage, uploadVideoSingle } from './upload.js';
-import { withPageRoleLock } from '../page-lock.js';
+import { withPageRoleLockForSession } from '../page-lock.js';
 import {
   assertPageEpochUnchanged,
   beginPageEpoch,
@@ -673,7 +673,7 @@ export function createMetaApiServiceHandlers(
       const role = moneyControl ? 'control' : 'interactive';
       tracer.describe({ role });
       const operationId = `${role}:${session.id}:${actId || 'default'}:${randomUUID()}`;
-      const result = await withPageRoleLock(session.id, role, actId, async () => {
+      const result = await withPageRoleLockForSession(session, role, actId, async () => {
         if (moneyControl) {
           // Грант живёт с момента, когда операция реально захватила
           // control-страницу, а не с момента подписи (см. operation-capability.ts):
@@ -933,7 +933,7 @@ export function createMetaApiServiceHandlers(
       // Тот же page-lock (role + session + кабинет), что и последующая
       // мутация: проба обязана взять ровно ту страницу, что понесёт операцию,
       // а не рассуждать о ней издалека под чужим замком.
-      const result = await withPageRoleLock(session.id, operationRole, lockAct, async () => {
+      const result = await withPageRoleLockForSession(session, operationRole, lockAct, async () => {
         const page = requestedAct
           ? await getRolePage(
             session,
@@ -1047,7 +1047,7 @@ export function createMetaApiServiceHandlers(
       if (grpcAbort.controller.signal.aborted || remainingMs === 0) return;
       const timeoutMs = remainingMs === undefined ? 120_000 : Math.max(1, Math.min(120_000, remainingMs));
       const operationId = `image:${session.id}:${actId}:${randomUUID()}`;
-      const result = await withPageRoleLock(session.id, 'interactive', actId, async () => {
+      const result = await withPageRoleLockForSession(session, 'interactive', actId, async () => {
         if (grpcAbort.controller.signal.aborted) {
           return { ok: false, imageHash: '', url: '', error: 'cancelled', durationMs: 0 };
         }
@@ -1318,7 +1318,7 @@ export function createMetaApiServiceHandlers(
           }
           const timeoutMs = remainingMs === undefined ? 120_000 : Math.max(1, Math.min(120_000, remainingMs));
           const operationId = `video:${activeSession.id}:${numericActId}:${randomUUID()}`;
-          const res = await withPageRoleLock(activeSession.id, 'interactive', numericActId, async () => {
+          const res = await withPageRoleLockForSession(activeSession, 'interactive', numericActId, async () => {
             if (grpcAbort.controller.signal.aborted) {
               return { ok: false, videoId: '', error: 'cancelled', durationMs: 0 };
             }

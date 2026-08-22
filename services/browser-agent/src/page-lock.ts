@@ -45,6 +45,28 @@ export function withPageRoleLock<T>(
   return withPageLock(pageLockKey(sessionId, role, cabinetId), fn, options);
 }
 
+// Физический ресурс — Vision-профиль, а не логическая сессия. Если профиль
+// пуст, фолбэк на session.id сохраняет прежнее поведение.
+export function pageLockKeyForSession(
+  session: { id: string; visionProfileId?: string },
+  role: PageLockRole,
+  cabinetId?: string,
+): string {
+  const profileId = (session.visionProfileId ?? '').trim();
+  return pageLockKey(profileId || session.id, role, cabinetId);
+}
+
+export function withPageRoleLockForSession<T>(
+  session: { id: string; visionProfileId?: string },
+  role: PageLockRole,
+  cabinetId: string | undefined,
+  fn: () => Promise<T>,
+  options: PageLockOptions = {},
+): Promise<T> {
+  return withPageLock(pageLockKeyForSession(session, role, cabinetId), fn, options);
+}
+
+
 /** Ожидание своей очереди, прерываемое дедлайном операции. */
 function awaitTurn(previous: Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const queued = previous.then(
