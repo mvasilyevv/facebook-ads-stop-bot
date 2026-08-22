@@ -52,6 +52,7 @@ from core.meta_api.shadow_spend import (
     detect_shadow,
 )
 from core.models.settings.vision_config import VisionConfig
+from core.observer.cabinet_tab_incident import sync_cabinet_tab_incident
 from core.observer.login_required import notify_login_required_incident
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 from core.safe_diagnostics import safe_exception_diagnostic
@@ -1453,12 +1454,30 @@ async def prepare_browser_workspace(
         )
         return
 
-    confirmed = sum(1 for result in results if result.get("opened"))
+    result_by_account = {str(r.get("ad_account_id") or "").removeprefix("act_"): r for r in results}
+    confirmed_ids: list[str] = []
+    failed_ids: list[str] = []
+    for account_id in accounts:
+        result = result_by_account.get(account_id) or {
+            "ad_account_id": account_id,
+            "opened": False,
+        }
+        is_confirmed = bool(result.get("opened"))
+        (confirmed_ids if is_confirmed else failed_ids).append(account_id)
+
     logger.info(
         "workspace: подготовка рабочего места — подтверждено %d из %d кабинетов",
-        confirmed,
+        len(confirmed_ids),
         len(accounts),
     )
+
+    # per-cabinet инциденты поднимаются только при частичном отказе: если ни один
+    # кабинет не открылся, канал целиком недоступен и общий инцидент достаточен.
+    if confirmed_ids:
+        for account_id in confirmed_ids:
+            await sync_cabinet_tab_incident(engine, account_id=account_id, confirmed=True)
+        for account_id in failed_ids:
+            await sync_cabinet_tab_incident(engine, account_id=account_id, confirmed=False)
 
 
 async def browser_workspace_loop(

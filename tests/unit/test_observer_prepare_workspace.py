@@ -7,6 +7,7 @@
 
 import pytest
 
+import core.observer.cabinet_tab_incident as _cabinet_tab_module
 from apps.observer_worker import main as observer_main
 
 
@@ -50,8 +51,8 @@ def _reset_prepared(monkeypatch):
         calls["resolved"].append(kwargs)
         return True
 
-    monkeypatch.setattr(observer_main, "notify_recurring_incident", _opened)
-    monkeypatch.setattr(observer_main, "resolve_recurring_incident", _resolved)
+    monkeypatch.setattr(_cabinet_tab_module, "notify_recurring_incident", _opened)
+    monkeypatch.setattr(_cabinet_tab_module, "resolve_recurring_incident", _resolved)
     observer_main._reset_prepared_accounts()
     yield calls
     observer_main._reset_prepared_accounts()

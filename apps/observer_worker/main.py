@@ -60,6 +60,7 @@ from core.observer.cabinet_supervisor import (
     assert_cabinet_lease,
     publish_next_scan_at,
 )
+from core.observer.cabinet_tab_incident import sync_cabinet_tab_incident
 from core.observer.login_required import (
     LOGIN_REQUIRED_INCIDENT_PREFIX,
     login_required_incident_key,
@@ -122,8 +123,6 @@ OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX = LOGIN_REQUIRED_INCIDENT_PREFIX
 OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_timezone_unknown:"
 OBSERVER_CURRENCY_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_currency_unknown:"
 OBSERVER_OFFER_CURRENCY_INCIDENT_PREFIX = "observer:offer_currency_mismatch:"
-OBSERVER_CABINET_TAB_UNAVAILABLE_INCIDENT_PREFIX = "observer:cabinet_tab_unavailable:"
-
 # Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скан остановлен ради безопасности
 # (иначе авто-стоп чужой рекламы в shared-кабинете).
 OBSERVER_MULTI_CAB_UNSAFE_INCIDENT_KEY = "observer:multi_cabinet_unsafe"
@@ -625,36 +624,6 @@ def _cabinet_tab_is_confirmed(result: dict, *, account_id: str) -> bool:
     return parse_qs(parsed.query).get("act") == [account_id]
 
 
-async def _sync_cabinet_tab_incident(
-    engine: AsyncEngine,
-    *,
-    account_id: str,
-    confirmed: bool,
-) -> None:
-    incident_key = f"{OBSERVER_CABINET_TAB_UNAVAILABLE_INCIDENT_PREFIX}{account_id}"
-    if confirmed:
-        await resolve_recurring_incident(
-            engine,
-            incident_key=incident_key,
-            audience="all",
-            summary=f"Вкладка кабинета {account_id} снова подтверждена.",
-        )
-        return
-    await notify_recurring_incident(
-        engine,
-        incident_key=incident_key,
-        audience="all",
-        event_type="observer_cabinet_tab_unavailable",
-        severity="critical",
-        title="Кабинет не открыт в Ads Manager",
-        summary=f"Кабинет {account_id}: сам открыть вкладку не получилось.",
-        risk="Пока вкладки нет, скан и авто-стоп не работают",
-        lines=["Открой кабинет в Ads Manager в Vision-профиле"],
-        resource_type="ad_account",
-        resource_id=account_id,
-    )
-
-
 async def _prepare_workspace(
     engine: AsyncEngine,
     *,
@@ -706,7 +675,7 @@ async def _prepare_workspace(
             "error": "cabinet_tab_not_confirmed",
         }
         is_confirmed = _cabinet_tab_is_confirmed(result, account_id=account_id)
-        await _sync_cabinet_tab_incident(
+        await sync_cabinet_tab_incident(
             engine,
             account_id=account_id,
             confirmed=is_confirmed,
