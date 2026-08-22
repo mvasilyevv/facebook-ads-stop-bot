@@ -92,9 +92,11 @@ def _patched(monkeypatch):
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     spy_fail = AsyncMock(return_value=True)
+    spy_fail_or_cancelled = AsyncMock(return_value="failed")
     spy_requeue = AsyncMock(return_value=True)
     spy_pre_send = AsyncMock(return_value="retrying")
     monkeypatch.setattr(meta, "mark_task_failed", spy_fail)
+    monkeypatch.setattr(meta, "mark_task_failed_or_cancelled", spy_fail_or_cancelled)
     monkeypatch.setattr(meta, "requeue_task", spy_requeue)
     monkeypatch.setattr(meta, "requeue_task_proven_not_committed", spy_pre_send)
     monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
@@ -104,12 +106,12 @@ def _patched(monkeypatch):
         "authorize_duplicate_execution_boundary",
         AsyncMock(return_value=True),
     )
-    return spy_fail, spy_requeue
+    return spy_fail, spy_requeue, spy_fail_or_cancelled
 
 
 @pytest.mark.asyncio
 async def test_duplicate_adset_structure_temporary_marks_failed(monkeypatch, _patched) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=TemporaryError("deadline")))
     await meta.process_one_task(object(), _task("duplicate_adset_structure"), client=AsyncMock())
     spy_fail.assert_awaited_once()
@@ -118,7 +120,7 @@ async def test_duplicate_adset_structure_temporary_marks_failed(monkeypatch, _pa
 
 @pytest.mark.asyncio
 async def test_duplicate_adset_structure_partial_routes_created_ids(monkeypatch, _patched) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     defer_recovery = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "defer_duplicate_recovery", defer_recovery)
     monkeypatch.setattr(
@@ -159,7 +161,7 @@ async def test_duplicate_adset_structure_partial_routes_created_ids(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_duplicate_unknown_exception_marks_failed(monkeypatch, _patched) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=RuntimeError("boom")))
     await meta.process_one_task(object(), _task("duplicate_adset_structure"), client=AsyncMock())
     spy_fail.assert_awaited_once()
@@ -169,7 +171,7 @@ async def test_duplicate_unknown_exception_marks_failed(monkeypatch, _patched) -
 # Контраст: pause_ad после зафиксированной внешней границы → UNKNOWN reconciliation.
 @pytest.mark.asyncio
 async def test_pause_ad_temporary_requeues(monkeypatch, _patched) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     reconcile = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "requeue_unknown_for_reconciliation", reconcile)
     monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=TemporaryError("deadline")))
@@ -183,7 +185,7 @@ async def test_pause_ad_temporary_requeues(monkeypatch, _patched) -> None:
 async def test_pause_ad_temporary_after_boundary_requires_reconciliation(
     monkeypatch, _patched
 ) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     reconcile = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
@@ -203,7 +205,7 @@ async def test_pause_ad_temporary_after_boundary_requires_reconciliation(
 async def test_non_status_temporary_after_boundary_is_terminal_unknown(
     monkeypatch, _patched
 ) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=TemporaryError("reset")))
@@ -231,7 +233,7 @@ async def test_page_evaluate_failure_after_boundary_requires_status_reconciliati
     monkeypatch, _patched
 ) -> None:
     """A lost page can hide an accepted status write; verify before resend."""
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     reconcile = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
@@ -263,7 +265,7 @@ async def test_ambiguous_bulk_status_queues_read_reconciliation_not_mutation_ret
     monkeypatch,
     _patched,
 ) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     reconcile = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "requeue_unknown_for_reconciliation", reconcile)
     monkeypatch.setattr(
@@ -286,7 +288,7 @@ async def test_bulk_temporary_after_boundary_also_requires_read_reconciliation(
     monkeypatch,
     _patched,
 ) -> None:
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     reconcile = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "requeue_unknown_for_reconciliation", reconcile)
     monkeypatch.setattr(
@@ -310,7 +312,7 @@ async def test_page_evaluate_failure_after_boundary_never_blindly_retries_non_st
     _patched,
 ) -> None:
     """Non-status writes remain terminal UNKNOWN when their response is lost."""
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
     monkeypatch.setattr(
@@ -348,7 +350,7 @@ async def test_irreversible_value_error_after_boundary_is_unknown_manual_review(
     _patched,
 ) -> None:
     """A post-response parser error cannot prove that Meta rejected the create."""
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     monkeypatch.setattr(
         meta,
         "execute_mutation",
@@ -362,8 +364,9 @@ async def test_irreversible_value_error_after_boundary_is_unknown_manual_review(
     )
 
     spy_requeue.assert_not_awaited()
-    spy_fail.assert_awaited_once()
-    assert spy_fail.await_args.kwargs["result"] == {
+    spy_fail.assert_not_awaited()
+    spy_fail_or_cancelled.assert_awaited_once()
+    assert spy_fail_or_cancelled.await_args.kwargs["result"] == {
         "outcome": "UNKNOWN",
         "reconcile_required": True,
         "manual_review_required": True,
@@ -755,7 +758,7 @@ async def test_reconciliation_lifecycle_failure_defers_without_external_resend(
 async def test_duplicate_session_unavailable_requeues(monkeypatch, _patched) -> None:
     from core.meta_api.errors import SessionUnavailableError
 
-    spy_fail, spy_requeue = _patched
+    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
     monkeypatch.setattr(
         meta,
         "execute_mutation",

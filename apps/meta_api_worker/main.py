@@ -92,6 +92,7 @@ from core.meta_api.queue import (
     claim_browser_ready_mutation_task,
     defer_duplicate_recovery,
     mark_task_failed,
+    mark_task_failed_or_cancelled,
     mark_task_succeeded,
     release_task_after_browser_readiness_rejection,
     requeue_task,
@@ -776,9 +777,10 @@ async def _fail_irreversible(
         reason,
         exc,
     )
-    applied = await mark_task_failed(
+    final_status = await mark_task_failed_or_cancelled(
         engine,
         task_id=task.id,
+        target_lock_key=str(payload.target_id),
         error=f"irreversible_no_retry ({reason}): проверь Meta вручную — возможен дубль: {exc!r}",
         result={
             "outcome": "UNKNOWN",
@@ -791,9 +793,16 @@ async def _fail_irreversible(
         lease_owner=task.lease_owner,
         lease_token=task.lease_token,
     )
-    if not applied:
+    if final_status is None:
         logger.warning(
-            "meta_api: task id=%s mark_failed (irreversible) не применился — гонка", task.id
+            "meta_api: task id=%s mark_failed_or_cancelled (irreversible) не применился — гонка",
+            task.id,
+        )
+    elif final_status == "cancelled":
+        logger.info(
+            "meta_api: task id=%s → cancelled (cancel_requested_at выставлен) irreversible reason=%s",
+            task.id,
+            reason,
         )
 
 
@@ -1802,19 +1811,26 @@ async def process_one_task(
             failure_result["requires_facebook_login"] = True
         elif isinstance(exc, TokenInvalidError):
             failure_result["requires_meta_reauth"] = True
-        applied = await mark_task_failed(
+        final_status = await mark_task_failed_or_cancelled(
             engine,
             task_id=task.id,
+            target_lock_key=str(payload.target_id),
             error=repr(exc),
             result=failure_result,
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
         )
-        if not applied:
+        if final_status is None:
             logger.warning(
-                "meta_api: task id=%s mark_failed не применился "
+                "meta_api: task id=%s mark_failed_or_cancelled не применился "
                 "(status != running) — гонка с другим воркером, пропускаю",
                 task.id,
+            )
+        elif final_status == "cancelled":
+            logger.info(
+                "meta_api: task id=%s → cancelled (cancel_requested_at выставлен): %s",
+                task.id,
+                exc,
             )
         else:
             logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
@@ -1915,9 +1931,10 @@ async def process_one_task(
             )
             if operator_reason:
                 rejected_result["operator_reason"] = operator_reason
-            applied = await mark_task_failed(
+            final_status = await mark_task_failed_or_cancelled(
                 engine,
                 task_id=task.id,
+                target_lock_key=str(payload.target_id),
                 error=(
                     "browser rejected the request before send and a retry cannot "
                     f"fix it: {unretryable_rejection.reason_code}"
@@ -1926,11 +1943,18 @@ async def process_one_task(
                 lease_owner=task.lease_owner,
                 lease_token=task.lease_token,
             )
-            if not applied:
+            if final_status is None:
                 logger.warning(
-                    "meta_api: task id=%s mark_failed (unretryable rejection) "
+                    "meta_api: task id=%s mark_failed_or_cancelled (unretryable rejection) "
                     "не применился — гонка с другим воркером",
                     task.id,
+                )
+            elif final_status == "cancelled":
+                logger.info(
+                    "meta_api: task id=%s → cancelled (cancel_requested_at выставлен) "
+                    "unretryable rejection reason=%s",
+                    task.id,
+                    unretryable_rejection.reason_code,
                 )
             # Повторов больше не будет, а объявление продолжает тратить бюджет:
             # money-сигнал «команда не дошла до кабинета» нужен здесь тем более.
