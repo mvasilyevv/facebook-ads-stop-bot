@@ -6,6 +6,7 @@ import * as grpc from '@grpc/grpc-js';
 import type { SessionManager } from '../session-manager.js';
 import {
   BROWSER_OPERATION_REJECTION_METADATA_KEY,
+  OPERATION_REJECTION_PREDICATES,
   browserOperationRejectionReason,
   createMetaApiServiceHandlers,
   grpcCodeForError,
@@ -44,7 +45,17 @@ const PERMISSION_DENIED_PREDICATES: ReadonlyArray<readonly [string, string]> = [
     'Browser operation capability signature is invalid',
     'capability_signature_invalid',
   ],
-  ['Browser operation capability is invalid', 'capability_invalid'],
+  [
+    'Browser operation capability deadline is missing',
+    'capability_expiry_missing',
+  ],
+  // Остаток семьи: текст про разрешение на операцию, который ни один
+  // именованный предикат не узнал. Такой отказ обязан назваться неизвестным,
+  // а не одолжить чужое имя у соседа по корзине.
+  [
+    'Browser operation capability was refused by a newer build',
+    'capability_reason_unknown',
+  ],
   [
     'Browser operation ownership preflight rejected the Graph target',
     'ownership_preflight_rejected',
@@ -100,6 +111,70 @@ describe('browser operation authorization rejection names its reason', () => {
       PERMISSION_DENIED_PREDICATES.length,
       'reason codes must be distinct, not collapsed into one string',
     );
+  });
+
+  // #253: здесь лежала ручная копия состава таблицы причин. Состав совпадал
+  // ровно до того дня, когда в service.ts добавят строку и забудут про двойник
+  // — а забыть её значит выпустить причину, которую никто не проверял. Тест
+  // спрашивает источник: непокрытая строка валит прогон.
+  it('covers every row of the source table instead of copying it', () => {
+    const covered = new Set(
+      [...PERMISSION_DENIED_PREDICATES, ...ARGUMENT_REJECTION_PREDICATES].map(
+        ([, reason]) => reason,
+      ),
+    );
+    const declared = new Set(
+      OPERATION_REJECTION_PREDICATES.map(([, reason]) => reason),
+    );
+    assert.deepEqual(
+      [...declared].filter((reason) => !covered.has(reason)).sort(),
+      [],
+      'each reason row must be exercised by a real refusal text',
+    );
+    assert.deepEqual(
+      [...covered].filter((reason) => !declared.has(reason)).sort(),
+      [],
+      'the test must not know reasons the table does not declare',
+    );
+  });
+
+  // Единственный живой обитатель бывшей корзины: поток UploadVideo связывает
+  // срок действия гранта с первого чанка — до того, как подпись вообще может
+  // быть проверена (для подписи нужен дайджест всего файла). Если срока нет,
+  // отказ обязан назвать себя сам, а не одолжить имя у соседей по корзине.
+  it('names a grant that arrived without a deadline, and uploads nothing', async () => {
+    let uploaded = 0;
+    const manager = {
+      getSession: () => ({ id: 's', visionProfileId: 'p' }),
+      getPreferredSession: () => ({ id: 's', visionProfileId: 'p' }),
+    } as unknown as SessionManager;
+    const handlers = createMetaApiServiceHandlers(manager, {
+      getInteractivePage: () => ({}) as any,
+      authorizeOperationCapability: () => undefined,
+      uploadVideoSingle: async () => {
+        uploaded += 1;
+        return { ok: true, videoId: 'vid', error: '', durationMs: 1 };
+      },
+    });
+    const call = new EventEmitter();
+
+    const error = await new Promise<any>((resolve) => {
+      handlers.uploadVideo(call, (err: unknown) => resolve(err));
+      call.emit('data', {
+        session_id: 's',
+        vision_profile_id: 'p',
+        ad_account_id: 'act_1',
+        filename: 'v.mp4',
+        chunk_bytes: Buffer.from('AAA'),
+        is_last_chunk: true,
+        // Срок действия не пришёл вовсе. Это не «истёк»: истёкший — это
+        // положительное число в прошлом, и у него своё имя.
+      });
+    });
+
+    assert.equal(error.code, grpc.status.PERMISSION_DENIED);
+    assert.equal(trailerReason(error), 'capability_expiry_missing');
+    assert.equal(uploaded, 0, 'nothing may reach Meta on a refused grant');
   });
 
   it('carries the reason code in a gRPC trailer, not inside details', () => {

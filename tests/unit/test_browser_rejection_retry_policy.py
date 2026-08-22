@@ -50,10 +50,15 @@ _RETRYABLE_REASON = "capability_expired"
 
 
 def _rejection(reason_code: str) -> BrowserOperationRejectedError:
-    """Отказ ровно в той форме, в какой его строит клиент Marketing API."""
+    """Отказ ровно в той форме, в какой его строит клиент Marketing API.
+
+    Текст берётся из таблицы причин, но код, которого в ней нет, собирается без
+    текста намеренно: тест про политику повтора обязан падать на поведении
+    задачи, а не на KeyError при сборке исключения.
+    """
+    named = BROWSER_OPERATION_REJECTION_REASONS.get(reason_code, "причина не названа")
     return BrowserOperationRejectedError(
-        "browser-agent отверг операцию до отправки в Meta: "
-        f"{BROWSER_OPERATION_REJECTION_REASONS[reason_code]}",
+        f"browser-agent отверг операцию до отправки в Meta: {named}",
         reason_code=reason_code,
         endpoint="/act_456/ads",
     )
@@ -64,6 +69,67 @@ def _rejection(reason_code: str) -> BrowserOperationRejectedError:
 def test_every_unretryable_reason_has_operator_wording() -> None:
     assert BROWSER_OPERATION_PERMANENT_REJECTIONS
     assert BROWSER_OPERATION_PERMANENT_REJECTIONS <= set(BROWSER_OPERATION_REJECTION_REASONS)
+
+
+# ============ разбор корзины: имя на каждую природу отказа (#226) ============
+
+# Грант пришёл без пригодного срока действия. Единственный путь, который живьём
+# доходил до общего имени `capability_invalid`: поток UploadVideo связывает срок
+# с первого чанка — раньше, чем подпись вообще может быть проверена, потому что
+# для подписи нужен дайджест всего файла. Свойство самого запроса, не окружения.
+_GRANT_WITHOUT_DEADLINE = "capability_expiry_missing"
+# Остаток корзины: текст про разрешение на операцию, который ни один именованный
+# предикат не узнал. Причина не установлена — и так и называется.
+_UNNAMED_REFUSAL = "capability_reason_unknown"
+
+
+def test_the_bucket_is_split_and_each_half_states_its_retry_verdict() -> None:
+    # Импорт локальный: тесты поведения ниже обязаны падать на поведении задачи,
+    # а не на том, что структуры таблицы ещё нет.
+    from core.meta_api.errors import (
+        BROWSER_OPERATION_REJECTION_TABLE,
+        BrowserRejectionRetry,
+    )
+
+    # Общего имени на отказы разной природы больше нет.
+    assert "capability_invalid" not in BROWSER_OPERATION_REJECTION_TABLE
+    assert (
+        BROWSER_OPERATION_REJECTION_TABLE[_GRANT_WITHOUT_DEADLINE].retry
+        is BrowserRejectionRetry.DOES_NOT_HELP
+    )
+    # Незнание остаётся незнанием: повтор разрешён, вывод про недействительное
+    # разрешение не делается.
+    assert (
+        BROWSER_OPERATION_REJECTION_TABLE[_UNNAMED_REFUSAL].retry is BrowserRejectionRetry.UNKNOWN
+    )
+    assert _UNNAMED_REFUSAL not in BROWSER_OPERATION_PERMANENT_REJECTIONS
+
+
+def test_a_reason_cannot_exist_without_stating_whether_a_retry_helps() -> None:
+    """Вердикт про повтор — обязательное поле, а не строка во втором наборе.
+
+    Раньше «повтор помогает» выражалось ОТСУТСТВИЕМ кода во втором наборе, то
+    есть не выражалось вовсе: код, добавленный в словарь причин и забытый в
+    наборе неисправимых, молча получал вечный повтор money-задачи — вердикт,
+    которого никто не выносил.
+    """
+    from core.meta_api.errors import (
+        BROWSER_OPERATION_REJECTION_TABLE,
+        BrowserRejectionReason,
+        BrowserRejectionRetry,
+    )
+
+    with pytest.raises(TypeError):
+        BrowserRejectionReason("причина без вердикта про повтор")  # type: ignore[call-arg]
+
+    for code, reason in BROWSER_OPERATION_REJECTION_TABLE.items():
+        assert isinstance(reason.retry, BrowserRejectionRetry), code
+        assert reason.text
+        # Набор неисправимых — производная от вердикта, а не второй список,
+        # который совпадает с первым по договорённости.
+        assert (code in BROWSER_OPERATION_PERMANENT_REJECTIONS) is (
+            reason.retry is BrowserRejectionRetry.DOES_NOT_HELP
+        ), code
 
 
 # ====================== money-полоса: apps/meta_api_worker ======================
@@ -205,6 +271,73 @@ async def test_money_task_with_retryable_rejection_returns_to_queue(
 
     money_worker.requeue_pre_send.assert_awaited_once()
     money_worker.failed.assert_not_awaited()
+
+
+# Первая половина разобранной корзины. Повтор соберёт такой же грант без срока
+# действия, поэтому задача закрывается сразу, а не крутится до исчерпания
+# попыток, пряча поломку вызывающего под видом недоступного канала.
+@pytest.mark.asyncio
+async def test_grant_without_a_deadline_finalizes_the_money_task_without_retries(
+    monkeypatch, money_worker
+) -> None:
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(side_effect=_rejection(_GRANT_WITHOUT_DEADLINE)),
+    )
+
+    await meta.process_one_task(
+        object(),
+        _money_task(),
+        client=AsyncMock(),
+        alert_ctx=meta.AutostopAlertContext(engine=object()),
+    )
+
+    money_worker.requeue.assert_not_awaited()
+    money_worker.requeue_pre_send.assert_not_awaited()
+    money_worker.failed.assert_not_awaited()
+    money_worker.failed_or_cancelled.assert_awaited_once()
+    result = money_worker.failed_or_cancelled.await_args.kwargs["result"]
+    # Исход не пересматривается вместе с политикой повтора: отправки не было.
+    assert result["outcome"] == "REJECTED"
+    assert result["pre_dispatch"] is True
+    assert result.get("reconcile_required") is not True
+    assert result.get("manual_review_required") is not True
+    # Причина названа словами, а не кодом: без своей строки в закрытом словаре
+    # оператор прочитал бы «Причина не записана» у задачи, которая больше не
+    # повторится. Машинный код в карточку не уезжает.
+    operator_text = operator_reason_from_result(result)
+    assert operator_text is not None
+    assert "разрешение на операцию пришло без срока действия" in operator_text
+    assert "Повтор той же задачи не поможет" in operator_text
+    assert _GRANT_WITHOUT_DEADLINE not in operator_text
+
+
+# Вторая половина: причину назвать нечем. Повтор разрешён — но оператор читает
+# именно это, а не вывод «разрешение недействительно», которого никто не делал.
+@pytest.mark.asyncio
+async def test_unnamed_refusal_returns_to_queue_and_says_the_cause_is_unestablished(
+    monkeypatch, money_worker
+) -> None:
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(side_effect=_rejection(_UNNAMED_REFUSAL)),
+    )
+
+    await meta.process_one_task(
+        object(),
+        _money_task(),
+        client=AsyncMock(),
+        alert_ctx=meta.AutostopAlertContext(engine=object()),
+    )
+
+    money_worker.requeue_pre_send.assert_awaited_once()
+    money_worker.failed.assert_not_awaited()
+
+    operator_text = campaign_operator_reason(rejection_reason_code=_UNNAMED_REFUSAL)
+    assert operator_text is not None
+    assert "причина отказа не установлена" in operator_text
 
 
 # Отказ готовности канала остаётся отдельной семьёй: задача возвращается в
@@ -419,6 +552,24 @@ async def test_creator_task_with_retryable_rejection_returns_to_queue(monkeypatc
 
     spies.retry.assert_awaited_once()
     spies.failed.assert_not_awaited()
+
+
+# Полоса, где грант без срока действия рождается живьём: заливом правит поток
+# UploadVideo, и срок связывается с первого чанка. Повтор соберёт такой же
+# грант, поэтому залив закрывается отказом, а не уходит на новый круг.
+@pytest.mark.asyncio
+async def test_creator_task_with_a_grant_without_deadline_is_finalized_rejected(
+    monkeypatch,
+) -> None:
+    spies = await _run_creator_until_rejection(monkeypatch, reason_code=_GRANT_WITHOUT_DEADLINE)
+
+    spies.retry.assert_not_awaited()
+    spies.failed.assert_awaited_once()
+    result = spies.failed.await_args.kwargs["task_result"]
+    assert result["outcome"] == "REJECTED"
+    assert result["pre_dispatch"] is True
+    assert result.get("reconcile_required") is not True
+    assert operator_reason_from_result(result) is not None
 
 
 # Боевой случай: креативы уже загружены, значит внешняя граница пересекалась —
