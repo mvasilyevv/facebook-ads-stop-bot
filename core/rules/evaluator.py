@@ -8,7 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from core.domain import AlertStage
 from core.money import require_exact_currency_amount
 from core.rules.labels import rule_label, rule_metric_label
-from core.rules.types import MIN_RATIO_DENOMINATOR, RuleContext, RuleEvaluation, RuleHit
+from core.rules.types import RuleContext, RuleEvaluation, RuleHit
 from core.scanner.models import ScannedAdRow
 from core.wording import deposits_ru, registrations_ru
 
@@ -498,26 +498,26 @@ def _frequency_stop_candidate(ctx: RuleContext) -> RuleHit | None:
     )
 
 
-def _significant_ratio_denominator(volume: int | None) -> bool:
+def _significant_ratio_denominator(volume: int | None, min_denominator: int) -> bool:
     """Известен ли объём знаменателя настолько, что отношение вообще что-то значит.
 
     ``None`` — объём не подтверждён, значит и отношение неизвестно: незнание не
     превращается ни в ноль, ни в «достаточно».
     """
-    return volume is not None and volume >= MIN_RATIO_DENOMINATOR
+    return volume is not None and volume >= min_denominator
 
 
 def _confirmed_frequency(ctx: RuleContext) -> Decimal | None:
     """Частота — отношение «показы / охват»; её знаменатель — reach.
 
-    Ниже MIN_RATIO_DENOMINATOR отношение неизвестно (#204): на охвате в десятки
-    человек частота измеряет не выгорание аудитории, а стартовый шум Meta. Такое
-    значение молчит целиком — и как сигнал, и как прогресс до стопа, — поэтому
-    смягчение стопа по депозиту остаётся в силе.
+    Ниже ctx.min_ratio_denominator (#260, настраивается per-offer) отношение неизвестно
+    (#204): на охвате в десятки человек частота измеряет не выгорание аудитории, а
+    стартовый шум Meta. Такое значение молчит целиком — и как сигнал, и как прогресс
+    до стопа, — поэтому смягчение стопа по депозиту остаётся в силе.
     """
     if not ctx.frequency_anomaly_enabled or ctx.frequency_current is None:
         return None
-    if not _significant_ratio_denominator(ctx.reach):
+    if not _significant_ratio_denominator(ctx.reach, ctx.min_ratio_denominator):
         return None
     current = Decimal(ctx.frequency_current)
     effective_cap = max(

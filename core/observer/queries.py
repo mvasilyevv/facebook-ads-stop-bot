@@ -37,6 +37,16 @@ class OfferRules:
     # pipeline в этом случае fail-closed и не принимает автоматическое решение.
     stop_percent_of_rule: Decimal | None = None
     warning_percent_of_stop: Decimal | None = None
+    # Настраиваемые базовые пороги правил (#260). NULL → build_rule_context берёт константу.
+    cpc_percent_of_cpa: Decimal | None = None
+    cpl_percent_of_cpa: Decimal | None = None
+    cpr_percent_of_cpa: Decimal | None = None
+    regs_no_dep_stop_count: int | None = None
+    spend_no_dep_from_percent: Decimal | None = None
+    spend_no_dep_to_percent: Decimal | None = None
+    spend_with_dep_from_percent: Decimal | None = None
+    spend_with_dep_to_percent: Decimal | None = None
+    min_ratio_denominator: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,7 +84,16 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
                         r.currency,
                         r.frequency_threshold,
                         r.stop_percent_of_rule,
-                        r.warning_percent_of_stop
+                        r.warning_percent_of_stop,
+                        r.cpc_percent_of_cpa,
+                        r.cpl_percent_of_cpa,
+                        r.cpr_percent_of_cpa,
+                        r.regs_no_dep_stop_count,
+                        r.spend_no_dep_from_percent,
+                        r.spend_no_dep_to_percent,
+                        r.spend_with_dep_from_percent,
+                        r.spend_with_dep_to_percent,
+                        r.min_ratio_denominator
                     FROM offers o
                     LEFT JOIN offer_rules r ON r.offer_id = o.id
                     WHERE o.is_active = TRUE
@@ -93,6 +112,15 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
             frequency_threshold=row[5],
             stop_percent_of_rule=row[6],
             warning_percent_of_stop=row[7],
+            cpc_percent_of_cpa=row[8],
+            cpl_percent_of_cpa=row[9],
+            cpr_percent_of_cpa=row[10],
+            regs_no_dep_stop_count=row[11],
+            spend_no_dep_from_percent=row[12],
+            spend_no_dep_to_percent=row[13],
+            spend_with_dep_from_percent=row[14],
+            spend_with_dep_to_percent=row[15],
+            min_ratio_denominator=row[16],
         )
         for row in rows
     ]

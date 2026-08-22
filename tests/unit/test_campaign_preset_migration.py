@@ -12,9 +12,9 @@ def test_campaign_preset_migration_is_the_single_forward_only_head() -> None:
     chain = load_project_revision_chain()
 
     assert migration.down_revision == "0005_am_columns_setting"
-    # Голова уехала на 0009: у каждого фонового воркера появился durable heartbeat.
+    # Голова уехала на 0010: пороги стоп-правил стали настройками оффера (#260).
     # Цепочка остаётся линейной и forward-only.
-    assert chain.head == "0009_worker_heartbeats"
+    assert chain.head == "0010_offer_rule_thresholds"
     with pytest.raises(RuntimeError, match="forward-only"):
         migration.downgrade()
 
