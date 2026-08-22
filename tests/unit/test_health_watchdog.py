@@ -1112,3 +1112,113 @@ async def test_main_loop_hands_the_workspace_loop_the_real_cabinet_tabs_rpc(
 
     assert opened == [["100000000000001"]]
     assert closed == ["closed"]
+
+
+@pytest.mark.asyncio
+async def test_grpc_channel_closed_on_timeout_cancellation(monkeypatch) -> None:
+    """close() должен вызываться даже если open_cabinet_tabs отменяется по таймауту.
+
+    Воспроизводит реальный сценарий утечки: asyncio.timeout в prepare_browser_workspace
+    отменяет задачу (первая отмена), а пока выполняется finally→close(), приходит
+    вторая отмена (например, остановка цикла). Вторая отмена прерывает await close()
+    на текущем коде, и канал утекает.
+    """
+    import clients.python_grpc.client as grpc_client
+    import core.config as core_config
+    import core.meta_api.client as meta_api_client_module
+    import core.vision_runtime as vision_runtime
+
+    close_called: list[bool] = []
+    close_started = asyncio.Event()
+
+    class HangingBrowserAgentClient:
+        def __init__(self, _config):
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def open_cabinet_tabs(self, _ids: list[str]) -> list[dict]:
+            await asyncio.sleep(100)  # дольше любого разумного дедлайна
+            return []
+
+        async def close(self) -> None:
+            close_started.set()  # сигнализируем, что вошли в close()
+            await asyncio.sleep(0.05)  # симулирует I/O реального gRPC-close
+            close_called.append(True)
+
+    monkeypatch.setattr(grpc_client, "BrowserAgentClient", HangingBrowserAgentClient)
+    monkeypatch.setattr(grpc_client, "BrowserAgentConfig", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        core_config,
+        "get_settings",
+        lambda: SimpleNamespace(vision_api_url="http://vision.invalid"),
+    )
+    monkeypatch.setattr(
+        vision_runtime,
+        "load_vision_runtime_config",
+        AsyncMock(return_value=SimpleNamespace(x_token="t", profile_id="p", folder_id="f")),
+    )
+    monkeypatch.setattr(
+        meta_api_client_module,
+        "MetaApiClient",
+        lambda **_kwargs: SimpleNamespace(start=AsyncMock(), close=AsyncMock()),
+    )
+    monkeypatch.setattr(hw, "_get_database_url", lambda: "postgresql+asyncpg://x/y")
+    monkeypatch.setattr(hw, "_get_vision_cloud_url", lambda: "http://cloud.invalid")
+    monkeypatch.setattr(
+        hw,
+        "create_async_engine",
+        lambda *_args, **_kwargs: SimpleNamespace(dispose=AsyncMock()),
+    )
+
+    async def _run_once(_name, factory, _stop):
+        await factory()
+
+    monkeypatch.setattr(hw, "_supervised", _run_once)
+    for loop_name in (
+        "metrics_loop",
+        "browser_readiness_loop",
+        "check_loop",
+        "meta_probe_loop",
+        "vision_token_refresh_loop",
+        "shadow_spend_loop",
+    ):
+        monkeypatch.setattr(hw, loop_name, AsyncMock(return_value=None))
+
+    captured_fn = None
+
+    async def _capture(*, stop, engine, open_cabinet_tabs, interval=None):
+        nonlocal captured_fn
+        captured_fn = open_cabinet_tabs
+
+    monkeypatch.setattr(hw, "browser_workspace_loop", _capture)
+    await hw.main_loop()
+
+    assert captured_fn is not None, "open_cabinet_tabs не был захвачен из main_loop"
+
+    # Запускаем как задачу, чтобы управлять отменой точно
+    task = asyncio.create_task(captured_fn(["100000000000001"]))
+
+    # Даём задаче стартовать (дойти до первого suspension) прежде чем отменять.
+    # В Python 3.14 отмена до старта убивает задачу не запуская тело корутины.
+    await asyncio.sleep(0)
+
+    # Первая отмена — имитирует asyncio.timeout в prepare_browser_workspace
+    task.cancel("timeout")
+
+    # Ждём, пока finally-блок войдёт в close(), затем шлём вторую отмену —
+    # имитирует остановку цикла (stop.set()) в момент, когда первая отмена
+    # ещё обрабатывается. Именно эта вторая отмена прерывает await close().
+    await close_started.wait()
+    task.cancel("loop-stop")
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # Даём event-loop'у выполнить фоновую задачу close() (если защита есть)
+    await asyncio.sleep(0.1)
+
+    assert close_called, "close() не был вызван несмотря на двойную отмену"
