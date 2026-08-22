@@ -372,6 +372,7 @@ async def test_irreversible_value_error_after_boundary_is_unknown_manual_review(
         "operation": "duplicate_adset_structure",
         "target_id": "100",
         "reason": "value_error_postprocess",
+        "operator_reason": "Связь с Meta прервалась, но необратимая команда уже была отправлена. Повторный запуск может создать дубль (например, двойной бюджет), операция заморожена. Проверьте результат вручную непосредственно в рекламном кабинете Meta.",
     }
 
 

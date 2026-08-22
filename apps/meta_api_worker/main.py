@@ -127,6 +127,22 @@ from core.worker_metrics import (
 
 logger = logging.getLogger("meta_api_worker")
 
+TERMINAL_OPERATOR_REASONS = {
+    "invalid_payload": "Система сформировала несовместимый запрос к Meta. Задача полностью отклонена и не будет выполнена. Передайте задачу разработчикам для исправления формата.",
+    "enable_grace_precondition": "Действие требует настройки безопасного периода (grace), но лимиты не заданы. Во избежание неконтролируемых трат задача остановлена без изменений в Meta. Установите корректные лимиты в настройках или обратитесь к разработчикам.",
+    "owner_scoping": "Цель не принадлежит вам или заблокирована фильтром доступов (owner/recipient/role). Чтобы не изменить чужую кампанию, действие отклонено и не будет исполнено. Убедитесь, что вы управляете правильной кампанией, и проверьте настройки владельца.",
+    "irreversible_no_retry": "Связь с Meta прервалась, но необратимая команда уже была отправлена. Повторный запуск может создать дубль (например, двойной бюджет), операция заморожена. Проверьте результат вручную непосредственно в рекламном кабинете Meta.",
+    "TokenInvalidError": "Токен доступа Meta недействителен, истек или был отозван. Дальнейшее управление кабинетом заблокировано, действия не выполняются. Авторизуйтесь и обновите токен через приложение Vision.",
+    "LoginRequiredError": "Сессия профиля Meta истекла или заблокирована контрольной точкой. Управление остановлено, есть риск потери контроля над бюджетом. Зайдите в браузерный профиль Vision и выполните повторный логин руками.",
+    "NotFoundError": "Запрошенный объект (кампания, адсет или объявление) удален или недоступен. Действие отклонено без изменений, так как цель отсутствует в Meta. Проверьте наличие объекта в кабинете Meta и актуальность задачи.",
+    # Ключ — фактическое __name__ класса: MetaPermissionError это алиас,
+    # и по нему exc_name никогда не совпал бы.
+    "PermissionError": "Meta отклонила запрос из-за нехватки прав доступа к кабинету (role/permission). Действие заблокировано на стороне Meta и не будет применено. Проверьте в кабинете Meta, что у вашего профиля есть права рекламодателя.",
+    "MutationValidationError": "Введены недопустимые параметры или значения для этой операции. Задача окончательно отклонена на этапе проверки и не дошла до Meta. Проверьте переданные параметры задачи или передайте ошибку разработчикам.",
+    "PermanentError": "Meta вернула окончательный отказ на эту команду (постоянная ошибка). Задача отклонена и не будет повторяться, так как это не исправит проблему. Проверьте состояние кабинета в Meta и убедитесь, что действие допустимо.",
+    "NotImplementedError": "Этот тип операции еще не реализован или не поддерживается системой. Задача отклонена системой и не будет отправлена в Meta. Отмените операцию и передайте запрос на поддержку действия разработчикам.",
+}
+
 # Kept as the worker-level injection point for unit tests and custom runtimes.
 # It now receives an AsyncConnection and always runs inside terminalization.
 sync_fsm_after_mutation = sync_fsm_after_mutation_in_transaction
@@ -793,6 +809,7 @@ async def _fail_irreversible(
             "operation": payload.mutation_kind,
             "target_id": str(payload.target_id),
             "reason": reason,
+            "operator_reason": TERMINAL_OPERATOR_REASONS["irreversible_no_retry"],
         },
         lease_owner=task.lease_owner,
         lease_token=task.lease_token,
@@ -1517,7 +1534,11 @@ async def process_one_task(
             engine,
             task_id=task.id,
             error=f"invalid payload: {exc}",
-            result={"outcome": "REJECTED", "reason": "invalid_payload"},
+            result={
+                "outcome": "REJECTED",
+                "reason": "invalid_payload",
+                "operator_reason": TERMINAL_OPERATOR_REASONS["invalid_payload"],
+            },
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
         )
@@ -1622,7 +1643,11 @@ async def process_one_task(
             engine,
             task_id=task.id,
             error=f"owner_scoping_reject: {ownership.reason}",
-            result={"outcome": "REJECTED", "reason": "owner_scoping"},
+            result={
+                "outcome": "REJECTED",
+                "reason": "owner_scoping",
+                "operator_reason": TERMINAL_OPERATOR_REASONS["owner_scoping"],
+            },
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
         )
@@ -1680,7 +1705,11 @@ async def process_one_task(
             engine,
             task_id=task.id,
             error=f"enable_grace_precondition: {exc}",
-            result={"outcome": "REJECTED", "reason": "enable_grace_precondition"},
+            result={
+                "outcome": "REJECTED",
+                "reason": "enable_grace_precondition",
+                "operator_reason": TERMINAL_OPERATOR_REASONS["enable_grace_precondition"],
+            },
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
         )
@@ -1807,9 +1836,13 @@ async def process_one_task(
         )
         return
     except _PERMANENT_EXCEPTIONS as exc:
+        exc_name = type(exc).__name__
         failure_result: dict[str, Any] = {
             "outcome": "REJECTED",
-            "reason": type(exc).__name__,
+            "reason": exc_name,
+            "operator_reason": TERMINAL_OPERATOR_REASONS.get(
+                exc_name, TERMINAL_OPERATOR_REASONS["PermanentError"]
+            ),
         }
         if isinstance(exc, LoginRequiredError):
             failure_result["requires_facebook_login"] = True

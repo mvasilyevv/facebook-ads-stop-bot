@@ -102,6 +102,7 @@ async def test_token_invalid_marks_terminal_result_for_atomic_incident_projectio
         "outcome": "REJECTED",
         "reason": "TokenInvalidError",
         "requires_meta_reauth": True,
+        "operator_reason": "Токен доступа Meta недействителен, истек или был отозван. Дальнейшее управление кабинетом заблокировано, действия не выполняются. Авторизуйтесь и обновите токен через приложение Vision.",
     }
 
 
@@ -131,4 +132,5 @@ async def test_login_required_marks_distinct_terminal_incident_projection(
         "outcome": "REJECTED",
         "reason": "LoginRequiredError",
         "requires_facebook_login": True,
+        "operator_reason": "Сессия профиля Meta истекла или заблокирована контрольной точкой. Управление остановлено, есть риск потери контроля над бюджетом. Зайдите в браузерный профиль Vision и выполните повторный логин руками.",
     }
