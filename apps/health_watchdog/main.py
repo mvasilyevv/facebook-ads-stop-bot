@@ -1704,7 +1704,15 @@ async def main_loop(database_url: str | None = None) -> None:
         try:
             await client.start_browser()
         finally:
-            await client.close()
+            # asyncio.shield изолирует задачу закрытия от внешней отмены: если
+            # корутина отменяется (например, вторым cancel() во время finally),
+            # inner-task close() доживает до конца независимо от статуса outer-task.
+            close_task = asyncio.ensure_future(client.close())
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError:
+                await close_task
+                raise
 
     async def open_cabinet_tabs(ad_account_ids: list[str]) -> list[dict[str, Any]]:
         """Открыть вкладку Ads Manager каждому настроенному кабинету.
@@ -1717,7 +1725,12 @@ async def main_loop(database_url: str | None = None) -> None:
         try:
             return await client.open_cabinet_tabs(ad_account_ids)
         finally:
-            await client.close()
+            close_task = asyncio.ensure_future(client.close())
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError:
+                await close_task
+                raise
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
