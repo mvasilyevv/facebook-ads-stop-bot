@@ -59,7 +59,19 @@ from core.observer.writers import (
     upsert_catalog_hierarchy,
 )
 from core.rules.evaluator import evaluate_stop_rules
-from core.rules.types import RuleContext, RuleEvaluation
+from core.rules.types import (
+    CPC_PERCENT_OF_CPA,
+    CPL_PERCENT_OF_CPA,
+    CPR_PERCENT_OF_CPA,
+    MIN_RATIO_DENOMINATOR,
+    REGS_NO_DEP_STOP_COUNT,
+    SPEND_NO_DEP_FROM_PERCENT,
+    SPEND_NO_DEP_TO_PERCENT,
+    SPEND_WITH_DEP_FROM_PERCENT,
+    SPEND_WITH_DEP_TO_PERCENT,
+    RuleContext,
+    RuleEvaluation,
+)
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
@@ -217,6 +229,52 @@ def build_rule_context(
             frequency_warning_threshold=freq_warning,
             impressions=impressions,
             reach=reach,
+            # Настраиваемые базовые пороги (#260): null → константа-умолчание
+            cpc_percent_of_cpa=(
+                offer.cpc_percent_of_cpa
+                if offer.cpc_percent_of_cpa is not None
+                else CPC_PERCENT_OF_CPA
+            ),
+            cpl_percent_of_cpa=(
+                offer.cpl_percent_of_cpa
+                if offer.cpl_percent_of_cpa is not None
+                else CPL_PERCENT_OF_CPA
+            ),
+            cpr_percent_of_cpa=(
+                offer.cpr_percent_of_cpa
+                if offer.cpr_percent_of_cpa is not None
+                else CPR_PERCENT_OF_CPA
+            ),
+            regs_no_dep_stop_count=(
+                offer.regs_no_dep_stop_count
+                if offer.regs_no_dep_stop_count is not None
+                else REGS_NO_DEP_STOP_COUNT
+            ),
+            spend_no_dep_from_percent=(
+                offer.spend_no_dep_from_percent
+                if offer.spend_no_dep_from_percent is not None
+                else SPEND_NO_DEP_FROM_PERCENT
+            ),
+            spend_no_dep_to_percent=(
+                offer.spend_no_dep_to_percent
+                if offer.spend_no_dep_to_percent is not None
+                else SPEND_NO_DEP_TO_PERCENT
+            ),
+            spend_with_dep_from_percent=(
+                offer.spend_with_dep_from_percent
+                if offer.spend_with_dep_from_percent is not None
+                else SPEND_WITH_DEP_FROM_PERCENT
+            ),
+            spend_with_dep_to_percent=(
+                offer.spend_with_dep_to_percent
+                if offer.spend_with_dep_to_percent is not None
+                else SPEND_WITH_DEP_TO_PERCENT
+            ),
+            min_ratio_denominator=(
+                offer.min_ratio_denominator
+                if offer.min_ratio_denominator is not None
+                else MIN_RATIO_DENOMINATOR
+            ),
         )
     except InvalidCurrencyAmountError as exc:
         raise MissingOfferCpaError(

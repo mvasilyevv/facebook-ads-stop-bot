@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.schema import conv
@@ -80,6 +80,20 @@ class OfferRule(UUIDPrimaryKey, Timestamp, Base):
         nullable=False,
         server_default="80",
     )
+
+    # Настраиваемые базовые пороги правил (NULL → дефолт из константы в build_rule_context).
+    # Ось настройки — оффер; null означает «не задано, берём константу».
+    cpc_percent_of_cpa: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    cpl_percent_of_cpa: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    cpr_percent_of_cpa: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    regs_no_dep_stop_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    spend_no_dep_from_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    spend_no_dep_to_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    spend_with_dep_from_percent: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    spend_with_dep_to_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    min_ratio_denominator: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     offer: Mapped["Offer"] = relationship(  # noqa: F821
         "Offer",

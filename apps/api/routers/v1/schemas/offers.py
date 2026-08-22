@@ -211,6 +211,16 @@ class OfferRuleOut(BaseModel):
     # базового правила (CPC-база 2%×CPA и т.д.); warning_percent_of_stop — ворнинг = M% от стопа.
     stop_percent_of_rule: Decimal = Decimal("80")
     warning_percent_of_stop: Decimal = Decimal("80")
+    # Настраиваемые базовые пороги правил (#260). NULL → pipeline берёт историческую константу.
+    cpc_percent_of_cpa: Decimal | None = None
+    cpl_percent_of_cpa: Decimal | None = None
+    cpr_percent_of_cpa: Decimal | None = None
+    regs_no_dep_stop_count: int | None = None
+    spend_no_dep_from_percent: Decimal | None = None
+    spend_no_dep_to_percent: Decimal | None = None
+    spend_with_dep_from_percent: Decimal | None = None
+    spend_with_dep_to_percent: Decimal | None = None
+    min_ratio_denominator: int | None = None
 
 
 class OfferRuleUpsertIn(BaseModel):
@@ -231,6 +241,16 @@ class OfferRuleUpsertIn(BaseModel):
     # Чувствительность 1–100% (всегда задано, дефолт 80). НЕ nullable — колонки NOT NULL.
     stop_percent_of_rule: Decimal = Field(Decimal("80"), ge=1, le=100)
     warning_percent_of_stop: Decimal = Field(Decimal("80"), ge=1, le=100)
+    # Настраиваемые базовые пороги (#260). NULL → pipeline берёт константу-дефолт.
+    cpc_percent_of_cpa: Decimal | None = Field(None, gt=0)
+    cpl_percent_of_cpa: Decimal | None = Field(None, gt=0)
+    cpr_percent_of_cpa: Decimal | None = Field(None, gt=0)
+    regs_no_dep_stop_count: int | None = Field(None, gt=0)
+    spend_no_dep_from_percent: Decimal | None = Field(None, gt=0, le=100)
+    spend_no_dep_to_percent: Decimal | None = Field(None, gt=0, le=100)
+    spend_with_dep_from_percent: Decimal | None = Field(None, gt=0, le=100)
+    spend_with_dep_to_percent: Decimal | None = Field(None, gt=0, le=100)
+    min_ratio_denominator: int | None = Field(None, gt=0)
 
     @field_validator("currency")
     @classmethod

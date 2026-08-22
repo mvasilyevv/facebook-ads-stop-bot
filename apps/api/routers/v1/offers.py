@@ -319,6 +319,15 @@ async def get_offer_rules(
         frequency_threshold=row["frequency_threshold"],
         stop_percent_of_rule=row["stop_percent_of_rule"],
         warning_percent_of_stop=row["warning_percent_of_stop"],
+        cpc_percent_of_cpa=row["cpc_percent_of_cpa"],
+        cpl_percent_of_cpa=row["cpl_percent_of_cpa"],
+        cpr_percent_of_cpa=row["cpr_percent_of_cpa"],
+        regs_no_dep_stop_count=row["regs_no_dep_stop_count"],
+        spend_no_dep_from_percent=row["spend_no_dep_from_percent"],
+        spend_no_dep_to_percent=row["spend_no_dep_to_percent"],
+        spend_with_dep_from_percent=row["spend_with_dep_from_percent"],
+        spend_with_dep_to_percent=row["spend_with_dep_to_percent"],
+        min_ratio_denominator=row["min_ratio_denominator"],
     )
 
 
@@ -367,6 +376,15 @@ async def upsert_offer_rules(
             OfferRule.__table__.c.frequency_threshold,
             OfferRule.__table__.c.stop_percent_of_rule,
             OfferRule.__table__.c.warning_percent_of_stop,
+            OfferRule.__table__.c.cpc_percent_of_cpa,
+            OfferRule.__table__.c.cpl_percent_of_cpa,
+            OfferRule.__table__.c.cpr_percent_of_cpa,
+            OfferRule.__table__.c.regs_no_dep_stop_count,
+            OfferRule.__table__.c.spend_no_dep_from_percent,
+            OfferRule.__table__.c.spend_no_dep_to_percent,
+            OfferRule.__table__.c.spend_with_dep_from_percent,
+            OfferRule.__table__.c.spend_with_dep_to_percent,
+            OfferRule.__table__.c.min_ratio_denominator,
         )
 
         result = await conn.execute(stmt)
@@ -379,6 +397,15 @@ async def upsert_offer_rules(
         frequency_threshold=row["frequency_threshold"],
         stop_percent_of_rule=row["stop_percent_of_rule"],
         warning_percent_of_stop=row["warning_percent_of_stop"],
+        cpc_percent_of_cpa=row["cpc_percent_of_cpa"],
+        cpl_percent_of_cpa=row["cpl_percent_of_cpa"],
+        cpr_percent_of_cpa=row["cpr_percent_of_cpa"],
+        regs_no_dep_stop_count=row["regs_no_dep_stop_count"],
+        spend_no_dep_from_percent=row["spend_no_dep_from_percent"],
+        spend_no_dep_to_percent=row["spend_no_dep_to_percent"],
+        spend_with_dep_from_percent=row["spend_with_dep_from_percent"],
+        spend_with_dep_to_percent=row["spend_with_dep_to_percent"],
+        min_ratio_denominator=row["min_ratio_denominator"],
     )
 
 

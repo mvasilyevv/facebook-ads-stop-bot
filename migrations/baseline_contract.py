@@ -1091,6 +1091,16 @@ POST_BASELINE_ARTIFACT_HASHES: dict[str, str] = {
     "check_constraint:public.campaign_preset.ck_campaign_preset_genders_array": "e7a27fd44be82c2557faa654b2abb9be7ae5086695151e12a13b642e60207a1c",
     "check_constraint:public.campaign_preset.ck_campaign_preset_placements_array": "8532ed0790039cb55e838e122cf3552d1058eca87c12244eb9b3eb9a43bc7f84",
     "check_constraint:public.campaign_preset.ck_campaign_preset_purchase_only": "0fdd1fff1b1a4541923e9ce01199fe5b89608b9af1f5388f566a6bfbc3777391",
+    # 0010_offer_rule_thresholds (#260): настраиваемые пороги стоп-правил.
+    "check_constraint:public.offer_rules.ck_offer_rules_cpc_percent_positive": "7e10941bfc082fbb9b2592d73d4ebf926552694e3c0713f41f7c2f5654a2b7e5",
+    "check_constraint:public.offer_rules.ck_offer_rules_cpl_percent_positive": "b65e2fa8f60c96556ba9fe1010199520f28358395325a6d5a86ee78db660a482",
+    "check_constraint:public.offer_rules.ck_offer_rules_cpr_percent_positive": "38c91a1b8181fca890da8670d4f450fddd5f883b88be9fa8c11fcec6e0355128",
+    "check_constraint:public.offer_rules.ck_offer_rules_min_ratio_denominator_positive": "08106d2f43ee1140a6fd054a62d8d13f1bac680a5237c5d1edc2bb063109a49f",
+    "check_constraint:public.offer_rules.ck_offer_rules_regs_count_positive": "93f3b22a91a5bfb9461f324b3a1bf7103767b64c3abc82d0d77fe278082a6bfd",
+    "check_constraint:public.offer_rules.ck_offer_rules_spend_no_dep_from_range": "a182d66d4c34504ee81b514cc158397e915b4e3b83cf586828f72019a0477a96",
+    "check_constraint:public.offer_rules.ck_offer_rules_spend_no_dep_to_range": "874a7196b9505ce4ffde9b3be6898cdfb22844d4558f98849adaecdbfad4ba0c",
+    "check_constraint:public.offer_rules.ck_offer_rules_spend_with_dep_from_range": "f12855e5c90fae01c6ed4ff0709e3e705adfa16aa9f165d9a1e68b58008cddbb",
+    "check_constraint:public.offer_rules.ck_offer_rules_spend_with_dep_to_range": "21d49ff883622cd080d74a6976f1a6a55c355b7fc19b1575ab371383001e7215",
 }
 
 

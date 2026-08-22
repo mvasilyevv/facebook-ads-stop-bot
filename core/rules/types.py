@@ -110,31 +110,38 @@ class RuleContext:
     use_adaptive_cpa: bool = False
     adaptive_cpa: Decimal | None = None
 
-    # Правило 1: CPC — базовый процент ФИКСИРОВАН (init=False: нельзя передать в конструктор).
+    # Настраиваемые базовые проценты правил (#260): per-offer, дефолты = исторические константы.
+    # null в offer_rules → build_rule_context подставляет константу; здесь всегда не-None.
+    cpc_percent_of_cpa: Decimal = CPC_PERCENT_OF_CPA
+    cpl_percent_of_cpa: Decimal = CPL_PERCENT_OF_CPA
+    cpr_percent_of_cpa: Decimal = CPR_PERCENT_OF_CPA
+
+    # Правило 1: CPC — базовый процент вычисляется из cpc_percent_of_cpa в __post_init__.
+    # init=False сохранён: нельзя передать напрямую в конструктор (поведение не меняется).
     cpc_enabled: bool = True
-    cpc_percent_stop: Decimal = field(init=False, default=CPC_PERCENT_OF_CPA)
+    cpc_percent_stop: Decimal = field(init=False)
 
     # Правило 2: CPL
     cpl_enabled: bool = True
-    cpl_percent_stop: Decimal = field(init=False, default=CPL_PERCENT_OF_CPA)
+    cpl_percent_stop: Decimal = field(init=False)
 
     # Правило 3: CPR
     cpr_enabled: bool = True
-    cpr_percent_stop: Decimal = field(init=False, default=CPR_PERCENT_OF_CPA)
+    cpr_percent_stop: Decimal = field(init=False)
 
-    # Правило 4: N рег без депов
+    # Правило 4: N рег без депов — настраивается per-offer (#260).
     regs_no_dep_enabled: bool = True
-    regs_no_dep_stop_count: int = field(init=False, default=REGS_NO_DEP_STOP_COUNT)
+    regs_no_dep_stop_count: int = REGS_NO_DEP_STOP_COUNT
 
-    # Правило 5: Расход без депа
+    # Правило 5: Расход без депа — диапазон настраивается per-offer (#260).
     spend_no_dep_enabled: bool = True
-    spend_no_dep_from_percent: Decimal = field(init=False, default=SPEND_NO_DEP_FROM_PERCENT)
-    spend_no_dep_to_percent: Decimal = field(init=False, default=SPEND_NO_DEP_TO_PERCENT)
+    spend_no_dep_from_percent: Decimal = SPEND_NO_DEP_FROM_PERCENT
+    spend_no_dep_to_percent: Decimal = SPEND_NO_DEP_TO_PERCENT
 
-    # Правило 6: Расход с депом
+    # Правило 6: Расход с депом — диапазон настраивается per-offer (#260).
     spend_with_dep_enabled: bool = True
-    spend_with_dep_from_percent: Decimal = field(init=False, default=SPEND_WITH_DEP_FROM_PERCENT)
-    spend_with_dep_to_percent: Decimal = field(init=False, default=SPEND_WITH_DEP_TO_PERCENT)
+    spend_with_dep_from_percent: Decimal = SPEND_WITH_DEP_FROM_PERCENT
+    spend_with_dep_to_percent: Decimal = SPEND_WITH_DEP_TO_PERCENT
 
     # Правило 7: frequency-anomaly (выгорание аудитории). Абсолютные пороги, без истории
     # роста за час — LOW (аудит 02.07): frequency_1h_ago/frequency_growth_warning_pct
@@ -157,6 +164,10 @@ class RuleContext:
     # крошечного reach (300 показов / 7 человек) — отсекаем только абсурдные выбросы
     # выше cap. Это НЕ «ожидание» данных, а защита от переходного шума.
     frequency_outlier_cap: Decimal = Decimal("10.0")
+
+    # Минимальный объём знаменателя отношения (#260, per-offer). Частота = показы/охват;
+    # знаменатель ниже этого порога → отношение неизвестно (молчим, не стопаем по frequency).
+    min_ratio_denominator: int = MIN_RATIO_DENOMINATOR
 
     # Внешние депозиты — от трекера AdSet.pro (см. core.adset_pro.ingest).
     # ЕДИНСТВЕННЫЙ источник истины по депозитам для правил (решение пользователя):
@@ -194,6 +205,13 @@ class RuleContext:
         object.__setattr__(self, "currency_exponent", exponent)
         object.__setattr__(self, "cpa_amount", cpa_amount)
         object.__setattr__(self, "money_quantum", step)
+
+        # Переносим настраиваемые базовые проценты в init=False поля-процентов (#260).
+        # Это позволяет сохранить внешний контракт (cpc_percent_stop нельзя передать
+        # напрямую в конструктор), но читать значение из настроек оффера.
+        object.__setattr__(self, "cpc_percent_stop", self.cpc_percent_of_cpa)
+        object.__setattr__(self, "cpl_percent_stop", self.cpl_percent_of_cpa)
+        object.__setattr__(self, "cpr_percent_stop", self.cpr_percent_of_cpa)
 
         def _base(percent: Decimal) -> Decimal:
             return (cpa_amount * percent / Decimal("100")).quantize(step, rounding=ROUND_HALF_UP)
