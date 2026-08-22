@@ -82,6 +82,13 @@ export DATABASE_URL="postgresql+asyncpg://preflight:preflight_pw@127.0.0.1:$PREF
 # запрещает — destructive-фикстуры не должны сносить схему, на которой
 # только что прогнали миграции. Так же устроен и CI.
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
+export ENCRYPTION_KEY="${ENCRYPTION_KEY:-UOGaDCkFFfSv7XMSdwQq_rqmossFFl8wSG7z69_5nO0=}"
+export ENCRYPTION_KEY_VERIFY="${ENCRYPTION_KEY_VERIFY:-gAAAAABqZwkRi9J37pVDxsdD0LHKWe_L6EkbhQVu1yKi_N43MdYL_I1IV_-5gsOOBXzCRMY9phj3dpLhDtQCsDcJPQKhEQjiRNeb6RuubyvM6vuxf6dgr30=}"
+export TMA_SESSION_SECRET="${TMA_SESSION_SECRET:-ci_tma_session_secret_0123456789abcdef}"
+export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-ci:test_token}"
+export API_KEY="${API_KEY:-ci_api_key}"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-ci_anthropic_key}"
+export OPENAI_API_KEY="${OPENAI_API_KEY:-ci_openai_key}"
 
 step "Backend: сгенерированные gRPC-стабы не разошлись с proto"
 "$PYTHON" -B scripts/generate_grpc_stubs.py
