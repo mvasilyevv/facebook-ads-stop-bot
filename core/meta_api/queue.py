@@ -27,6 +27,9 @@ from core.tasks.queue import (
     requeue_for_retry,
     requeue_proven_not_committed,
 )
+from core.tasks.queue import (
+    mark_task_failed_or_cancelled as _mark_task_failed_or_cancelled,
+)
 
 _TASK_TYPE = "meta_api_mutation"
 
@@ -190,6 +193,31 @@ async def mark_task_failed(
         lease_owner=lease_owner,
         lease_token=lease_token,
         transactional_effect=transactional_effect,
+    )
+
+
+async def mark_task_failed_or_cancelled(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    target_lock_key: str,
+    error: str,
+    result: dict[str, Any] | None = None,
+    lease_owner: uuid.UUID | None = None,
+    lease_token: int | None = None,
+) -> str | None:
+    """Прокси к core.tasks.queue.mark_task_failed_or_cancelled.
+
+    Возвращает итоговый статус (``'failed'`` или ``'cancelled'``) или ``None``.
+    """
+    return await _mark_task_failed_or_cancelled(
+        engine,
+        task_id=task_id,
+        target_lock_key=target_lock_key,
+        error=error,
+        result=result,
+        lease_owner=lease_owner,
+        lease_token=lease_token,
     )
 
 

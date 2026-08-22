@@ -1836,6 +1836,134 @@ async def mark_cancelled(
     return bool(result.rowcount)
 
 
+async def mark_task_failed_or_cancelled(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    target_lock_key: str,
+    error: str,
+    result: dict[str, Any] | None = None,
+    lease_owner: uuid.UUID | None = None,
+    lease_token: int | None = None,
+) -> str | None:
+    """Терминальный переход с учётом cancel_requested_at.
+
+    Берёт тот же per-target advisory lock, что и трекер отмены, поэтому маркер
+    ``cancel_requested_at`` и этот переход сериализуются: задача закрывается как
+    ``cancelled``, если отмена уже зафиксирована, и как ``failed`` иначе.
+
+    Возвращает итоговый статус (``'failed'`` или ``'cancelled'``) или ``None``,
+    когда fence уже не владеет задачей.
+    """
+    if not target_lock_key:
+        raise ValueError("target_lock_key must not be empty")
+    if not _has_valid_fence(lease_owner, lease_token):
+        logger.error(
+            "mark_task_failed_or_cancelled refused task_id=%s without a valid lease fence",
+            task_id,
+        )
+        return None
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": target_lock_key},
+        )
+        update_result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = CASE
+                        WHEN cancel_requested_at IS NOT NULL THEN 'cancelled'
+                        ELSE 'failed'
+                    END,
+                    last_error = CASE
+                        WHEN cancel_requested_at IS NOT NULL
+                            THEN COALESCE(cancel_reason, :err)
+                        ELSE :err
+                    END,
+                    -- Флаги сверки не вычищаются даже при отмене: требование
+                    -- ручной проверки принадлежит исходу внешней операции, а не
+                    -- тому, просил ли оператор отмену.
+                    result = COALESCE(CAST(:res AS JSONB), result),
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = :id AND status = 'running'
+                  AND lease_owner = :lease_owner AND lease_token = :lease_token
+                  AND lease_expires_at > clock_timestamp()
+                RETURNING id, status, correlation_id, payload, result,
+                          requested_by, lane, task_type
+                """
+            ),
+            {
+                "id": int(task_id),
+                "err": error[:8000],
+                "res": json.dumps(result) if result is not None else None,
+                "lease_owner": lease_owner,
+                "lease_token": lease_token,
+                "lock_key": target_lock_key,
+            },
+        )
+        row = update_result.first()
+        if row is None:
+            return None
+        final_status: str = str(row.status)
+        stored_result = _returned_value(row, "result")
+        task_result = stored_result if isinstance(stored_result, dict) else {}
+        task_payload = dict(_returned_value(row, "payload") or {})
+        correlation_id = _optional_uuid(_returned_value(row, "correlation_id"))
+        requested_by = str(_returned_value(row, "requested_by") or "")
+        lane = str(_returned_value(row, "lane") or "")
+        task_type = str(_returned_value(row, "task_type") or "")
+        if final_status == "cancelled":
+            await _transition_terminal_task(
+                conn,
+                task_id=task_id,
+                correlation_id=correlation_id,
+                phase="cancelled",
+                payload=task_payload,
+                result=task_result,
+                requested_by=requested_by,
+                lane=lane,
+                task_type=task_type,
+            )
+        else:
+            await _project_duplicate_terminal_incident(
+                conn,
+                task_id=task_id,
+                payload=task_payload,
+                result=task_result,
+            )
+            phase: Literal["failed", "unknown"] = (
+                "unknown"
+                if task_result.get("outcome") == "UNKNOWN"
+                or task_result.get("reconcile_required") is True
+                else "failed"
+            )
+            await _transition_terminal_task(
+                conn,
+                task_id=task_id,
+                correlation_id=correlation_id,
+                phase=phase,
+                payload=task_payload,
+                result=task_result,
+                requested_by=requested_by,
+                lane=lane,
+                task_type=task_type,
+            )
+            await _project_meta_token_incident_in_transaction(
+                conn,
+                task_type=task_type,
+                result=task_result,
+            )
+            await _project_facebook_login_incident_in_transaction(
+                conn,
+                task_type=task_type,
+                payload=task_payload,
+                result=task_result,
+            )
+        return final_status
+
+
 async def resolve_status_reconciliation_not_applied(
     engine: AsyncEngine,
     *,

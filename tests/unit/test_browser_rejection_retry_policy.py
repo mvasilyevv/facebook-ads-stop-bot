@@ -113,12 +113,14 @@ def money_worker(monkeypatch):
     monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
     spies = SimpleNamespace(
         failed=AsyncMock(return_value=True),
+        failed_or_cancelled=AsyncMock(return_value="failed"),
         requeue=AsyncMock(return_value=True),
         requeue_pre_send=AsyncMock(return_value="retrying"),
         release_readiness=AsyncMock(return_value="retrying"),
         alert=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(meta, "mark_task_failed", spies.failed)
+    monkeypatch.setattr(meta, "mark_task_failed_or_cancelled", spies.failed_or_cancelled)
     monkeypatch.setattr(meta, "requeue_task", spies.requeue)
     monkeypatch.setattr(meta, "requeue_task_proven_not_committed", spies.requeue_pre_send)
     monkeypatch.setattr(
@@ -150,8 +152,9 @@ async def test_money_task_with_unretryable_rejection_is_finalized_rejected(
     # Повторов больше нет — ни обычного, ни доказанного pre-send.
     money_worker.requeue.assert_not_awaited()
     money_worker.requeue_pre_send.assert_not_awaited()
-    money_worker.failed.assert_awaited_once()
-    result = money_worker.failed.await_args.kwargs["result"]
+    money_worker.failed.assert_not_awaited()
+    money_worker.failed_or_cancelled.assert_awaited_once()
+    result = money_worker.failed_or_cancelled.await_args.kwargs["result"]
     # Исход не изменился: отправки не было, сверять нечего.
     assert result["outcome"] == "REJECTED"
     assert result.get("reconcile_required") is not True
@@ -290,8 +293,9 @@ async def test_money_irreversible_duplicate_with_unretryable_rejection_stays_rej
         client=AsyncMock(),
     )
 
-    money_worker.failed.assert_awaited_once()
-    result = money_worker.failed.await_args.kwargs["result"]
+    money_worker.failed.assert_not_awaited()
+    money_worker.failed_or_cancelled.assert_awaited_once()
+    result = money_worker.failed_or_cancelled.await_args.kwargs["result"]
     assert result["outcome"] == "REJECTED"
     # Признаки пути необратимого UNKNOWN: их здесь быть не должно — оператора
     # нельзя звать сверять кабинет, в который ничего не отправляли.

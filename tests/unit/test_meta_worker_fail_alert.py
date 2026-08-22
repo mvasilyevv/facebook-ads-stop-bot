@@ -80,7 +80,7 @@ async def test_exhausted_money_failure_has_no_post_commit_send(monkeypatch, erro
 async def test_token_invalid_marks_terminal_result_for_atomic_incident_projection(
     monkeypatch,
 ) -> None:
-    terminal = AsyncMock(return_value=True)
+    terminal = AsyncMock(return_value="failed")
     monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(
@@ -94,7 +94,7 @@ async def test_token_invalid_marks_terminal_result_for_atomic_incident_projectio
         "execute_mutation",
         AsyncMock(side_effect=TokenInvalidError("session expired", code=190)),
     )
-    monkeypatch.setattr(mw, "mark_task_failed", terminal)
+    monkeypatch.setattr(mw, "mark_task_failed_or_cancelled", terminal)
 
     await mw.process_one_task(object(), _task(), client=AsyncMock())
 
@@ -109,7 +109,7 @@ async def test_token_invalid_marks_terminal_result_for_atomic_incident_projectio
 async def test_login_required_marks_distinct_terminal_incident_projection(
     monkeypatch,
 ) -> None:
-    terminal = AsyncMock(return_value=True)
+    terminal = AsyncMock(return_value="failed")
     monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(
@@ -123,7 +123,7 @@ async def test_login_required_marks_distinct_terminal_incident_projection(
         "execute_mutation",
         AsyncMock(side_effect=LoginRequiredError("logged out", code=190, subcode=463)),
     )
-    monkeypatch.setattr(mw, "mark_task_failed", terminal)
+    monkeypatch.setattr(mw, "mark_task_failed_or_cancelled", terminal)
 
     await mw.process_one_task(object(), _task(), client=AsyncMock())
 
