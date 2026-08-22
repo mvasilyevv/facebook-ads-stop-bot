@@ -367,8 +367,12 @@ def test_registration_stage_prioritizes_regs_without_dep_stop_over_cpr_warning()
     assert result.matched_rule_codes == ["regs_no_dep_stop"]
 
 
-# Проверяем что registration-stage правила используют отдельный CPR warning.
-def test_registration_stage_uses_cpr_specific_warning_for_regs_without_dep():
+# Проверяем что per-rule cpr_warning_percent_of_stop влияет на spend-guardrail
+# в регистрационной ступени. regs_no_dep_stop теперь использует фиксированный
+# шаг stop-1 и при registrations=3 (< 4=stop-1) не срабатывает; вместо него
+# spend_no_dep_range WARNING использует cpr_warning_pct=50%:
+# warning_from = 50% × 50% = 25%, текущий spend = 1.60/5.00×100 = 32% — в зоне.
+def test_registration_stage_cpr_warning_pct_affects_spend_no_dep_guardrail():
     row = _make_row(
         spend=Decimal("1.60"),
         clicks=20,
@@ -389,7 +393,7 @@ def test_registration_stage_uses_cpr_specific_warning_for_regs_without_dep():
     )
 
     assert result.stage == AlertStage.WARNING
-    assert result.matched_rule_codes == ["regs_no_dep_stop"]
+    assert result.matched_rule_codes == ["spend_no_dep_range"]
 
 
 # Проверяем что после нормальной цены реги включается правило 5 рег без депов раньше spend-range.
