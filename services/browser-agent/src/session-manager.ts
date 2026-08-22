@@ -361,6 +361,18 @@ export class SessionManager {
    */
   private openFailures = new Map<string, { streak: number; until: number }>();
 
+  /**
+   * targetId CDP-вкладки → роль и кабинет. targetId стабилен в пределах жизни
+   * браузера, переживает переподключение CDP и не зависит от идентичности
+   * объекта Page. Карта используется при reconnect для восстановления реестров
+   * ролей вместо их обнуления: без неё новый Page-прокси той же физической
+   * вкладки не числился в _agentMoneyPages и мог быть усыновлён ролью scan.
+   */
+  private pageRolesByTargetId = new Map<
+    string,
+    { role: BrowserPageRole; actId: string }
+  >();
+
   // Профили, которые мы видели ЗАПУЩЕННЫМИ в этом процессе, и профили, которые
   // мы останавливали САМИ. Пара нужна, чтобы отличить холодный старт (профиль
   // просто не запущен — запускаем спокойно) от «профиль забрала другая машина»
@@ -696,11 +708,14 @@ export class SessionManager {
 
     session.browser = browser;
     session.primaryPage = primaryPage;
-    // Page proxies from the previous CDP connection are never reused. Roles
-    // will be rebuilt lazily and isolation is re-checked on first access.
-    session.scanPages = new Map();
-    session.controlPages = new Map();
-    session.interactivePages = new Map();
+    // Page-прокси прежнего CDP-соединения мертвы. Восстанавливаем реестры
+    // ролей по targetId: тот же targetId в новом соединении возвращает новый
+    // прокси той же физической вкладки. Если targetId получить не удалось —
+    // реестр остаётся пустым (деградация, не усыновление).
+    const restoredPages = await this.restoreRolePagesAfterReconnect(browser);
+    session.scanPages = restoredPages.scanPages;
+    session.controlPages = restoredPages.controlPages;
+    session.interactivePages = restoredPages.interactivePages;
     session.playwright = chromium;
     session.cdpPort = resolvedPort;
     session.status = "connected";
@@ -1301,6 +1316,9 @@ export class SessionManager {
     this.clearLoginRequired(session);
     this.openFailures.delete(this.openFailureKey(session, resolvedAct));
     ownPages.set(cabinetKey, page);
+    if (role !== "scan") {
+      void this.recordPageTargetId(page, role, resolvedAct);
+    }
     session.status = "connected";
     rememberAdsManagerUrl(session, page);
     if (role === "scan") session.primaryPage = page;
@@ -1318,6 +1336,89 @@ export class SessionManager {
       });
     }
     return result;
+  }
+
+  /**
+   * Запоминает targetId вкладки вместе с её ролью. Fire-and-forget; сбой
+   * игнорируется — страница без targetId просто не восстанавливается при реконнекте.
+   */
+  private async recordPageTargetId(
+    page: Page,
+    role: BrowserPageRole,
+    actId: string,
+  ): Promise<void> {
+    try {
+      const cdpSession = await page.context().newCDPSession(page);
+      let targetId: string | undefined;
+      try {
+        const info = (await cdpSession.send("Target.getTargetInfo")) as {
+          targetInfo?: { targetId?: string };
+        };
+        targetId = info?.targetInfo?.targetId;
+      } finally {
+        await cdpSession.detach().catch(() => undefined);
+      }
+      if (targetId) {
+        this.pageRolesByTargetId.set(targetId, { role, actId });
+      }
+    } catch {
+      // best-effort: страница без targetId не восстанавливается после реконнекта
+    }
+  }
+
+  /**
+   * После переподключения CDP перебирает все вкладки нового браузера, сверяет
+   * их targetId с картой ролей и восстанавливает реестры. Вкладки, чей targetId
+   * не удалось получить или не найден в карте, не попадают ни в один реестр —
+   * деградация в пустой реестр, а не в усыновление.
+   */
+  private async restoreRolePagesAfterReconnect(browser: Browser): Promise<{
+    scanPages: Map<string, Page>;
+    controlPages: Map<string, Page>;
+    interactivePages: Map<string, Page>;
+  }> {
+    const scanPages = new Map<string, Page>();
+    const controlPages = new Map<string, Page>();
+    const interactivePages = new Map<string, Page>();
+
+    if (this.pageRolesByTargetId.size === 0) {
+      return { scanPages, controlPages, interactivePages };
+    }
+
+    for (const context of safeBrowserContexts(browser)) {
+      for (const page of safeContextPages(context)) {
+        if (isPageClosed(page)) continue;
+        try {
+          const cdpSession = await page.context().newCDPSession(page);
+          let targetId: string | undefined;
+          try {
+            const info = (await cdpSession.send("Target.getTargetInfo")) as {
+              targetInfo?: { targetId?: string };
+            };
+            targetId = info?.targetInfo?.targetId;
+          } finally {
+            await cdpSession.detach().catch(() => undefined);
+          }
+          if (!targetId) continue;
+          const roleInfo = this.pageRolesByTargetId.get(targetId);
+          if (!roleInfo) continue;
+          const { role, actId } = roleInfo;
+          if (role === "control") {
+            controlPages.set(actId, page);
+            _agentMoneyPages.add(page);
+            _agentControlPages.add(page);
+          } else if (role === "interactive") {
+            interactivePages.set(actId, page);
+            _agentMoneyPages.add(page);
+          }
+          // scan не восстанавливается: он переоткрывается или усыновляется штатно
+        } catch {
+          // targetId недоступен — страница не восстанавливается
+        }
+      }
+    }
+
+    return { scanPages, controlPages, interactivePages };
   }
 
   private async connectOverReadyCdp(
