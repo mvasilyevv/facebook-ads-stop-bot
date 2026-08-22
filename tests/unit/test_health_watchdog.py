@@ -1222,3 +1222,114 @@ async def test_grpc_channel_closed_on_timeout_cancellation(monkeypatch) -> None:
     await asyncio.sleep(0.1)
 
     assert close_called, "close() не был вызван несмотря на двойную отмену"
+
+
+# ====================== per-cabinet инциденты при частичной подготовке (issue #228) ======================
+#
+# Частичный отказ prepare_browser_workspace (один кабинет не открылся из двух) должен
+# быть виден оператору по кабинету, независимо от тумблера сканирования. Общий
+# инцидент канала при этом не дублируется: если не открылся ни один — per-cabinet
+# шум не нужен, достаточно канального инцидента.
+
+
+def _workspace_fakes_partial(monkeypatch, *, accounts: list[str]) -> None:
+    """Базовая обвязка для тестов per-cabinet инцидентов: канал не готов, кабинеты заданы."""
+    from core.meta_api import browser_readiness
+    from core.observer import accounts as observer_accounts
+
+    monkeypatch.setattr(
+        browser_readiness,
+        "browser_channel_ready_now",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        observer_accounts,
+        "resolve_configured_ad_account_ids",
+        AsyncMock(return_value=list(accounts)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_workspace_partial_failure_raises_per_cabinet_incident_only_for_failed(
+    monkeypatch,
+) -> None:
+    """Один из двух не открылся → инцидент по нему, снятие по открытому."""
+    _workspace_fakes_partial(monkeypatch, accounts=["111", "222"])
+    sync_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(hw, "sync_cabinet_tab_incident", sync_mock, raising=False)
+
+    open_tabs = AsyncMock(
+        return_value=[
+            {"ad_account_id": "111", "opened": True, "url": "", "error": ""},
+            {"ad_account_id": "222", "opened": False, "url": "", "error": "tab_error"},
+        ]
+    )
+
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    calls_by_account = {
+        call.kwargs["account_id"]: call.kwargs["confirmed"] for call in sync_mock.await_args_list
+    }
+    assert calls_by_account.get("222") is False, "по неоткрытому должен быть инцидент"
+    assert calls_by_account.get("111") is True, "по открытому инцидент должен сниматься"
+
+
+@pytest.mark.asyncio
+async def test_workspace_all_failed_produces_no_per_cabinet_incidents(
+    monkeypatch,
+) -> None:
+    """Не открылся ни один → per-cabinet шума нет (общий инцидент канала достаточен)."""
+    _workspace_fakes_partial(monkeypatch, accounts=["111", "222"])
+    sync_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(hw, "sync_cabinet_tab_incident", sync_mock, raising=False)
+
+    open_tabs = AsyncMock(
+        return_value=[
+            {"ad_account_id": "111", "opened": False, "url": "", "error": "tab_error"},
+            {"ad_account_id": "222", "opened": False, "url": "", "error": "tab_error"},
+        ]
+    )
+
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs)
+
+    sync_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_incident_resolved_when_failed_cabinet_opens_on_next_tick(
+    monkeypatch,
+) -> None:
+    """Кабинет открылся на следующем тике → инцидент снят."""
+    _workspace_fakes_partial(monkeypatch, accounts=["111", "222"])
+    sync_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(hw, "sync_cabinet_tab_incident", sync_mock, raising=False)
+
+    # Тик 1: 111 открыт, 222 нет
+    open_tabs_tick1 = AsyncMock(
+        return_value=[
+            {"ad_account_id": "111", "opened": True, "url": "", "error": ""},
+            {"ad_account_id": "222", "opened": False, "url": "", "error": "tab_error"},
+        ]
+    )
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs_tick1)
+
+    failed_on_tick1 = {
+        call.kwargs["account_id"]: call.kwargs["confirmed"] for call in sync_mock.await_args_list
+    }
+    assert failed_on_tick1.get("222") is False
+
+    sync_mock.reset_mock()
+
+    # Тик 2: оба открыты — инцидент по 222 должен сняться
+    open_tabs_tick2 = AsyncMock(
+        return_value=[
+            {"ad_account_id": "111", "opened": True, "url": "", "error": ""},
+            {"ad_account_id": "222", "opened": True, "url": "", "error": ""},
+        ]
+    )
+    await hw.prepare_browser_workspace(SimpleNamespace(), open_cabinet_tabs=open_tabs_tick2)
+
+    resolved_on_tick2 = {
+        call.kwargs["account_id"]: call.kwargs["confirmed"] for call in sync_mock.await_args_list
+    }
+    assert resolved_on_tick2.get("222") is True, "инцидент по 222 должен быть снят"
