@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 
 import type { Page } from 'playwright';
 import type { SessionManager } from '../session-manager.js';
-import { withPageRoleLock, _resetPageLocks } from '../page-lock.js';
+import { withPageRoleLockForSession, _resetPageLocks } from '../page-lock.js';
 import { createMetaApiServiceHandlers } from './service.js';
 
 interface UploadCall {
@@ -560,7 +560,7 @@ describe('MetaApiService — money control isolation and upload cancellation', (
     let releaseBlock!: () => void;
     let blockStarted!: () => void;
     const blockStartedPromise = new Promise<void>((resolve) => { blockStarted = resolve; });
-    const blocker = withPageRoleLock('session-upload', 'interactive', '999', async () => {
+    const blocker = withPageRoleLockForSession({ id: 'session-upload', visionProfileId: 'profile-upload' }, 'interactive', '999', async () => {
       blockStarted();
       await new Promise<void>((resolve) => { releaseBlock = resolve; });
     });

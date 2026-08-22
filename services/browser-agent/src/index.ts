@@ -22,7 +22,7 @@ import {
   METRICS_CONTRACT_REVISION,
 } from "./am/am-completeness.js";
 import { defaultAmConfig } from "./am/am-config.js";
-import { withPageRoleLock } from "./page-lock.js";
+import { withPageRoleLockForSession } from "./page-lock.js";
 import {
   isNetworkFetchError,
   recordFetchOutcome,
@@ -372,14 +372,14 @@ async function openCabinetTabs(call: any, callback: any) {
         throw new Error("browser operation cancelled");
       }
       try {
-        const scanPage = await withPageRoleLock(session.id, "scan", actId, () =>
+        const scanPage = await withPageRoleLockForSession(session, "scan", actId, () =>
           sessionManager.ensureScanPage(session, {
             actId,
             signal: abort.controller.signal,
           }),
         );
-        const controlPage = await withPageRoleLock(
-          session.id,
+        const controlPage = await withPageRoleLockForSession(
+          session,
           "control",
           actId,
           () =>
@@ -475,8 +475,8 @@ async function runScanCycle(call: any) {
     const operationId = `scan:${req.session_id}:${actId}:${randomUUID()}`;
     // Сканы одного кабинета сериализованы между собой, но control page имеет
     // другой lock-key и другой execution context.
-    const scan = await withPageRoleLock(
-      req.session_id,
+    const scan = await withPageRoleLockForSession(
+      session,
       "scan",
       actId,
       async () => {
@@ -707,14 +707,14 @@ async function listCampaignsHandler(call: any, callback: any) {
     // A preferred-session fallback could cross a Vision profile/config revision.
     const session = sessionManager.getSession(sessionId);
     const fallbackUrl = reconstructAdsManagerUrl(session.id, actId);
-    const page = await withPageRoleLock(session.id, "scan", actId, () =>
+    const page = await withPageRoleLockForSession(session, "scan", actId, () =>
       sessionManager.ensureScanPage(session, {
         fallbackUrl,
         actId,
         signal: abort.controller.signal,
       }),
     );
-    const campaigns = await withPageRoleLock(session.id, "scan", actId, () =>
+    const campaigns = await withPageRoleLockForSession(session, "scan", actId, () =>
       listOwnerCampaigns(
         page,
         req.owner_tag ?? "",

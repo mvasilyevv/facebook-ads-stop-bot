@@ -13,7 +13,7 @@ import {
   adsManagerUrlUsesColumnsQs,
 } from "./am/am-columns-preset.js";
 import { raceWithAbort } from "./in-page-abort.js";
-import { withPageRoleLock } from "./page-lock.js";
+import { withPageRoleLockForSession } from "./page-lock.js";
 import { pageHasMetaApiToken } from "./meta-api/client.js";
 import { tracePageNav } from "./trace.js";
 import type { BrowserPageRole, BrowserSession, HumanProfile } from "./types.js";
@@ -757,7 +757,8 @@ export class SessionManager {
       signal?: AbortSignal;
     },
   ): Promise<{ action: string; ok: boolean }> {
-    return withPageRoleLock(sessionId, opts.role, opts.actId, () =>
+    const session = this.getSession(sessionId);
+    return withPageRoleLockForSession(session, opts.role, opts.actId, () =>
       this.reloadPageAfterNetworkFailureWithinRoleLock(sessionId, opts),
     );
   }

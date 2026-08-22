@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { withPageLock, withPageRoleLock, _resetPageLocks } from './page-lock.js';
+import { withPageLock, withPageRoleLock, pageLockKey, pageLockKeyForSession, withPageRoleLockForSession, _resetPageLocks } from './page-lock.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -108,6 +108,81 @@ describe('withPageLock (H-7 per-session mutex)', () => {
     assert.equal(await withPageLock('s1', async () => 'ok'), 'ok');
     // Пустой sessionId → дефолтный ключ, тоже работает.
     assert.equal(await withPageLock('', async () => 'def'), 'def');
+  });
+});
+
+// #232: ключ замка строится по Vision-профилю, а не по id логической сессии.
+describe('pageLockKeyForSession: физический браузер, а не логическая сессия', () => {
+  it('две сессии с одним visionProfileId получают один и тот же ключ', () => {
+    const s1 = { id: 'session-1', visionProfileId: 'profile-A' };
+    const s2 = { id: 'session-2', visionProfileId: 'profile-A' };
+    assert.equal(
+      pageLockKeyForSession(s1, 'control', '123'),
+      pageLockKeyForSession(s2, 'control', '123'),
+    );
+  });
+
+  it('сессии с разными visionProfileId получают разные ключи', () => {
+    const s1 = { id: 'session-1', visionProfileId: 'profile-A' };
+    const s2 = { id: 'session-2', visionProfileId: 'profile-B' };
+    assert.notEqual(
+      pageLockKeyForSession(s1, 'control', '123'),
+      pageLockKeyForSession(s2, 'control', '123'),
+    );
+  });
+
+  it('пустой visionProfileId — фолбэк на session.id', () => {
+    const s = { id: 'session-X', visionProfileId: '' };
+    assert.equal(
+      pageLockKeyForSession(s, 'scan', '456'),
+      pageLockKey('session-X', 'scan', '456'),
+    );
+  });
+
+  it('withPageRoleLockForSession сериализует две сессии с одним профилем', async () => {
+    _resetPageLocks();
+    const events: string[] = [];
+    const s1 = { id: 'session-1', visionProfileId: 'profile-A' };
+    const s2 = { id: 'session-2', visionProfileId: 'profile-A' };
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await Promise.all([
+      withPageRoleLockForSession(s1, 'control', '123', async () => {
+        events.push('A:start');
+        await sleep(30);
+        events.push('A:end');
+      }),
+      withPageRoleLockForSession(s2, 'control', '123', async () => {
+        events.push('B:start');
+        await sleep(5);
+        events.push('B:end');
+      }),
+    ]);
+    assert.deepEqual(events, ['A:start', 'A:end', 'B:start', 'B:end']);
+  });
+
+  it('withPageRoleLockForSession НЕ сериализует сессии с разными профилями', async () => {
+    _resetPageLocks();
+    const events: string[] = [];
+    const s1 = { id: 'session-1', visionProfileId: 'profile-A' };
+    const s2 = { id: 'session-2', visionProfileId: 'profile-B' };
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await Promise.all([
+      withPageRoleLockForSession(s1, 'control', '123', async () => {
+        events.push('A:start');
+        await sleep(30);
+        events.push('A:end');
+      }),
+      withPageRoleLockForSession(s2, 'control', '123', async () => {
+        events.push('B:start');
+        await sleep(5);
+        events.push('B:end');
+      }),
+    ]);
+    // Разные профили — разные ключи — параллельное выполнение.
+    assert.equal(events[0], 'A:start');
+    assert.equal(events[1], 'B:start');
+    assert.equal(events[2], 'B:end');
+    assert.equal(events[3], 'A:end');
   });
 });
 
