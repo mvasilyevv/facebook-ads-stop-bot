@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildOfferRulesBody,
+  DEFAULT_OFFER_RULES_VALUES,
   isOfferCpaValid,
   parseOfferAccountIds,
   parseOfferCountries,
@@ -18,12 +19,7 @@ describe("offer feature model", () => {
   });
 
   it("preserves unknown CPA and defaults invalid percentages safely", () => {
-    expect(rulesValuesFromOut(undefined)).toEqual({
-      cpa: "",
-      currency: "USD",
-      stop_percent_of_rule: 80,
-      warning_percent_of_stop: 80,
-    });
+    expect(rulesValuesFromOut(undefined)).toEqual(DEFAULT_OFFER_RULES_VALUES);
     expect(
       rulesValuesFromOut({
         cpa_threshold: null,
@@ -43,6 +39,7 @@ describe("offer feature model", () => {
   it("builds one validated API payload for web and TMA", () => {
     const draft = rulesValuesToPayload(
       {
+        ...DEFAULT_OFFER_RULES_VALUES,
         cpa: " 3.50 ",
         currency: "usd",
         stop_percent_of_rule: 70,
@@ -56,12 +53,22 @@ describe("offer feature model", () => {
       frequency_threshold: null,
       stop_percent_of_rule: "70",
       warning_percent_of_stop: "60",
+      cpc_percent_of_cpa: null,
+      cpl_percent_of_cpa: null,
+      cpr_percent_of_cpa: null,
+      regs_no_dep_stop_count: null,
+      spend_no_dep_from_percent: null,
+      spend_no_dep_to_percent: null,
+      spend_with_dep_from_percent: null,
+      spend_with_dep_to_percent: null,
+      min_ratio_denominator: null,
     });
   });
 
   it("rejects percentages outside the contract", () => {
     expect(() =>
       rulesValuesToPayload({
+        ...DEFAULT_OFFER_RULES_VALUES,
         cpa: "3",
         currency: "USD",
         stop_percent_of_rule: 0,
@@ -73,6 +80,7 @@ describe("offer feature model", () => {
   it("rejects a CPA outside the product dollar context", () => {
     expect(() =>
       rulesValuesToPayload({
+        ...DEFAULT_OFFER_RULES_VALUES,
         cpa: "3",
         currency: "",
         stop_percent_of_rule: 80,
@@ -86,6 +94,7 @@ describe("offer feature model", () => {
     expect(isOfferCpaValid(cpa)).toBe(true);
     expect(
       rulesValuesToPayload({
+        ...DEFAULT_OFFER_RULES_VALUES,
         cpa,
         currency: "USD",
         stop_percent_of_rule: 80,
@@ -94,6 +103,7 @@ describe("offer feature model", () => {
     ).toBe(cpa);
     expect(() =>
       rulesValuesToPayload({
+        ...DEFAULT_OFFER_RULES_VALUES,
         cpa: "3.50",
         currency: "EUR",
         stop_percent_of_rule: 80,

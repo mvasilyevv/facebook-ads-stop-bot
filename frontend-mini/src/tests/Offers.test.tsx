@@ -342,4 +342,27 @@ describe("OffersPage", () => {
     // Кнопка «Сохранить» появляется
     expect(screen.getByText("Сохранить")).toBeInTheDocument();
   });
+
+  // Восемь настраиваемых порогов стоп-правил
+  it("показывает восемь настраиваемых порогов в форме Пороги", () => {
+    render(<OffersTestWrapper />);
+    const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
+    fireEvent.click(card);
+    fireEvent.click(screen.getByText("Пороги"));
+
+    // cpc_percent_of_cpa — «Клик (CPC): % от CPA»
+    expect(screen.getByLabelText(/Клик.*% от CPA/i)).toBeInTheDocument();
+    // cpl_percent_of_cpa — «Лид (CPL): % от CPA»
+    expect(screen.getByLabelText(/Лид.*% от CPA/i)).toBeInTheDocument();
+    // cpr_percent_of_cpa — «Регистрация (CPR): % от CPA»
+    expect(screen.getByLabelText(/Регистрация.*% от CPA/i)).toBeInTheDocument();
+    // regs_no_dep_stop_count — «Регистраций без депозита (стоп, штук)»
+    expect(screen.getByLabelText(/Регистраций без депозита/i)).toBeInTheDocument();
+    // spend_no_dep_from/to — один заголовок на пару
+    expect(screen.getByText(/Спенд без депозита/i)).toBeInTheDocument();
+    // spend_with_dep_from/to — один заголовок на пару
+    expect(screen.getByText(/Спенд с депозитом/i)).toBeInTheDocument();
+    // min_ratio_denominator — «Минимальный знаменатель отношения»
+    expect(screen.getByLabelText(/Минимальный знаменатель отношения/i)).toBeInTheDocument();
+  });
 });

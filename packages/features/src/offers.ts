@@ -8,6 +8,15 @@ export interface OfferRulesValues {
   currency: string;
   stop_percent_of_rule: number;
   warning_percent_of_stop: number;
+  cpc_percent_of_cpa: string;
+  cpl_percent_of_cpa: string;
+  cpr_percent_of_cpa: string;
+  regs_no_dep_stop_count: string;
+  spend_no_dep_from_percent: string;
+  spend_no_dep_to_percent: string;
+  spend_with_dep_from_percent: string;
+  spend_with_dep_to_percent: string;
+  min_ratio_denominator: string;
 }
 
 export const DEFAULT_OFFER_RULES_VALUES: Readonly<OfferRulesValues> = {
@@ -15,6 +24,15 @@ export const DEFAULT_OFFER_RULES_VALUES: Readonly<OfferRulesValues> = {
   currency: "USD",
   stop_percent_of_rule: 80,
   warning_percent_of_stop: 80,
+  cpc_percent_of_cpa: "",
+  cpl_percent_of_cpa: "",
+  cpr_percent_of_cpa: "",
+  regs_no_dep_stop_count: "",
+  spend_no_dep_from_percent: "",
+  spend_no_dep_to_percent: "",
+  spend_with_dep_from_percent: "",
+  spend_with_dep_to_percent: "",
+  min_ratio_denominator: "",
 };
 
 /** Точность доллара. Колонка `offer_rules.cpa_threshold` — numeric(20,6). */
@@ -44,6 +62,15 @@ export function rulesValuesFromOut(
     warning_percent_of_stop: validPercentOrDefault(
       rules.warning_percent_of_stop,
     ),
+    cpc_percent_of_cpa: rules.cpc_percent_of_cpa ?? "",
+    cpl_percent_of_cpa: rules.cpl_percent_of_cpa ?? "",
+    cpr_percent_of_cpa: rules.cpr_percent_of_cpa ?? "",
+    regs_no_dep_stop_count: rules.regs_no_dep_stop_count != null ? String(rules.regs_no_dep_stop_count) : "",
+    spend_no_dep_from_percent: rules.spend_no_dep_from_percent ?? "",
+    spend_no_dep_to_percent: rules.spend_no_dep_to_percent ?? "",
+    spend_with_dep_from_percent: rules.spend_with_dep_from_percent ?? "",
+    spend_with_dep_to_percent: rules.spend_with_dep_to_percent ?? "",
+    min_ratio_denominator: rules.min_ratio_denominator != null ? String(rules.min_ratio_denominator) : "",
   };
 }
 
@@ -67,6 +94,15 @@ export function rulesValuesToPayload(
       frequency === undefined ? undefined : frequency || null,
     stop_percent_of_rule: requiredPercent(values.stop_percent_of_rule),
     warning_percent_of_stop: requiredPercent(values.warning_percent_of_stop),
+    cpc_percent_of_cpa: values.cpc_percent_of_cpa.trim() || null,
+    cpl_percent_of_cpa: values.cpl_percent_of_cpa.trim() || null,
+    cpr_percent_of_cpa: values.cpr_percent_of_cpa.trim() || null,
+    regs_no_dep_stop_count: values.regs_no_dep_stop_count.trim() ? Number(values.regs_no_dep_stop_count) : null,
+    spend_no_dep_from_percent: values.spend_no_dep_from_percent.trim() || null,
+    spend_no_dep_to_percent: values.spend_no_dep_to_percent.trim() || null,
+    spend_with_dep_from_percent: values.spend_with_dep_from_percent.trim() || null,
+    spend_with_dep_to_percent: values.spend_with_dep_to_percent.trim() || null,
+    min_ratio_denominator: values.min_ratio_denominator.trim() ? Number(values.min_ratio_denominator) : null,
   };
 }
 
@@ -111,6 +147,15 @@ export function buildOfferRulesBody(
     frequency_threshold: data.frequency_threshold,
     stop_percent_of_rule: data.stop_percent_of_rule,
     warning_percent_of_stop: data.warning_percent_of_stop,
+    cpc_percent_of_cpa: data.cpc_percent_of_cpa,
+    cpl_percent_of_cpa: data.cpl_percent_of_cpa,
+    cpr_percent_of_cpa: data.cpr_percent_of_cpa,
+    regs_no_dep_stop_count: data.regs_no_dep_stop_count,
+    spend_no_dep_from_percent: data.spend_no_dep_from_percent,
+    spend_no_dep_to_percent: data.spend_no_dep_to_percent,
+    spend_with_dep_from_percent: data.spend_with_dep_from_percent,
+    spend_with_dep_to_percent: data.spend_with_dep_to_percent,
+    min_ratio_denominator: data.min_ratio_denominator,
   };
 }
 
