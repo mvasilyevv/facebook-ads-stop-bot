@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.adset_pro.queries import (
+    load_ever_had_deposit_batch,
     load_external_deposits_batch,
     load_external_registrations_batch,
 )
@@ -151,6 +152,7 @@ def build_rule_context(
     account_currency: str,
     currency_exponent: int,
     external_deposits: int = 0,
+    today_deposits: int | None = None,
     frequency_current: Decimal | None = None,
     impressions: int | None = None,
     reach: int | None = None,
@@ -223,6 +225,7 @@ def build_rule_context(
             warning_percent_of_stop=warning_pct,
             stop_percent_of_base=stop_pct,
             external_deposits=external_deposits,
+            today_deposits=today_deposits,
             frequency_anomaly_enabled=freq_enabled,
             frequency_current=frequency_current if freq_enabled else None,
             frequency_stop_threshold=freq_stop,
@@ -389,12 +392,19 @@ async def process_scan_rows(
     fb_ids = [r.fb_ad_id for r in rows if r.fb_ad_id]
     states = await load_alert_state_by_fb_ad_id(engine, fb_ad_ids=fb_ids)
 
-    # 3. Внешние депозиты от AdSet.pro batch'ом (закрывают gap attribution с Meta).
-    external_deposits = await load_external_deposits_batch(
+    # 3а. Депозиты за сегодня (текущее кабинетное окно) — только для отображения в алерте.
+    today_deposits = await load_external_deposits_batch(
         engine,
         fb_ad_ids=fb_ids,
         window_start=tracker_day_start,
         window_end=cycle_ts,
+    )
+    # 3б. Ever-had депозиты (без окна) — для ветки ветки (deposit/no-dep guardrail).
+    # Объявление, однажды принёсшее депозит, остаётся на ветке «с депозитом» бессрочно
+    # и не возвращается в холодную ветку на границе кабинетных суток.
+    external_deposits = await load_ever_had_deposit_batch(
+        engine,
+        fb_ad_ids=fb_ids,
     )
     external_registrations = await load_external_registrations_batch(
         engine,
@@ -418,6 +428,7 @@ async def process_scan_rows(
                 offers=offers,
                 states=states,
                 external_deposits=external_deposits,
+                today_deposits=today_deposits,
                 external_registrations=external_registrations,
                 scan_id=scan_id,
                 cycle_ts=cycle_ts,
@@ -448,6 +459,7 @@ async def _process_one_row(
     offers: list[OfferRules],
     states: dict,
     external_deposits: dict[str, int],
+    today_deposits: dict[str, int],
     scan_id: int | None,
     cycle_ts: datetime,
     result: CycleResult,
@@ -530,7 +542,9 @@ async def _process_one_row(
     # откладываем любую ошибку до записи scan metrics. Так сохраняется прежний
     # fail-closed порядок: ошибочная конфигурация не создаёт money-action, а сам
     # подтверждённый снимок остаётся наблюдаемым и не маскируется пропуском строки.
+    # ever-had count (без окна) → определяет ветку; windowed count → только отображение
     ad_external_deposits = external_deposits.get(row.fb_ad_id, 0) if row.fb_ad_id else 0
+    ad_today_deposits: int | None = today_deposits.get(row.fb_ad_id) if row.fb_ad_id else None
     evaluation: RuleEvaluation | None = None
     evaluation_error: Exception | None = None
     try:
@@ -539,6 +553,7 @@ async def _process_one_row(
             account_currency=account_currency,
             currency_exponent=account_currency_exponent,
             external_deposits=ad_external_deposits,
+            today_deposits=ad_today_deposits,
             frequency_current=row.frequency,
             impressions=row.impressions,
             reach=row.reach,

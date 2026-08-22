@@ -90,6 +90,37 @@ async def load_external_deposits_batch(
         return {row[0]: int(row[1]) for row in result.all()}
 
 
+async def load_ever_had_deposit_batch(
+    engine: AsyncEngine,
+    *,
+    fb_ad_ids: list[str],
+) -> dict[str, int]:
+    """Возвращает {fb_ad_id: count} подтверждённых депозитов за всё время (без окна).
+
+    Используется для ветки ever-had-deposit: объявление, однажды принёсшее депозит,
+    остаётся на ветке «с депозитом» бессрочно — независимо от границы кабинетных суток.
+    Оконная load_external_deposits_batch используется только для отображения счётчика.
+    """
+    if not fb_ad_ids:
+        return {}
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                """
+                SELECT fb_ad_id, COUNT(*)
+                FROM tracker_click_state
+                WHERE fb_ad_id = ANY(:fb_ad_ids)
+                  AND registration = TRUE
+                  AND ftd = TRUE
+                  AND confirmed_deposit = TRUE
+                GROUP BY fb_ad_id
+                """
+            ),
+            {"fb_ad_ids": fb_ad_ids},
+        )
+        return {row[0]: int(row[1]) for row in result.all()}
+
+
 async def load_external_registrations_batch(
     engine: AsyncEngine,
     *,
