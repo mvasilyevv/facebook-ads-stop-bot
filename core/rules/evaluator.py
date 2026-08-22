@@ -168,8 +168,10 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
         spend_without_dep_hit = _evaluate_spend_range(
             enabled=ctx.spend_no_dep_enabled,
             current_value=_ratio_percent(row.spend, ctx.cpa_amount),
+            cpa_amount=ctx.cpa_amount,
+            currency=ctx.currency,
+            currency_exponent=ctx.currency_exponent,
             stop_from=ctx.spend_no_dep_from_percent,
-            stop_to=ctx.spend_no_dep_to_percent,
             warning_pct=ctx.effective_spend_no_dep_warning_percent_of_stop,
             stop_percent_of_base=ctx.stop_percent_of_base,
             code="spend_no_dep_range",
@@ -195,8 +197,10 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
     return _evaluate_spend_range(
         enabled=ctx.spend_with_dep_enabled,
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
+        cpa_amount=ctx.cpa_amount,
+        currency=ctx.currency,
+        currency_exponent=ctx.currency_exponent,
         stop_from=ctx.spend_with_dep_from_percent,
-        stop_to=ctx.spend_with_dep_to_percent,
         warning_pct=ctx.effective_spend_with_dep_warning_percent_of_stop,
         stop_percent_of_base=ctx.stop_percent_of_base,
         code="spend_with_dep_range",
@@ -725,8 +729,10 @@ def _evaluate_spend_range(
     *,
     enabled: bool,
     current_value: Decimal,
+    cpa_amount: Decimal,
+    currency: str,
+    currency_exponent: int,
     stop_from: Decimal,
-    stop_to: Decimal,
     warning_pct: Decimal,
     stop_percent_of_base: Decimal,
     code: str,
@@ -738,10 +744,10 @@ def _evaluate_spend_range(
         return None
 
     effective_from = _apply_downward_stop(stop_from, stop_percent_of_base)
-    effective_to = _apply_downward_stop(stop_to, stop_percent_of_base)
     warning_from = _warning_threshold(effective_from, warning_pct)
-    range_text = _format_percent_range(effective_from, effective_to, stop_from, stop_to)
+    cpa_text = _format_money_with_currency(cpa_amount, currency, currency_exponent)
     current = _round_percent(current_value)
+    stop_threshold = _round_percent(effective_from)
 
     if current >= effective_from:
         return RuleHit(
@@ -749,29 +755,30 @@ def _evaluate_spend_range(
             title=title,
             stage=AlertStage.STOP,
             value=current,
-            threshold=_round_percent(effective_from),
+            threshold=stop_threshold,
             summary=(
-                f"Расход {current:.2f}% от CPA при стоп-диапазоне {range_text}, {summary_suffix}"
+                f"Расход {current:.2f}% от CPA {cpa_text}, стоп {stop_threshold:.2f}%, {summary_suffix}"
             ),
             reason_text=(
-                f"Расход дошёл до {current:.2f}% от CPA и вошёл в стоп-диапазон {range_text}. "
+                f"Расход {current:.2f}% от CPA {cpa_text} достиг стопа {stop_threshold:.2f}%. "
                 f"{reason_suffix}"
             ),
         )
 
     if warning_from <= current < effective_from:
+        warning_threshold = _round_percent(warning_from)
         return RuleHit(
             code=code,
             title=title,
             stage=AlertStage.WARNING,
             value=current,
-            threshold=_round_percent(warning_from),
+            threshold=warning_threshold,
             summary=(
-                f"Расход {current:.2f}% от CPA подходит к стоп-диапазону {range_text}, "
+                f"Расход {current:.2f}% от CPA {cpa_text} подходит к стопу {stop_threshold:.2f}%, "
                 f"{summary_suffix}"
             ),
             reason_text=(
-                f"Расход дошёл до {current:.2f}% от CPA и подходит к стоп-диапазону {range_text}. "
+                f"Расход {current:.2f}% от CPA {cpa_text} приближается к стопу {stop_threshold:.2f}%. "
                 f"{reason_suffix}"
             ),
         )
@@ -869,17 +876,6 @@ def _format_threshold_value(
         f"{_format_money_with_currency(effective_value, currency, currency_exponent)} "
         f"(базовый {_format_money_with_currency(base_value, currency, currency_exponent)})"
     )
-
-
-def _format_percent_range(
-    effective_from: Decimal,
-    effective_to: Decimal,
-    base_from: Decimal,
-    base_to: Decimal,
-) -> str:
-    if Decimal(effective_from) == Decimal(base_from) and Decimal(effective_to) == Decimal(base_to):
-        return f"{effective_from:.2f}-{effective_to:.2f}%"
-    return f"{effective_from:.2f}-{effective_to:.2f}% (базовый {base_from:.2f}-{base_to:.2f}%)"
 
 
 def _warning_count(stop_count: int) -> Decimal | None:

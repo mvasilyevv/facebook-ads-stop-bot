@@ -600,3 +600,50 @@ def test_registration_stage_no_stop_on_low_spend_when_cpr_unknown():
     result = evaluate_stop_rules(row, _make_ctx())
 
     assert result.stage is None
+
+
+# Текст инцидента по расходу: одно сравнение (значение и стоп-порог), CPA в деньгах,
+# различима ветка правила. Верхняя граница диапазона и базовый диапазон — не в тексте.
+def test_spend_range_incident_text_single_comparison() -> None:
+    # Ветка без депозита: spend=3.00 (60% CPA=5.00), стоп 50% скорректирован до 40%
+    # effective_from = 80%×50% = 40; верхняя граница = 80%×70% = 56 — не должна появляться.
+    row_no_dep = _make_row(
+        spend=Decimal("3.00"),
+        registrations=3,
+        cost_per_registration=Decimal("0.50"),
+        deposits=0,
+    )
+    ctx_no_dep = _make_ctx(stop_percent_of_base=Decimal("80"))
+
+    result_no_dep = evaluate_stop_rules(row_no_dep, ctx_no_dep)
+    assert "spend_no_dep_range" in result_no_dep.stop_rule_codes
+    summary_no_dep = result_no_dep.stop_hits[0].summary
+
+    # текущий расход и стоп-порог по которому сработало
+    assert "60.00" in summary_no_dep
+    assert "40.00" in summary_no_dep
+    # верхняя граница (56%) и базовый диапазон — не в тексте
+    assert "56" not in summary_no_dep
+    assert "базовый" not in summary_no_dep
+    # CPA в деньгах и различима ветка
+    assert "5.00 USD" in summary_no_dep
+    assert "депозит" in summary_no_dep
+
+    # Ветка с депозитом: spend=4.00 (80% CPA=5.00), стоп 70%, верхняя 90% — не в тексте.
+    row_with_dep = _make_row(
+        spend=Decimal("4.00"),
+        registrations=5,
+        cost_per_registration=Decimal("0.50"),
+        deposits=0,
+    )
+    ctx_with_dep = _make_ctx(external_deposits=1, stop_percent_of_base=Decimal("100"))
+
+    result_with_dep = evaluate_stop_rules(row_with_dep, ctx_with_dep)
+    assert "spend_with_dep_range" in result_with_dep.stop_rule_codes
+    summary_with_dep = result_with_dep.stop_hits[0].summary
+
+    assert "80.00" in summary_with_dep
+    assert "70.00" in summary_with_dep
+    assert "90" not in summary_with_dep
+    assert "5.00 USD" in summary_with_dep
+    assert "депозит" in summary_with_dep
