@@ -99,6 +99,114 @@ export function OfferRulesFields({ values, onChange, disabled }: Props) {
         hint="Ранний сигнал: warning = этот % от стоп-порога."
       />
 
+      <Input
+        type="text"
+        inputMode="decimal"
+        label="CPC: % от CPA (дефолт: 2)"
+        placeholder="2"
+        value={values.cpc_percent_of_cpa}
+        onChange={(e) => onChange({ cpc_percent_of_cpa: e.target.value })}
+        disabled={disabled}
+      />
+
+      <Input
+        type="text"
+        inputMode="decimal"
+        label="CPL: % от CPA (дефолт: 10)"
+        placeholder="10"
+        value={values.cpl_percent_of_cpa}
+        onChange={(e) => onChange({ cpl_percent_of_cpa: e.target.value })}
+        disabled={disabled}
+      />
+
+      <Input
+        type="text"
+        inputMode="decimal"
+        label="CPR: % от CPA (дефолт: 20)"
+        placeholder="20"
+        value={values.cpr_percent_of_cpa}
+        onChange={(e) => onChange({ cpr_percent_of_cpa: e.target.value })}
+        disabled={disabled}
+      />
+
+      <Input
+        type="text"
+        inputMode="numeric"
+        label="Регистрации без депозита (штук) (дефолт: 5)"
+        placeholder="5"
+        value={values.regs_no_dep_stop_count}
+        onChange={(e) => onChange({ regs_no_dep_stop_count: e.target.value })}
+        disabled={disabled}
+      />
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+          Спенд без депозита (% от CPA, от и до) (дефолт: 50 - 70)
+        </label>
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <Input
+              type="text"
+              inputMode="decimal"
+              placeholder="50"
+              value={values.spend_no_dep_from_percent}
+              onChange={(e) => onChange({ spend_no_dep_from_percent: e.target.value })}
+              disabled={disabled}
+            />
+          </div>
+          <span className="text-bg-9">-</span>
+          <div className="flex-1">
+            <Input
+              type="text"
+              inputMode="decimal"
+              placeholder="70"
+              value={values.spend_no_dep_to_percent}
+              onChange={(e) => onChange({ spend_no_dep_to_percent: e.target.value })}
+              disabled={disabled}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+          Спенд с депозитом (% от CPA, от и до) (дефолт: 70 - 90)
+        </label>
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <Input
+              type="text"
+              inputMode="decimal"
+              placeholder="70"
+              value={values.spend_with_dep_from_percent}
+              onChange={(e) => onChange({ spend_with_dep_from_percent: e.target.value })}
+              disabled={disabled}
+            />
+          </div>
+          <span className="text-bg-9">-</span>
+          <div className="flex-1">
+            <Input
+              type="text"
+              inputMode="decimal"
+              placeholder="90"
+              value={values.spend_with_dep_to_percent}
+              onChange={(e) => onChange({ spend_with_dep_to_percent: e.target.value })}
+              disabled={disabled}
+            />
+          </div>
+        </div>
+      </div>
+
+      <Input
+        type="text"
+        inputMode="numeric"
+        label="База для расчёта конверсий (показов) (дефолт: 100)"
+        placeholder="100"
+        value={values.min_ratio_denominator}
+        onChange={(e) => onChange({ min_ratio_denominator: e.target.value })}
+        disabled={disabled}
+      />
+
       <RulesPreview
         loading={preview.isLoading || preview.isFetching}
         data={preview.data}
@@ -189,8 +297,7 @@ function RulesPreview({
       )}
 
       <div className="mt-3 text-[12px] text-bg-8">
-        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые проценты правил (CPC
-        2% / CPL 10% / CPR 20% от CPA) фиксированы.
+        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп.
       </div>
     </div>
   );

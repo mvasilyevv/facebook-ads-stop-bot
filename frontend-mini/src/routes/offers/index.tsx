@@ -356,6 +356,124 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
         hint="Ранний сигнал: warning = этот % от стоп-порога."
       />
 
+      <div className="border-t border-[var(--color-hairline)] pt-4 flex flex-col gap-4">
+        <Input
+          label="Клик (CPC): % от CPA"
+          placeholder="2"
+          type="text"
+          inputMode="decimal"
+          value={values.cpc_percent_of_cpa}
+          onChange={(e) =>
+            setValues((prev) => ({ ...prev, cpc_percent_of_cpa: e.target.value }))
+          }
+        />
+        <Input
+          label="Лид (CPL): % от CPA"
+          placeholder="10"
+          type="text"
+          inputMode="decimal"
+          value={values.cpl_percent_of_cpa}
+          onChange={(e) =>
+            setValues((prev) => ({ ...prev, cpl_percent_of_cpa: e.target.value }))
+          }
+        />
+        <Input
+          label="Регистрация (CPR): % от CPA"
+          placeholder="20"
+          type="text"
+          inputMode="decimal"
+          value={values.cpr_percent_of_cpa}
+          onChange={(e) =>
+            setValues((prev) => ({ ...prev, cpr_percent_of_cpa: e.target.value }))
+          }
+        />
+        <Input
+          label="Регистраций без депозита (стоп, штук)"
+          placeholder="5"
+          type="text"
+          inputMode="numeric"
+          value={values.regs_no_dep_stop_count}
+          onChange={(e) =>
+            setValues((prev) => ({ ...prev, regs_no_dep_stop_count: e.target.value }))
+          }
+        />
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+            Спенд без депозита (% от CPA, от — до)
+          </label>
+          <p className="text-[12px] text-bg-8 -mt-1">Дефолт: 50 — 70</p>
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <Input
+                type="text"
+                inputMode="decimal"
+                placeholder="50"
+                value={values.spend_no_dep_from_percent}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, spend_no_dep_from_percent: e.target.value }))
+                }
+              />
+            </div>
+            <span className="text-bg-9">—</span>
+            <div className="flex-1">
+              <Input
+                type="text"
+                inputMode="decimal"
+                placeholder="70"
+                value={values.spend_no_dep_to_percent}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, spend_no_dep_to_percent: e.target.value }))
+                }
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+            Спенд с депозитом (% от CPA, от — до)
+          </label>
+          <p className="text-[12px] text-bg-8 -mt-1">Дефолт: 70 — 90</p>
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <Input
+                type="text"
+                inputMode="decimal"
+                placeholder="70"
+                value={values.spend_with_dep_from_percent}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, spend_with_dep_from_percent: e.target.value }))
+                }
+              />
+            </div>
+            <span className="text-bg-9">—</span>
+            <div className="flex-1">
+              <Input
+                type="text"
+                inputMode="decimal"
+                placeholder="90"
+                value={values.spend_with_dep_to_percent}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, spend_with_dep_to_percent: e.target.value }))
+                }
+              />
+            </div>
+          </div>
+        </div>
+
+        <Input
+          label="Минимальный знаменатель отношения"
+          placeholder="100"
+          type="text"
+          inputMode="numeric"
+          value={values.min_ratio_denominator}
+          onChange={(e) =>
+            setValues((prev) => ({ ...prev, min_ratio_denominator: e.target.value }))
+          }
+        />
+      </div>
+
       <RulesPreview
         loading={preview.isLoading || preview.isFetching}
         data={preview.data}
@@ -482,8 +600,7 @@ function RulesPreview({
       )}
 
       <div className="mt-3 text-[12px] text-bg-8">
-        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые
-        проценты правил (CPC 2% / CPL 10% / CPR 20% от CPA) фиксированы.
+        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп.
       </div>
     </div>
   );
