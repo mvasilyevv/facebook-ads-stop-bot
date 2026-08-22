@@ -1606,6 +1606,103 @@ def test_run_id_is_rejected_when_it_is_not_an_identifier() -> None:
     assert _task_item(_campaign_create_row({"run_id": 12345}))["run_id"] is None
 
 
+@pytest.mark.asyncio
+async def test_system_section_disabled_scan_is_not_critical_and_no_ghost_workers(
+    monkeypatch,
+) -> None:
+    """Выключенный тумблер — осознанное состояние, а не инцидент.
+
+    Два случая одновременно:
+    - секция НЕ CRITICAL;
+    - на пустом cabinet_runtime не появляются «воркеры» со статусом unknown
+      и не накапливаются cabinet_runtime_missing на каждый настроенный кабинет.
+    """
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_scan_state",
+        AsyncMock(
+            return_value={
+                "enabled": False,
+                "last_scan_at": None,
+                "last_scan_outcome": None,
+                "next_scan_at": None,
+                "campaign_ids": [],
+                "actors": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_configured_ad_account_ids",
+        AsyncMock(return_value=["111", "222"]),
+    )
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    assert section.data is not None
+    assert section.data.severity != OperatorSeverity.CRITICAL, (
+        "выключенный тумблер не должен давать CRITICAL"
+    )
+    assert section.data.severity != OperatorSeverity.OK, (
+        "выключенный тумблер без данных не должен давать OK"
+    )
+    cabinet_missing_issues = [
+        issue for issue in section.issues if issue.code == "cabinet_runtime_missing"
+    ]
+    assert cabinet_missing_issues == [], (
+        "при выключенном сканировании cabinet_runtime_missing не должны появляться"
+    )
+    ghost_workers = [w for w in section.data.workers if w.status == "unknown"]
+    assert ghost_workers == [], "при выключенном сканировании phantom-воркеры не должны появляться"
+    assert any(issue.code == "monitoring_disabled" for issue in section.issues), (
+        "должен быть issue monitoring_disabled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_section_enabled_scan_with_no_coverage_stays_critical(
+    monkeypatch,
+) -> None:
+    """Включённый мониторинг без покрытия — тихая дыра, обязан остаться CRITICAL."""
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_scan_state",
+        AsyncMock(
+            return_value={
+                "enabled": True,
+                "last_scan_at": now,
+                "last_scan_outcome": "empty",
+                "next_scan_at": None,
+                "campaign_ids": [],
+                "actors": [
+                    {
+                        "ad_account_id": "111",
+                        "owner_instance": None,
+                        "lease_expires_at": None,
+                        "stage": "idle",
+                        "last_progress_at": now,
+                        "last_snapshot_at": now,
+                        "error": None,
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_configured_ad_account_ids",
+        AsyncMock(return_value=["111"]),
+    )
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    assert section.data is not None
+    assert section.data.severity == OperatorSeverity.CRITICAL
+    assert any(issue.code == "scan_nothing_monitored" for issue in section.issues)
+
+
 def test_running_campaign_action_links_to_its_run_before_it_finishes() -> None:
     """Ссылка на залив нужна раньше всего, пока он ещё идёт.
 

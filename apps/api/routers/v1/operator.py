@@ -1160,37 +1160,40 @@ async def _system_section(
                 )
             )
 
-    known_accounts = {worker.id.removeprefix("observer:") for worker in workers}
-    for account_id in sorted(set(expected_accounts) - known_accounts):
-        workers.append(
-            OperatorWorkerState(
-                id=f"observer:{account_id}",
-                label=f"Observer · {account_id}",
-                severity=OperatorSeverity.UNKNOWN,
-                status="unknown",
-                last_activity_at=None,
+    # При выключенном сканировании cabinet_runtime пуст по определению — актёров
+    # никто не создаёт. Отсутствующие строки runtime здесь не являются ошибкой.
+    if scan.get("enabled") is not False:
+        known_accounts = {worker.id.removeprefix("observer:") for worker in workers}
+        for account_id in sorted(set(expected_accounts) - known_accounts):
+            workers.append(
+                OperatorWorkerState(
+                    id=f"observer:{account_id}",
+                    label=f"Observer · {account_id}",
+                    severity=OperatorSeverity.UNKNOWN,
+                    status="unknown",
+                    last_activity_at=None,
+                )
             )
-        )
-        issues.append(
-            OperatorIssue(
-                code="cabinet_runtime_missing",
-                title=f"Cabinet {account_id}: actor ещё не подтверждён",
-                detail="В PostgreSQL нет runtime snapshot для настроенного кабинета.",
-                severity=OperatorSeverity.UNKNOWN,
-                correlation_id=None,
+            issues.append(
+                OperatorIssue(
+                    code="cabinet_runtime_missing",
+                    title=f"Cabinet {account_id}: actor ещё не подтверждён",
+                    detail="В PostgreSQL нет runtime snapshot для настроенного кабинета.",
+                    severity=OperatorSeverity.UNKNOWN,
+                    correlation_id=None,
+                )
             )
-        )
 
-    if not workers:
-        issues.append(
-            OperatorIssue(
-                code="cabinet_runtime_missing",
-                title="Состояние cabinet actors ещё не подтверждено",
-                detail="PostgreSQL пока не содержит ни одного cabinet_runtime snapshot.",
-                severity=OperatorSeverity.UNKNOWN,
-                correlation_id=None,
+        if not workers:
+            issues.append(
+                OperatorIssue(
+                    code="cabinet_runtime_missing",
+                    title="Состояние cabinet actors ещё не подтверждено",
+                    detail="PostgreSQL пока не содержит ни одного cabinet_runtime snapshot.",
+                    severity=OperatorSeverity.UNKNOWN,
+                    correlation_id=None,
+                )
             )
-        )
     if scan.get("enabled") is True and not expected_accounts:
         issues.append(
             OperatorIssue(
@@ -1337,13 +1340,13 @@ async def _system_section(
             expected_accounts, list(scan.get("campaign_ids") or [])
         )
     if scan.get("enabled") is False:
-        severity = OperatorSeverity.CRITICAL
+        severity = OperatorSeverity.UNKNOWN
         issues.append(
             OperatorIssue(
                 code="monitoring_disabled",
                 title="Автоматический мониторинг выключен",
                 detail=None,
-                severity=OperatorSeverity.CRITICAL,
+                severity=OperatorSeverity.UNKNOWN,
                 correlation_id=None,
             )
         )
