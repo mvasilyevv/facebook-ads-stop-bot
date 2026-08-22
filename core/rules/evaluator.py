@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage
 from core.money import require_exact_currency_amount
@@ -409,15 +409,15 @@ def _registrations_without_deposit_stop_candidate(
         return None
     current = Decimal(row.registrations)
     stop_threshold = Decimal(ctx.regs_no_dep_stop_count)
-    warning_threshold = _warning_count(
-        ctx.regs_no_dep_stop_count,
-        ctx.effective_cpr_warning_percent_of_stop,
-    )
+    warning_threshold = _warning_count(ctx.regs_no_dep_stop_count)
     return _decimal_stop_candidate(
         value=current,
         enabled=True,
         stop_threshold=stop_threshold,
-        warning_threshold=warning_threshold,
+        # Ступени предупреждения при stop<=1 не существует: сравнение со стопом
+        # закрывает весь диапазон, а нулевой порог дал бы предупреждение на
+        # каждом объявлении с подтверждённым нулём регистраций.
+        warning_threshold=warning_threshold if warning_threshold is not None else stop_threshold,
         code="regs_no_dep_stop",
     )
 
@@ -680,10 +680,7 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
         return None
 
     stop_val = Decimal(ctx.regs_no_dep_stop_count)
-    warning_val = _warning_count(
-        ctx.regs_no_dep_stop_count,
-        ctx.effective_cpr_warning_percent_of_stop,
-    )
+    warning_val = _warning_count(ctx.regs_no_dep_stop_count)
     current = Decimal(row.registrations)
 
     if current >= stop_val:
@@ -704,7 +701,7 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
             ),
         )
 
-    if current >= warning_val:
+    if warning_val is not None and current >= warning_val:
         return RuleHit(
             code="regs_no_dep_stop",
             title=rule_label("regs_no_dep_stop"),
@@ -885,8 +882,16 @@ def _format_percent_range(
     return f"{effective_from:.2f}-{effective_to:.2f}% (базовый {base_from:.2f}-{base_to:.2f}%)"
 
 
-def _warning_count(stop_count: int, warning_pct: Decimal) -> Decimal:
-    return (Decimal(stop_count) * Decimal(warning_pct) / _HUNDRED).quantize(
-        Decimal("1"),
-        rounding=ROUND_CEILING,
-    )
+def _warning_count(stop_count: int) -> Decimal | None:
+    # Для целого счётчика регистраций предупреждение приходит за одну единицу до
+    # стопа. Процентная формула с ceil давала вырождение: при stop=5 любая
+    # чувствительность от 81% округлялась обратно в 5, и пауза наступала без
+    # предупреждения.
+    #
+    # При stop<=1 предупредить не за что: ступени между нулём и первой
+    # регистрацией не существует. Это None — «не задано», а не 0: ноль
+    # регистраций есть подтверждённый ноль, и предупреждение по нему полетело бы
+    # на каждом объявлении, ещё не начавшем работать.
+    if stop_count <= 1:
+        return None
+    return Decimal(stop_count - 1)
