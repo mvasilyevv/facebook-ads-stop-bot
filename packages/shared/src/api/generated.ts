@@ -3439,6 +3439,24 @@ export interface components {
        * @default 80
        */
       warning_percent_of_stop: string;
+      /** Cpc Percent Of Cpa */
+      cpc_percent_of_cpa?: string | null;
+      /** Cpl Percent Of Cpa */
+      cpl_percent_of_cpa?: string | null;
+      /** Cpr Percent Of Cpa */
+      cpr_percent_of_cpa?: string | null;
+      /** Regs No Dep Stop Count */
+      regs_no_dep_stop_count?: number | null;
+      /** Spend No Dep From Percent */
+      spend_no_dep_from_percent?: string | null;
+      /** Spend No Dep To Percent */
+      spend_no_dep_to_percent?: string | null;
+      /** Spend With Dep From Percent */
+      spend_with_dep_from_percent?: string | null;
+      /** Spend With Dep To Percent */
+      spend_with_dep_to_percent?: string | null;
+      /** Min Ratio Denominator */
+      min_ratio_denominator?: number | null;
     };
     /**
      * OfferRuleUpsertIn
@@ -3463,6 +3481,24 @@ export interface components {
        * @default 80
        */
       warning_percent_of_stop: number | string;
+      /** Cpc Percent Of Cpa */
+      cpc_percent_of_cpa?: number | string | null;
+      /** Cpl Percent Of Cpa */
+      cpl_percent_of_cpa?: number | string | null;
+      /** Cpr Percent Of Cpa */
+      cpr_percent_of_cpa?: number | string | null;
+      /** Regs No Dep Stop Count */
+      regs_no_dep_stop_count?: number | null;
+      /** Spend No Dep From Percent */
+      spend_no_dep_from_percent?: number | string | null;
+      /** Spend No Dep To Percent */
+      spend_no_dep_to_percent?: number | string | null;
+      /** Spend With Dep From Percent */
+      spend_with_dep_from_percent?: number | string | null;
+      /** Spend With Dep To Percent */
+      spend_with_dep_to_percent?: number | string | null;
+      /** Min Ratio Denominator */
+      min_ratio_denominator?: number | null;
     };
     /**
      * OfferUpdateIn
