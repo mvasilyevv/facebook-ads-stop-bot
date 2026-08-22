@@ -31,6 +31,13 @@
 `level:0`…`level:3` или `level:parking`, читаемый разрез по уровням — issue
 [#268](https://github.com/mvasilyevv/facebook-ads-stop-bot/issues/268).
 
+### Исполнители
+
+Реализация по готовой спеке уходит внешним исполнителям — AntiGravity (`agy`)
+и Claude CLI (`claude -p`); архитектура, money-путь, приёмка и merge остаются
+за управляющей сессией. Кого на какую задачу, как устроено рабочее место,
+порядок приёмки и замеренная цена — `docs/agents/executors.md`.
+
 ### Инженерная команда
 
 Девять ролей, по одной на границу владения из `CONTEXT-MAP.md`: `eng-lead`,
