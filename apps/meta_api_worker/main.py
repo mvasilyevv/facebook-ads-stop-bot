@@ -777,10 +777,14 @@ async def _fail_irreversible(
         reason,
         exc,
     )
-    final_status = await mark_task_failed_or_cancelled(
+    # Отмена сюда НЕ доезжает намеренно. Ответ Meta мог потеряться после коммита,
+    # поэтому побочный эффект не исключён: назвать такую задачу «отменено» значит
+    # сказать оператору, что ничего не произошло, и снять требование сверки с
+    # возможной сироты. Отмена уважается только там, где отсутствие побочного
+    # эффекта доказано, — на pre-send путях.
+    final_status = await mark_task_failed(
         engine,
         task_id=task.id,
-        target_lock_key=str(payload.target_id),
         error=f"irreversible_no_retry ({reason}): проверь Meta вручную — возможен дубль: {exc!r}",
         result={
             "outcome": "UNKNOWN",

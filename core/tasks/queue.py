@@ -1881,12 +1881,10 @@ async def mark_task_failed_or_cancelled(
                             THEN COALESCE(cancel_reason, :err)
                         ELSE :err
                     END,
-                    result = CASE
-                        WHEN cancel_requested_at IS NOT NULL
-                            THEN (COALESCE(CAST(:res AS JSONB), result)
-                                  - 'reconcile_required' - 'manual_review_required')
-                        ELSE COALESCE(CAST(:res AS JSONB), result)
-                    END,
+                    -- Флаги сверки не вычищаются даже при отмене: требование
+                    -- ручной проверки принадлежит исходу внешней операции, а не
+                    -- тому, просил ли оператор отмену.
+                    result = COALESCE(CAST(:res AS JSONB), result),
                     completed_at = NOW(),
                     updated_at = NOW()
                 WHERE id = :id AND status = 'running'

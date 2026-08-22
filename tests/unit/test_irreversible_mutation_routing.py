@@ -350,7 +350,7 @@ async def test_irreversible_value_error_after_boundary_is_unknown_manual_review(
     _patched,
 ) -> None:
     """A post-response parser error cannot prove that Meta rejected the create."""
-    spy_fail, spy_requeue, spy_fail_or_cancelled = _patched
+    spy_fail, spy_requeue, _spy_fail_or_cancelled = _patched
     monkeypatch.setattr(
         meta,
         "execute_mutation",
@@ -364,9 +364,8 @@ async def test_irreversible_value_error_after_boundary_is_unknown_manual_review(
     )
 
     spy_requeue.assert_not_awaited()
-    spy_fail.assert_not_awaited()
-    spy_fail_or_cancelled.assert_awaited_once()
-    assert spy_fail_or_cancelled.await_args.kwargs["result"] == {
+    spy_fail.assert_awaited_once()
+    assert spy_fail.await_args.kwargs["result"] == {
         "outcome": "UNKNOWN",
         "reconcile_required": True,
         "manual_review_required": True,

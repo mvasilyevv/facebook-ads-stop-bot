@@ -143,16 +143,20 @@ async def test_permanent_exception_without_cancel_calls_mark_task_failed_or_canc
 
 
 @pytest.mark.asyncio
-async def test_fail_irreversible_with_cancel_calls_mark_task_failed_or_cancelled(
+async def test_fail_irreversible_with_cancel_stays_failed_and_keeps_reconcile(
     monkeypatch, _base
 ) -> None:
-    """_fail_irreversible: задача с cancel_requested_at → mark_task_failed_or_cancelled."""
+    """Отмена НЕ доезжает до необратимого пути: побочный эффект не исключён.
+
+    Ответ Meta мог потеряться после коммита. Назвать такую задачу «отменено»
+    значит сказать оператору, что ничего не произошло, и снять требование
+    сверки с возможной сироты в Ads Manager.
+    """
     monkeypatch.setattr(
         meta,
         "execute_mutation",
         AsyncMock(side_effect=ValueError("post-response id malformed")),
     )
-    _base.failed_or_cancelled.return_value = "cancelled"
 
     await meta.process_one_task(
         object(),
@@ -160,21 +164,22 @@ async def test_fail_irreversible_with_cancel_calls_mark_task_failed_or_cancelled
         client=AsyncMock(),
     )
 
-    _base.failed_or_cancelled.assert_awaited_once()
-    _base.failed.assert_not_awaited()
+    _base.failed_or_cancelled.assert_not_awaited()
+    _base.failed.assert_awaited_once()
+    stored = _base.failed.await_args.kwargs["result"]
+    assert stored["outcome"] == "UNKNOWN"
+    assert stored["reconcile_required"] is True
+    assert stored["manual_review_required"] is True
 
 
 @pytest.mark.asyncio
-async def test_fail_irreversible_without_cancel_calls_mark_task_failed_or_cancelled(
-    monkeypatch, _base
-) -> None:
-    """_fail_irreversible: задача без cancel → mark_task_failed_or_cancelled, вернула 'failed'."""
+async def test_fail_irreversible_without_cancel_stays_failed(monkeypatch, _base) -> None:
+    """Необратимый путь без запроса отмены закрывается как failed, как и раньше."""
     monkeypatch.setattr(
         meta,
         "execute_mutation",
         AsyncMock(side_effect=ValueError("post-response id malformed")),
     )
-    _base.failed_or_cancelled.return_value = "failed"
 
     await meta.process_one_task(
         object(),
@@ -182,8 +187,8 @@ async def test_fail_irreversible_without_cancel_calls_mark_task_failed_or_cancel
         client=AsyncMock(),
     )
 
-    _base.failed_or_cancelled.assert_awaited_once()
-    _base.failed.assert_not_awaited()
+    _base.failed_or_cancelled.assert_not_awaited()
+    _base.failed.assert_awaited_once()
 
 
 # ====================== unretryable browser rejection (#211) ======================
