@@ -370,9 +370,9 @@ def test_registration_stage_prioritizes_regs_without_dep_stop_over_cpr_warning()
 # Проверяем что per-rule cpr_warning_percent_of_stop влияет на spend-guardrail
 # в регистрационной ступени. regs_no_dep_stop теперь использует фиксированный
 # шаг stop-1 и при registrations=3 (< 4=stop-1) не срабатывает; вместо него
-# spend_no_dep_range WARNING использует cpr_warning_pct=50%:
+# spend_no_dep_range WARNING использует своё поле чувствительности, 50%:
 # warning_from = 50% × 50% = 25%, текущий spend = 1.60/5.00×100 = 32% — в зоне.
-def test_registration_stage_cpr_warning_pct_affects_spend_no_dep_guardrail():
+def test_registration_stage_spend_no_dep_warning_pct_fires_warning():
     row = _make_row(
         spend=Decimal("1.60"),
         clicks=20,
@@ -388,7 +388,7 @@ def test_registration_stage_cpr_warning_pct_affects_spend_no_dep_guardrail():
         row,
         _make_ctx(
             warning_percent_of_stop=Decimal("80"),
-            cpr_warning_percent_of_stop=Decimal("50"),
+            spend_no_dep_warning_percent_of_stop=Decimal("50"),
         ),
     )
 
