@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
 import type { SessionManager } from '../session-manager.js';
-import { _resetPageLocks } from '../page-lock.js';
+import { _resetPageLocks, withPageRoleLockForSession } from '../page-lock.js';
 import { BROWSER_CONTRACT_VERSION, createMetaApiServiceHandlers } from './service.js';
 
 function cancellableGraphPage(onStarted: () => void): any {
@@ -802,7 +802,9 @@ describe('MetaApiService exact-profile health', () => {
       id: 'session-exact',
       visionProfileId: 'profile-exact',
       primaryPage: { url: () => 'https://adsmanager.facebook.com/?act=1855748448431929' },
-      browser: { contexts: () => [{ pages: () => [adsPage] }] },
+      scanPages: new Map([['1234567890123456', adsPage as any]]),
+      controlPages: new Map(),
+      interactivePages: new Map(),
     };
     const fakeManager = {
       getSessionForVisionProfile: () => session,
@@ -928,6 +930,110 @@ describe('MetaApiService exact-profile health', () => {
     assert.match(response.detail, /ad_account_id must be 1\.\.32 digits/);
     // Кабинет из вкладки в ответ не просочился.
     assert.equal(response.detail.includes('1855748448431929'), false);
+  });
+
+  // #230 / #229: проба без явного кабинета обязана брать страницу из реестров
+  // роли сессии, а не из произвольных контекстов браузера. Замок берётся по
+  // роли найденной страницы, что ставит пробу в одну очередь со сканом.
+
+  it('probe without explicit cabinet picks scan page from scanPages and serializes with the scan lock', async () => {
+    _resetPageLocks();
+    const scanPage = { isClosed: () => false };
+    const session = {
+      id: 'session-regs',
+      visionProfileId: 'profile-regs',
+      scanPages: new Map([['777', scanPage as any]]),
+      controlPages: new Map(),
+      interactivePages: new Map(),
+    };
+    const fakeManager = {
+      getSessionForVisionProfile: () => session,
+    } as unknown as SessionManager;
+
+    let receivedPage: any = null;
+    let probeAllowFinish!: () => void;
+    const probeCanFinish = new Promise<void>((r) => { probeAllowFinish = r; });
+
+    const handlers = createMetaApiServiceHandlers(fakeManager, {
+      checkMetaApiHealth: async (page) => {
+        receivedPage = page;
+        await probeCanFinish;
+        return {
+          healthy: true, currentUrl: '', tokenPresent: false, tokenLength: 0,
+          detail: 'ok', probePerformed: false, probeOk: false, probeStatusCode: 0,
+          probeDurationMs: 0, probeDetail: 'not_performed',
+        };
+      },
+    });
+
+    // Занимаем scan-замок кабинета 777 до старта пробы.
+    let scanLockReleaseResolve!: () => void;
+    const scanLockRelease = new Promise<void>((r) => { scanLockReleaseResolve = r; });
+    const scanLockTask = withPageRoleLockForSession(
+      session as any, 'scan', '777', () => scanLockRelease,
+    );
+
+    const probePromise = new Promise<any>((resolve, reject) => {
+      handlers.checkMetaApiHealth(
+        unaryCall({ session_id: '', expected_vision_profile_id: 'profile-regs', ad_account_id: '' }),
+        (err: unknown, val: unknown) => (err ? reject(err) : resolve(val)),
+      );
+    });
+
+    // Прокручиваем event loop до конца макрозадачи: если бы проба брала замок
+    // не по роли найденной страницы, она бы уже стартовала под занятым
+    // scan-замком. Микрозадач для этого мало — вызов идёт через несколько await.
+    for (let i = 0; i < 5; i += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+    assert.equal(receivedPage, null, 'проба не должна стартовать пока scan-замок занят');
+
+    // Освобождаем scan-замок — теперь проба должна получить страницу из scanPages.
+    scanLockReleaseResolve();
+    await scanLockTask;
+    probeAllowFinish();
+    await probePromise;
+
+    assert.equal(receivedPage, scanPage as any, 'проба берёт страницу из scanPages');
+  });
+
+  it('probe without explicit cabinet ignores browser context pages not in role registries', async () => {
+    _resetPageLocks();
+    let probeRan = false;
+    const adsPage = {
+      isClosed: () => false,
+      url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123',
+    };
+    const session = {
+      id: 'session-no-regs',
+      visionProfileId: 'profile-no-regs',
+      // Browser имеет живую вкладку Ads Manager, но в реестрах ролей её нет.
+      browser: { contexts: () => [{ pages: () => [adsPage] }] } as any,
+      scanPages: new Map(),
+      controlPages: new Map(),
+      interactivePages: new Map(),
+    };
+    const fakeManager = {
+      getSessionForVisionProfile: () => session,
+    } as unknown as SessionManager;
+
+    const handlers = createMetaApiServiceHandlers(fakeManager, {
+      checkMetaApiHealth: async () => {
+        probeRan = true;
+        throw new Error('проба не должна запускаться: страница не в реестре роли');
+      },
+    });
+
+    const response = await new Promise<any>((resolve, reject) => {
+      handlers.checkMetaApiHealth(
+        unaryCall({ session_id: '', expected_vision_profile_id: 'profile-no-regs', ad_account_id: '' }),
+        (err: unknown, val: unknown) => (err ? reject(err) : resolve(val)),
+      );
+    });
+
+    assert.equal(probeRan, false, 'проба не должна брать вкладку вне реестров роли');
+    assert.equal(response.healthy, false);
+    assert.equal(response.detail, 'no_ads_manager_page');
   });
 });
 
