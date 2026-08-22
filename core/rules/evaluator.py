@@ -193,7 +193,9 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
     # аудит 2026-07-12 H-2): кап по spend/CPA один и тот же при 1 и при N депозитах —
     # консервативный дневной потолок расхода на ад. Текст алерта не должен намекать
     # на учёт количества депозитов в формуле.
-    total_deposits = ctx.external_deposits
+    # today_deposits — только за текущие кабинетные сутки (display); ветка (ever-had)
+    # определяется external_deposits и не меняется при today_deposits=0 или None.
+    today_count = ctx.today_deposits if ctx.today_deposits is not None else 0
     return _evaluate_spend_range(
         enabled=ctx.spend_with_dep_enabled,
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
@@ -205,9 +207,9 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         stop_percent_of_base=ctx.stop_percent_of_base,
         code="spend_with_dep_range",
         title=rule_label("spend_with_dep_range"),
-        summary_suffix=f"депозиты есть ({deposits_ru(total_deposits)}), кап по расходу",
+        summary_suffix=f"депозиты есть ({deposits_ru(today_count)}), кап по расходу",
         reason_suffix=(
-            f"Депозиты уже есть ({deposits_ru(total_deposits)}), но расход достиг дневного "
+            f"Депозиты уже есть ({deposits_ru(today_count)}), но расход достиг дневного "
             "капа относительно CPA — кап не зависит от числа депозитов."
         ),
     )
