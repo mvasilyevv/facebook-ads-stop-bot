@@ -2958,7 +2958,8 @@ class MetaApiClient:
         )
         authority = _OPERATION_AUTHORITY.get()
         controlled_call = money_call or (
-            authority is not None and authority.caller in {"campaign_creator", "meta_api"}
+            authority is not None
+            and authority.caller in {"autopause", "campaign_creator", "meta_api"}
         )
         if controlled_call and requested_account_id is None:
             raise ValueError("money Graph call requires explicit ad_account_id")
