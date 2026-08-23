@@ -79,6 +79,9 @@ RETIRED_SOURCE_KEYS = frozenset(
     {
         "DESKTOP_KASM_SERVICE_USER",
         "DESKTOP_KASM_SERVICE_PASSWORD",
+        # Ключ брокера теперь читается файлом из каталога брокера и в окружении
+        # не передаётся; потребителей этого имени в репозитории больше нет.
+        "DESKTOP_RUSTDESK_KEY",
     }
 )
 BOOTSTRAP_VISION_KEYS = ("VISION_X_TOKEN", "VISION_PROFILE_ID")
@@ -96,8 +99,9 @@ BOOTSTRAP_LEGACY_DROP_KEYS = frozenset(
         "DESKTOP_GUACAMOLE_POSTGRES_USER",
         # Ниже — то, чем теперь владеет сам fbctl: образ, публичный origin и
         # VNC-пароль задаются runtime-конфигурацией, а не приходят из source.
-        # Ретированные имена сюда не добавляются: устаревший ключ в source
-        # означает несвежий конфиг, и bootstrap обязан назвать его вслух.
+        # Ретированные имена (RETIRED_SOURCE_KEYS) сюда не добавляются: они
+        # отбрасываются отдельно и безусловно, попадая в returned dropped — так
+        # bootstrap «называет их вслух» без падения выкатки.
         "DESKTOP_PUBLIC_ORIGIN",
         "DESKTOP_VNC_PASSWORD",
         "DESKTOP_WEBTOP_IMAGE",
@@ -602,6 +606,12 @@ def project_bootstrap_source(
 
     result = dict(values)
     dropped: list[str] = []
+    # Ретированные ключи отбрасываются безусловно: они уже не значат ничего,
+    # но bootstrap обязан сообщить о них — имена попадают в returned dropped.
+    for key in RETIRED_SOURCE_KEYS:
+        if key in result:
+            result.pop(key)
+            dropped.append(key)
     if project_known_legacy_source:
         for key in BOOTSTRAP_LEGACY_DROP_KEYS:
             if key in result:

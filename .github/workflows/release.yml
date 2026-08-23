@@ -308,8 +308,7 @@ jobs:
             --reuse-existing-caddy-credentials \
             --project-known-legacy-source \
             --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
-            --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED" \
-            --enable-scanning
+            --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED"
       - name: Remove temporary GHCR credentials
         if: always()
         timeout-minutes: 5

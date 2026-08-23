@@ -3633,6 +3633,7 @@ def test_rustdesk_channel_survives_the_source_schema(tmp_path) -> None:
     assert RETIRED_SOURCE_KEYS == {
         "DESKTOP_KASM_SERVICE_USER",
         "DESKTOP_KASM_SERVICE_PASSWORD",
+        "DESKTOP_RUSTDESK_KEY",
     }
 
 
@@ -4144,3 +4145,25 @@ def test_desktop_channel_heals_once_then_waits_by_reading() -> None:
 
     assert probes.heal_calls == 1, "профиль перезапускался повторно — браузер не успевает встать"
     assert probes.vision_reads >= 2, "готовность обязана проверяться чтением, а не лечением"
+
+
+def test_bootstrap_projection_drops_retired_keys() -> None:
+    """Ретированный ключ назван в отчёте, а не роняет bootstrap чистого host.
+
+    Обычный deploy эти имена уже отбрасывает молча. Пока bootstrap на них падал,
+    поднять чистый host из CI было нельзя вовсе.
+    """
+    from fbctl.config import RETIRED_SOURCE_KEYS, project_bootstrap_source
+
+    source = {"API_KEY": "value", **{key: "legacy" for key in RETIRED_SOURCE_KEYS}}
+
+    projected, dropped = project_bootstrap_source(source, project_known_legacy_source=False)
+
+    assert set(projected) == {"API_KEY"}
+    assert set(dropped) == set(RETIRED_SOURCE_KEYS)
+
+    with pytest.raises(FbctlError):
+        project_bootstrap_source(
+            {"API_KEY": "value", "TOTALLY_UNKNOWN_KEY": "x"},
+            project_known_legacy_source=True,
+        )
