@@ -4298,6 +4298,25 @@ def test_bootstrap_projection_drops_retired_keys() -> None:
         )
 
 
+def test_bootstrap_projection_drops_a_bare_ip_channel_address() -> None:
+    from fbctl.config import project_bootstrap_source
+
+    source_ip = {"API_KEY": "x", "DESKTOP_RUSTDESK_SERVER": "203.0.113.10"}
+    projected, dropped = project_bootstrap_source(source_ip, project_known_legacy_source=True)
+    assert set(projected) == {"API_KEY"}
+    assert set(dropped) == {"DESKTOP_RUSTDESK_SERVER"}
+
+    source_dns = {"API_KEY": "x", "DESKTOP_RUSTDESK_SERVER": "desktop.example.test"}
+    projected, dropped = project_bootstrap_source(source_dns, project_known_legacy_source=True)
+    assert set(projected) == {"API_KEY", "DESKTOP_RUSTDESK_SERVER"}
+    assert set(dropped) == set()
+
+    source_invalid = {"API_KEY": "x", "DESKTOP_RUSTDESK_SERVER": "not a host!"}
+    projected, dropped = project_bootstrap_source(source_invalid, project_known_legacy_source=True)
+    assert set(projected) == {"API_KEY", "DESKTOP_RUSTDESK_SERVER"}
+    assert set(dropped) == set()
+
+
 def test_invalid_source_values_are_reported_together() -> None:
     """Негодные значения перечисляются одним сообщением, а не по одному за прогон.
 
