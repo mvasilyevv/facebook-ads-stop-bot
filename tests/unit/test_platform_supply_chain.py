@@ -144,13 +144,15 @@ def test_production_ssh_cannot_hang_forever() -> None:
     """
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert release.count("'  ConnectTimeout 15'") == 2, (
-        "ConnectTimeout задан не во всех двух местах, где собирается ~/.ssh/config"
+    # ~/.ssh/config собирается ровно в одном месте — в джобе deploy. Проверка
+    # bootstrap source на host не ходит и деплойного ключа не получает.
+    assert release.count("'  ConnectTimeout 15'") == 1, (
+        "ConnectTimeout задан не во всех местах, где собирается ~/.ssh/config"
     )
-    assert release.count("'  ServerAliveInterval 15'") == 2
-    assert release.count("'  ServerAliveCountMax 6'") == 2
-    assert release.count("'  BatchMode yes'") == 2, (
-        "BatchMode задан не во всех двух местах, где собирается ~/.ssh/config: "
+    assert release.count("'  ServerAliveInterval 15'") == 1
+    assert release.count("'  ServerAliveCountMax 6'") == 1
+    assert release.count("'  BatchMode yes'") == 1, (
+        "BatchMode задан не во всех местах, где собирается ~/.ssh/config: "
         "без него ssh при отказе аутентификации ждёт пароль от несуществующего человека"
     )
 
@@ -419,7 +421,7 @@ def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None
     assert "--provision-caddy" not in bootstrap
 
 
-def test_bootstrap_source_is_validated_remotely_before_expensive_jobs() -> None:
+def test_bootstrap_source_is_validated_before_expensive_jobs() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     preflight = _job_block(release, "bootstrap-source-preflight")
     images = _job_block(release, "images")
@@ -432,24 +434,17 @@ def test_bootstrap_source_is_validated_remotely_before_expensive_jobs() -> None:
     assert "environment: production" in preflight
     assert "PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}" in preflight
     assert 'test -n "$PROD_ENV_B64"' in preflight
-    assert "scripts/fbctl preflight-bundle" in preflight
-    assert "--output fbctl-preflight.pyz" in preflight
-    assert '--release-id "${{ github.sha }}"' in preflight
-    assert "base64 --decode | scripts/fbctl bootstrap-remote-preflight" in preflight
-    assert '--host "$DEPLOY_TARGET"' in preflight
-    assert "--bundle fbctl-preflight.pyz" in preflight
-    assert "--source-env-stdin" in preflight
+    assert "base64 --decode | scripts/fbctl bootstrap-source-check" in preflight
+    assert "--stdin" in preflight
     assert "--project-known-legacy-source" in preflight
     assert "--migrate-existing-bootstrap-identity" not in preflight
-    assert preflight.index("Build deterministic bootstrap preflight bundle") < preflight.index(
-        "Configure pinned SSH host identity"
-    )
-    assert preflight.index("Configure pinned SSH host identity") < preflight.index(
-        "- name: Validate bootstrap source"
-    )
-    assert "StrictHostKeyChecking yes" in preflight
-    assert "UserKnownHostsFile ~/.ssh/known_hosts" in preflight
-    assert 'ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts' in preflight
+    # Проверка source не ходит на host: удалённый preflight существует только
+    # ради миграционного контракта, а на чистом host прежней identity нет.
+    assert "bootstrap-remote-preflight" not in preflight
+    assert "preflight-bundle" not in preflight
+    assert "DEPLOY_SSH_KEY" not in preflight
+    assert "DEPLOY_TARGET" not in preflight
+    assert "~/.ssh" not in preflight
     assert "set -x" not in preflight
     assert "GITHUB_OUTPUT" not in preflight
     assert "upload-artifact" not in preflight
