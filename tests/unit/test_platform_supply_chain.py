@@ -505,11 +505,20 @@ def test_bootstrap_identity_migration_is_absent_from_release_workflow() -> None:
     assert "--migrate-existing-bootstrap-identity" not in preflight
     assert "--migrate-existing-bootstrap-identity" not in bootstrap
     assert "--migrate-existing-bootstrap-identity" not in routine
-    # Включение сканирования — решение владельца, а не следствие выкатки:
-    # bootstrap поднимается без --enable-scanning, владелец запускает его отдельно.
-    assert "--enable-scanning" not in release
     assert "bootstrap-remote-preflight" not in routine
     assert "PROD_ENV_B64" not in routine
+
+
+def test_release_never_starts_scanning_on_behalf_of_the_owner() -> None:
+    """Сканирование останавливает рекламу автоматически — это решение человека.
+
+    Пока `--enable-scanning` стоял в шаге bootstrap, первый же подъём чистого
+    host включал авто-стоп сам. Флаг остаётся в `fbctl` для отдельного
+    осознанного вызова, но в релизе его быть не должно нигде.
+    """
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "--enable-scanning" not in release
 
 
 def test_release_requires_real_single_slot_rehearsal_before_production() -> None:
