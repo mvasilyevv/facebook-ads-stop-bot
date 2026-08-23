@@ -29,7 +29,7 @@ import {
 } from "@/components/layout/OperatorPageBoundary";
 import { OperatorAdCards, OperatorAdsTable } from "@/features/operator/OperatorAds";
 import { operatorProblemMessage, useOperatorAds, useOperatorSnapshot } from "@/lib/api/operator";
-import { formatRussianCount } from "@/lib/utils/russianCount";
+import { formatRussianCount } from "@fb/shared";
 
 const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "", label: "Все состояния" },

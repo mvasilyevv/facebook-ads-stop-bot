@@ -40,7 +40,7 @@ import {
   type RunStatus,
 } from "@/lib/api/campaigns";
 import { CampaignRunManualReview } from "./CampaignRunManualReview";
-import { formatRussianCount, russianCountIsOne } from "@/lib/utils/russianCount";
+import { formatRussianCount, russianCountIsOne } from "@fb/shared";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 

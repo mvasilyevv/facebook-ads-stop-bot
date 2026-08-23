@@ -51,7 +51,7 @@ import {
   type RunStatus,
 } from "@/lib/api/campaigns";
 import { CampaignRunManualReview } from "./CampaignRunManualReview";
-import { formatRussianCount } from "@/lib/utils/russianCount";
+import { formatRussianCount } from "@fb/shared";
 
 // ─── Цвета статуса ────────────────────────────────────────────────────────────
 

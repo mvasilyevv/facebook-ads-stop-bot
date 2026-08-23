@@ -16,6 +16,7 @@ import { X, Film, Image, AlertCircle, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import type { UploadedConcept } from "@/stores/campaignWizard";
 import type { CampaignStructure } from "@/lib/api/campaigns";
+import { russianCountForm } from "@fb/shared";
 
 interface ConceptCampaignMatrixProps {
   concepts: UploadedConcept[];
@@ -36,14 +37,7 @@ function formatBytes(b: number): string {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Русское склонение для «объявление» (1 / 2-4 / 5+). */
-function adWord(n: number): string {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return "объявление";
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return "объявления";
-  return "объявлений";
-}
+
 
 // Палитра цветов кампаний (циклическая) — единый цвет кампании в колонке и чипах.
 const CAMPAIGN_COLORS = [
@@ -431,7 +425,7 @@ const CampaignColumn: FC<CampaignColumnProps> = ({
           <div className="text-[12px] text-bg-9">
             {img} фото + {vid} видео →{" "}
             <b className="text-bg-11">
-              {ads} {adWord(ads)}
+              {ads} {russianCountForm(ads, "объявление", "объявления", "объявлений")}
             </b>
           </div>
         ) : (

@@ -26,6 +26,7 @@ export * from "./constants/campaignEnums";
 export * from "./format/number";
 export * from "./format/time";
 export * from "./format/id";
+export * from "./format/russianCount";
 
 // ─── Доменные хелперы ────────────────────────────────────────────────────────
 export * from "./domain/geo";

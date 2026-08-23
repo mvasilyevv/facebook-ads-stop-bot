@@ -11,7 +11,7 @@ import { Trash2, Plus, Minus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import type { CampaignStructure } from "@/lib/api/campaigns";
-import { russianCountForm } from "@/lib/utils/russianCount";
+import { russianCountForm } from "@fb/shared";
 
 interface WizardStep4StructureProps {
   campaigns: CampaignStructure[];
