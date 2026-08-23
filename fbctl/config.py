@@ -357,7 +357,9 @@ def prepare_candidate(
     if bootstrap:
         missing = [key for key in BOOTSTRAP_VISION_KEYS if not raw_source.get(key)]
         if missing:
-            raise FbctlError(f"bootstrap source environment is missing required {missing[0]}")
+            raise FbctlError(
+                "bootstrap source environment is missing required " + ", ".join(missing)
+            )
         token = raw_source["VISION_X_TOKEN"].strip()
         profile_id = raw_source["VISION_PROFILE_ID"].strip()
         if (
@@ -587,7 +589,7 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
             result[key] = secrets.token_urlsafe(max(48, minimum))
     missing = [key for key in REQUIRED_SOURCE_KEYS if not result.get(key)]
     if missing:
-        raise FbctlError(f"source environment is missing required {missing[0]}")
+        raise FbctlError("source environment is missing required " + ", ".join(missing))
     validate_source_values(result)
     return result
 
@@ -639,7 +641,7 @@ def validate_bootstrap_source_check(values: dict[str, str]) -> None:
 
     missing = [key for key in BOOTSTRAP_VISION_KEYS if not values.get(key)]
     if missing:
-        raise FbctlError(f"bootstrap source environment is missing required {missing[0]}")
+        raise FbctlError("bootstrap source environment is missing required " + ", ".join(missing))
     token = values["VISION_X_TOKEN"].strip()
     profile_id = values["VISION_PROFILE_ID"].strip()
     if (

@@ -1650,7 +1650,7 @@ def _validate_bootstrap_transport(
     """Perform all bootstrap-only validation before durable state is written."""
     missing = [key for key in BOOTSTRAP_VISION_KEYS if not raw_source.get(key)]
     if missing:
-        raise FbctlError(f"bootstrap source environment is missing required {missing[0]}")
+        raise FbctlError("bootstrap source environment is missing required " + ", ".join(missing))
     token = raw_source["VISION_X_TOKEN"].strip()
     profile_id = raw_source["VISION_PROFILE_ID"].strip()
     if (
