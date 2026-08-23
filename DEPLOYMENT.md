@@ -295,10 +295,13 @@ sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
   --source-env /opt/fb-agent/shared/source.env \
   --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
   --desktop-profile-seed /opt/fb-agent/shared/desktop-profile-seed
-sudo python3 -B /path/to/reviewed/fbctl.pyz deploy --enable-scanning
+sudo python3 -B /path/to/reviewed/fbctl.pyz deploy
 sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz doctor
 sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz status
 ```
+
+Первый запуск observer (сканирования) — отдельное осознанное действие владельца
+после того, как канал к столу проверен: `fbctl deploy --enable-scanning`.
 
 После bootstrap поле `profile_seed_cleanup` должно быть `removed` либо
 `not_applicable`, если seed уже был штатно удалён. Adoption import переносит

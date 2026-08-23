@@ -505,6 +505,9 @@ def test_bootstrap_identity_migration_is_absent_from_release_workflow() -> None:
     assert "--migrate-existing-bootstrap-identity" not in preflight
     assert "--migrate-existing-bootstrap-identity" not in bootstrap
     assert "--migrate-existing-bootstrap-identity" not in routine
+    # Включение сканирования — решение владельца, а не следствие выкатки:
+    # bootstrap поднимается без --enable-scanning, владелец запускает его отдельно.
+    assert "--enable-scanning" not in release
     assert "bootstrap-remote-preflight" not in routine
     assert "PROD_ENV_B64" not in routine
 
