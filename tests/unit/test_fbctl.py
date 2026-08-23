@@ -4299,8 +4299,14 @@ def test_bootstrap_projection_drops_retired_keys() -> None:
 
 
 def test_bootstrap_projection_drops_a_bare_ip_channel_address() -> None:
-    from fbctl.config import project_bootstrap_source
+    """Голый IP в адресе канала — наследие мёртвого экспорта, а не выбор оператора.
 
+    Такое значение не может быть верным ни при каких условиях: одно и то же имя
+    обязано резолвиться снаружи в адрес host и быть сетевым алиасом реле внутри
+    compose. Поэтому на bootstrap оно отбрасывается и называется в dropped, а
+    валидное имя и обычная опечатка остаются нетронутыми — их судьбу решает
+    проверка значений, а не проекция.
+    """
     source_ip = {"API_KEY": "x", "DESKTOP_RUSTDESK_SERVER": "203.0.113.10"}
     projected, dropped = project_bootstrap_source(source_ip, project_known_legacy_source=True)
     assert set(projected) == {"API_KEY"}

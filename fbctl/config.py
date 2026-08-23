@@ -630,6 +630,12 @@ def project_bootstrap_source(
             result.pop("TELEGRAM_CHAT_ID")
             dropped.append("TELEGRAM_CHAT_ID")
 
+    # Голый IP в адресе канала не может быть верным ни при каких условиях: снаружи
+    # это имя резолвится в публичный адрес host, а внутри compose объявлено сетевым
+    # алиасом реле, и алиасом IP не бывает. Значит такое значение не несёт
+    # намерения оператора — это наследие мёртвого экспорта, и на bootstrap оно
+    # отбрасывается с упоминанием в dropped, как ретированные ключи. Обычный
+    # deploy его по-прежнему отвергает: там адрес берётся с host и уже канонический.
     if "DESKTOP_RUSTDESK_SERVER" in result:
         try:
             ipaddress.ip_address(result["DESKTOP_RUSTDESK_SERVER"])
