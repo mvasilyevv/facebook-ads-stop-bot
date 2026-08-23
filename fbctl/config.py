@@ -681,38 +681,39 @@ def validate_bootstrap_source_check(values: dict[str, str]) -> None:
 
 
 def validate_source_values(values: dict[str, str]) -> None:
+    errors = []
     if not re.fullmatch(r"[0-9a-f]{32}", values.get("FB_AGENT_BOOTSTRAP_CLUSTER_ID", "")):
-        raise FbctlError("source environment has an invalid cluster id")
+        errors.append("invalid cluster id")
     if len(values.get("POSTGRES_PASSWORD", "")) < 16:
-        raise FbctlError("source environment has an invalid PostgreSQL password")
+        errors.append("invalid PostgreSQL password")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", values.get("POSTGRES_USER", "")):
-        raise FbctlError("source environment has an invalid PostgreSQL user")
+        errors.append("invalid PostgreSQL user")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", values.get("POSTGRES_DB", "")):
-        raise FbctlError("source environment has an invalid PostgreSQL database")
+        errors.append("invalid PostgreSQL database")
     if len(values.get("API_KEY", "")) < 24:
-        raise FbctlError("source environment has an invalid API key")
+        errors.append("invalid API key")
     try:
         if len(base64.urlsafe_b64decode(values.get("ENCRYPTION_KEY", ""))) != 32:
             raise ValueError
-    except (ValueError, TypeError) as exc:
-        raise FbctlError("source environment has an invalid encryption key") from exc
+    except (ValueError, TypeError):
+        errors.append("invalid encryption key")
     if values.get("TELEGRAM_OIDC_REDIRECT_URI", f"{PUBLIC_URL}/auth/telegram/callback") != (
         f"{PUBLIC_URL}/auth/telegram/callback"
     ):
-        raise FbctlError("Telegram OIDC redirect URI is not canonical")
+        errors.append("Telegram OIDC redirect URI is not canonical")
     if not values.get("TELEGRAM_OIDC_CLIENT_ID", "").isdigit():
-        raise FbctlError("Telegram OIDC client id must be numeric")
+        errors.append("Telegram OIDC client id must be numeric")
     if len(values.get("TELEGRAM_OIDC_CLIENT_SECRET", "")) < 32:
-        raise FbctlError("Telegram OIDC client secret is too short")
+        errors.append("Telegram OIDC client secret is too short")
     try:
         owner_id = int(values.get("DESKTOP_OWNER_TELEGRAM_USER_ID", "0"))
     except ValueError:
         owner_id = 0
     if owner_id <= 0:
-        raise FbctlError("desktop owner Telegram id must be positive")
+        errors.append("desktop owner Telegram id must be positive")
     vision_folder_id = values.get("VISION_FOLDER_ID", "")
     if vision_folder_id and not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", vision_folder_id):
-        raise FbctlError("source environment has an invalid Vision folder id")
+        errors.append("invalid Vision folder id")
     # Адрес канала обязан быть DNS-именем: внутри compose это же имя объявлено
     # сетевым алиасом реле, снаружи оно резолвится в публичный адрес хоста.
     # Голый IP такой двусторонности не даёт — стол не дойдёт до реле, потому что
@@ -725,12 +726,17 @@ def validate_source_values(values: dict[str, str]) -> None:
         except ValueError:
             pass
         else:
-            raise FbctlError("desktop channel address must be a DNS name, not a bare IP")
+            errors.append("desktop channel address must be a DNS name, not a bare IP")
         if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", rustdesk_server):
-            raise FbctlError("source environment has an invalid desktop channel address")
+            errors.append("invalid desktop channel address")
     for key, minimum in GENERATED_SECRETS.items():
         if len(values.get(key, "")) < minimum:
-            raise FbctlError(f"source environment has an invalid {key}")
+            errors.append(f"invalid {key}")
+
+    if errors:
+        # Один заход вместо круга CI на каждое несоответствие. Префикс общий:
+        # без него строка теряет то, о чём она — а её читают из лога выкатки.
+        raise FbctlError("source environment is invalid: " + "; ".join(errors))
 
 
 def validate_app_values(values: dict[str, str]) -> None:
