@@ -42,49 +42,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Build deterministic bootstrap preflight bundle
-        run: |
-          scripts/fbctl preflight-bundle \
-            --output fbctl-preflight.pyz \
-            --release-id "${{ github.sha }}" \
-            --source-root .
-      - name: Configure pinned SSH host identity
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          test -n "$DEPLOY_SSH_KEY"
-          test -n "$DEPLOY_HOST"
-          test -n "$DEPLOY_KNOWN_HOSTS"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          # BatchMode запрещает спрашивать пароль: без него отказ аутентификации
-          # вешает шаг на приглашении ввода. Полторы минуты молчания хоста
-          # (интервал 15 × 6) переживает дешёвый VPS, занятый выкладкой образов.
-          printf '%s\n' \
-            'Host *' \
-            '  StrictHostKeyChecking yes' \
-            '  UserKnownHostsFile ~/.ssh/known_hosts' \
-            '  IdentitiesOnly yes' \
-            '  BatchMode yes' \
-            '  ConnectTimeout 15' \
-            '  ServerAliveInterval 15' \
-            '  ServerAliveCountMax 6' > ~/.ssh/config
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
-          ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
+      # На чистом host проверять нечего удалённо: прежней identity нет, а
+      # удалённая проверка существует только ради миграционного контракта и
+      # сама отвергает вызов без него. Ценность гейта в том, чтобы отвергнуть
+      # негодный source до сборки images, а это проверка самого source — без
+      # доступа к host и без деплойного ключа в этой джобе.
       - name: Validate bootstrap source
         env:
           PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
-          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
         run: |
           set -euo pipefail
           test -n "$PROD_ENV_B64"
-          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl bootstrap-remote-preflight \
-            --host "$DEPLOY_TARGET" \
-            --bundle fbctl-preflight.pyz \
-            --source-env-stdin \
+          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl bootstrap-source-check \
+            --stdin \
             --project-known-legacy-source
 
   images:
