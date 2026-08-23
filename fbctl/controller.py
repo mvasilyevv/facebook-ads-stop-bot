@@ -1643,7 +1643,11 @@ def bootstrap_host(
         "status": "READY",
         "root": os.fspath(root),
         "release_id": release_id,
-        "vision_config": vision_config_status,
+        # Путь канонического профиля и состояние засева — разные вещи, и поле
+        # пути существовало раньше: подменить его состоянием значило бы молча
+        # сменить контракт отчёта.
+        "vision_config": os.fspath(vision_config),
+        "vision_config_state": vision_config_status,
         "caddy_provisioned": provision_caddy,
         "rehearsal": rehearsal,
         "legacy_identity_cleanup": legacy_cleanup,

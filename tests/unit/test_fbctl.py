@@ -1845,6 +1845,24 @@ def test_missing_bootstrap_keys_are_reported_together() -> None:
     assert "some-token" not in message
 
 
+def test_missing_required_keys_are_reported_together() -> None:
+    """Недостающие обязательные ключи перечисляются одним сообщением, а не по одному.
+
+    Инвариант жил в тесте про Vision-пару, но после #297 пустой набор Vision —
+    норма, и проверять его там больше не на чем. Дом инварианта переезжает сюда:
+    один круг подъёма стоит полного прогона CI, и отказ обязан назвать всё
+    недостающее сразу.
+    """
+    with pytest.raises(FbctlError) as exc_info:
+        canonicalize_source({"API_KEY": "sentinel-value"}, incumbent={})
+
+    message = str(exc_info.value)
+    assert "ENCRYPTION_KEY" in message
+    assert "TELEGRAM_BOT_TOKEN" in message
+    assert "DESKTOP_OWNER_TELEGRAM_USER_ID" in message
+    assert "sentinel-value" not in message
+
+
 def test_vision_bootstrap_absent_keys_accepted_without_error() -> None:
     """Пустой набор Vision-ключей проходит validate_bootstrap_source_check без исключения.
 
