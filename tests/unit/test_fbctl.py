@@ -48,6 +48,7 @@ from fbctl.config import (
     prepare_candidate,
     project_bootstrap_source,
     validate_bootstrap_source_check,
+    validate_source_values,
 )
 from fbctl.controller import (
     LEGACY_DOCKER_RESOURCES,
@@ -4295,3 +4296,34 @@ def test_bootstrap_projection_drops_retired_keys() -> None:
             {"API_KEY": "value", "TOTALLY_UNKNOWN_KEY": "x"},
             project_known_legacy_source=True,
         )
+
+
+def test_invalid_source_values_are_reported_together() -> None:
+    """Негодные значения перечисляются одним сообщением, а не по одному за прогон.
+
+    Проверка падала на первом же несоответствии, и несвежий source требовал
+    столько кругов CI, сколько в нём устаревших значений. Значения при этом
+    по-прежнему не попадают в текст — только имена и характер нарушения.
+    """
+    values = {
+        "FB_AGENT_BOOTSTRAP_CLUSTER_ID": "0" * 32,
+        "POSTGRES_PASSWORD": "x" * 20,
+        "POSTGRES_USER": "fb_agent",
+        "POSTGRES_DB": "fb_agent",
+        "API_KEY": "sentinel-api-key",
+        "ENCRYPTION_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "TELEGRAM_OIDC_CLIENT_ID": "not-a-number",
+        "TELEGRAM_OIDC_CLIENT_SECRET": "sentinel-secret",
+        "DESKTOP_OWNER_TELEGRAM_USER_ID": "1",
+        "DESKTOP_RUSTDESK_SERVER": "203.0.113.10",
+    }
+
+    with pytest.raises(FbctlError) as exc_info:
+        validate_source_values(values)
+
+    message = str(exc_info.value)
+    assert "invalid API key" in message
+    assert "Telegram OIDC client id must be numeric" in message
+    assert "desktop channel address must be a DNS name" in message
+    assert "sentinel-api-key" not in message
+    assert "sentinel-secret" not in message
