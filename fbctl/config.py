@@ -355,25 +355,32 @@ def prepare_candidate(
     raw_source = parse_dotenv(selected_source)
     vision_bootstrap: dict[str, str] | None = None
     if bootstrap:
-        missing = [key for key in BOOTSTRAP_VISION_KEYS if not raw_source.get(key)]
-        if missing:
+        present = [key for key in BOOTSTRAP_VISION_KEYS if raw_source.get(key)]
+        if len(present) == 1:
+            # Один ключ из пары — неполный или устаревший source: явный отказ.
+            missing = [key for key in BOOTSTRAP_VISION_KEYS if not raw_source.get(key)]
             raise FbctlError(
-                "bootstrap source environment is missing required " + ", ".join(missing)
+                "bootstrap Vision credentials must provide both keys or neither; "
+                "missing: " + ", ".join(missing)
             )
-        token = raw_source["VISION_X_TOKEN"].strip()
-        profile_id = raw_source["VISION_PROFILE_ID"].strip()
-        if (
-            not token
-            or len(token) > 16_384
-            or "\r" in token
-            or "\n" in token
-            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
-        ):
-            raise FbctlError("bootstrap Vision credentials are invalid")
-        vision_bootstrap = {
-            "VISION_BOOTSTRAP_X_TOKEN": token,
-            "VISION_BOOTSTRAP_PROFILE_ID": profile_id,
-        }
+        if len(present) == 2:
+            # Оба ключа поданы — валидируем формат и создаём транспорт.
+            token = raw_source["VISION_X_TOKEN"].strip()
+            profile_id = raw_source["VISION_PROFILE_ID"].strip()
+            if (
+                not token
+                or len(token) > 16_384
+                or "\r" in token
+                or "\n" in token
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
+            ):
+                raise FbctlError("bootstrap Vision credentials are invalid")
+            vision_bootstrap = {
+                "VISION_BOOTSTRAP_X_TOKEN": token,
+                "VISION_BOOTSTRAP_PROFILE_ID": profile_id,
+            }
+        # len(present) == 0: оба ключа отсутствуют — штатный первый запуск,
+        # vision_bootstrap остаётся None, транспорт не создаётся.
     source_values = canonicalize_source(raw_source, incumbent=incumbent)
     atomic_write(layout.source_env, render_dotenv(source_values), mode=0o600)
 
@@ -639,19 +646,28 @@ def parse_bootstrap_source_stdin(payload: bytes) -> dict[str, str]:
 def validate_bootstrap_source_check(values: dict[str, str]) -> None:
     """Validate bootstrap-only material without reading host state or writing files."""
 
-    missing = [key for key in BOOTSTRAP_VISION_KEYS if not values.get(key)]
-    if missing:
-        raise FbctlError("bootstrap source environment is missing required " + ", ".join(missing))
-    token = values["VISION_X_TOKEN"].strip()
-    profile_id = values["VISION_PROFILE_ID"].strip()
-    if (
-        not token
-        or len(token) > 16_384
-        or "\r" in token
-        or "\n" in token
-        or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
-    ):
-        raise FbctlError("bootstrap Vision credentials are invalid")
+    present = [key for key in BOOTSTRAP_VISION_KEYS if values.get(key)]
+    if len(present) == 1:
+        # Один ключ из пары — неполный или устаревший source: явный отказ.
+        missing = [key for key in BOOTSTRAP_VISION_KEYS if not values.get(key)]
+        raise FbctlError(
+            "bootstrap Vision credentials must provide both keys or neither; "
+            "missing: " + ", ".join(missing)
+        )
+    if len(present) == 2:
+        # Оба ключа поданы — валидируем формат.
+        token = values["VISION_X_TOKEN"].strip()
+        profile_id = values["VISION_PROFILE_ID"].strip()
+        if (
+            not token
+            or len(token) > 16_384
+            or "\r" in token
+            or "\n" in token
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
+        ):
+            raise FbctlError("bootstrap Vision credentials are invalid")
+    # len(present) == 0: оба ключа отсутствуют — штатный первый запуск, всё ОК.
+
     present = [key for key in BOOTSTRAP_CADDY_KEYS if key in values]
     if len(present) == 1:
         raise FbctlError("Caddy bootstrap credentials must provide both panel keys or neither")

@@ -1826,19 +1826,130 @@ def test_bootstrap_projection_drops_legacy_runtime_values_before_candidate_persi
 
 
 def test_missing_bootstrap_keys_are_reported_together() -> None:
-    """Оба обязательных Vision-ключа перечисляются в одном сообщении об ошибке.
+    """Один ключ из Vision-пары называет недостающий ключ-партнёра в сообщении об ошибке.
 
-    Проверяет, что при отсутствии VISION_X_TOKEN и VISION_PROFILE_ID:
-    - исключение поднимается одно, и оба имени присутствуют в тексте;
-    - значения из словаря (sentinel-value) не проникают в текст ошибки.
+    Было: оба ключа отсутствуют → ошибка с обоими именами.
+    Стало: оба отсутствуют — это штатный первый запуск без Vision (ошибки нет).
+    Ровно один ключ из пары — это неполный source: ошибка, имя недостающего ключа
+    присутствует в тексте, значение sentinel-value не проникает.
+
+    Изменение: тест переориентирован с «оба отсутствуют» на «один из пары», потому
+    что новый контракт принимает пустой набор, но отвергает неполный.
     """
-    source = {"API_KEY": "sentinel-value"}
+    source = {"API_KEY": "sentinel-value", "VISION_X_TOKEN": "some-token"}
     with pytest.raises(FbctlError) as exc_info:
         validate_bootstrap_source_check(source)
     message = str(exc_info.value)
-    assert "VISION_X_TOKEN" in message
     assert "VISION_PROFILE_ID" in message
     assert "sentinel-value" not in message
+    assert "some-token" not in message
+
+
+def test_missing_required_keys_are_reported_together() -> None:
+    """Недостающие обязательные ключи перечисляются одним сообщением, а не по одному.
+
+    Инвариант жил в тесте про Vision-пару, но после #297 пустой набор Vision —
+    норма, и проверять его там больше не на чем. Дом инварианта переезжает сюда:
+    один круг подъёма стоит полного прогона CI, и отказ обязан назвать всё
+    недостающее сразу.
+    """
+    with pytest.raises(FbctlError) as exc_info:
+        canonicalize_source({"API_KEY": "sentinel-value"}, incumbent={})
+
+    message = str(exc_info.value)
+    assert "ENCRYPTION_KEY" in message
+    assert "TELEGRAM_BOT_TOKEN" in message
+    assert "DESKTOP_OWNER_TELEGRAM_USER_ID" in message
+    assert "sentinel-value" not in message
+
+
+def test_vision_bootstrap_absent_keys_accepted_without_error() -> None:
+    """Пустой набор Vision-ключей проходит validate_bootstrap_source_check без исключения.
+
+    Инвариант: отсутствие обоих ключей — штатный первый запуск.
+    validate_bootstrap_source_check не должна поднимать исключение и не должна
+    создавать транспорт; prepare_candidate тоже принимает такой source.
+    """
+    # Только обязательные для бутстрапа поля, Vision отсутствует.
+    source = {"API_KEY": "x"}
+    validate_bootstrap_source_check(source)  # не должно бросить исключение
+
+
+def test_vision_bootstrap_both_keys_present_transport_is_created(tmp_path: Path) -> None:
+    """Оба Vision-ключа поданы → транспортный файл создаётся с ожидаемыми полями.
+
+    Поведение при полном наборе должно быть бит-в-бит прежним: транспорт создан,
+    ключи VISION_BOOTSTRAP_X_TOKEN / VISION_BOOTSTRAP_PROFILE_ID на месте.
+    Тест проходил до правки и должен проходить после.
+    """
+    root = _root(tmp_path)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("VISION_X_TOKEN=valid-token\n")
+        handle.write("VISION_PROFILE_ID=profile-1\n")
+    source.chmod(0o600)
+    release = _materialize(root / "candidate")
+
+    config = prepare_candidate(
+        root=root,
+        release=release,
+        source_env=source,
+        docker_config=None,
+        adoption_bundle=tmp_path / "adoption.json",
+        bootstrap=True,
+    )
+
+    secret_path = Path(config.values["VISION_BOOTSTRAP_ENV_FILE"])
+    assert secret_path != Path("/dev/null"), "Транспорт должен быть создан при наличии обоих ключей"
+    secret_contents = secret_path.read_text(encoding="utf-8")
+    assert "VISION_BOOTSTRAP_X_TOKEN=valid-token" in secret_contents
+    assert "VISION_BOOTSTRAP_PROFILE_ID=profile-1" in secret_contents
+    # Исходные имена ключей не должны попасть в транспорт (только переименованные)
+    assert "VISION_X_TOKEN=" not in secret_contents
+
+
+def test_vision_bootstrap_half_pair_and_invalid_profile_are_rejected(tmp_path: Path) -> None:
+    """Один ключ из пары и негодный формат профиля отвергаются.
+
+    Случаи:
+    1. validate_bootstrap_source_check с одним ключом → FbctlError (имя недостающего есть).
+    2. validate_bootstrap_source_check с обоими ключами, но негодным VISION_PROFILE_ID →
+       FbctlError (профиль не по маске).
+    3. prepare_candidate с одним ключом → FbctlError.
+    """
+    # Случай 1: один ключ в validate_bootstrap_source_check.
+    with pytest.raises(FbctlError) as exc_info:
+        validate_bootstrap_source_check({"API_KEY": "x", "VISION_X_TOKEN": "abc"})
+    assert "VISION_PROFILE_ID" in str(exc_info.value)
+
+    # Случай 2: оба ключа, но профиль не по маске (кириллица не входит в [A-Za-z0-9._:-]).
+    with pytest.raises(FbctlError, match="Vision credentials are invalid"):
+        validate_bootstrap_source_check(
+            {
+                "API_KEY": "x",
+                "VISION_X_TOKEN": "abc",
+                "VISION_PROFILE_ID": "не-годится",
+            }
+        )
+
+    # Случай 3: один ключ в prepare_candidate (bootstrap=True).
+    root = _root(tmp_path)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("VISION_PROFILE_ID=profile-1\n")  # только один ключ из пары
+    source.chmod(0o600)
+    release = _materialize(root / "candidate")
+
+    with pytest.raises(FbctlError) as exc_info:
+        prepare_candidate(
+            root=root,
+            release=release,
+            source_env=source,
+            docker_config=None,
+            adoption_bundle=tmp_path / "adoption.json",
+            bootstrap=True,
+        )
+    assert "VISION_X_TOKEN" in str(exc_info.value)
 
 
 def test_bootstrap_source_check_is_in_memory_and_redacts_values(

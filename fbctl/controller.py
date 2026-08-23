@@ -901,10 +901,19 @@ class ProductionController:
             env=self._environment(config),
         )
 
-    def _bootstrap_vision_config(self, config: RuntimeConfig) -> None:
+    def _bootstrap_vision_config(self, config: RuntimeConfig) -> str:
+        """Засеять конфигурацию Vision или сообщить о штатном отсутствии учётных данных.
+
+        Возвращает:
+            ``"seeded"`` — job vision_config_bootstrap выполнен успешно;
+            ``"not_configured"`` — учётные данные Vision не поданы (транспорт /dev/null),
+            первый запуск без настройки Vision, норма.
+        """
         secret = Path(config.values["VISION_BOOTSTRAP_ENV_FILE"])
         if secret == Path("/dev/null"):
-            raise FbctlError("Vision bootstrap secret transport is missing")
+            # Учётные данные не поданы — штатный первый запуск.
+            # job vision_config_bootstrap не запускается, транспорт не создавался.
+            return "not_configured"
         require_private_file(secret)
         try:
             self.runner.run(
@@ -919,6 +928,7 @@ class ProductionController:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+        return "seeded"
 
     def _start_desktop(self, config: RuntimeConfig) -> None:
         self._publish_desktop_readiness(config)
@@ -1548,6 +1558,7 @@ def bootstrap_host(
         release_id: str | None = None
         legacy_cleanup = "not_applicable"
         profile_seed_cleanup = "not_applicable"
+        vision_config_status = "not_configured"
         retired_systemd_units: list[str] = []
         try:
             atomic_write(
@@ -1600,7 +1611,7 @@ def bootstrap_host(
                 adoption_snapshot,
             )
             controller._bootstrap_runtime_config(config)  # noqa: SLF001
-            controller._bootstrap_vision_config(config)  # noqa: SLF001
+            vision_config_status = controller._bootstrap_vision_config(config)  # noqa: SLF001
             if provision_caddy:
                 _provision_caddy(
                     config.layout.base,
@@ -1632,7 +1643,11 @@ def bootstrap_host(
         "status": "READY",
         "root": os.fspath(root),
         "release_id": release_id,
+        # Путь канонического профиля и состояние засева — разные вещи, и поле
+        # пути существовало раньше: подменить его состоянием значило бы молча
+        # сменить контракт отчёта.
         "vision_config": os.fspath(vision_config),
+        "vision_config_state": vision_config_status,
         "caddy_provisioned": provision_caddy,
         "rehearsal": rehearsal,
         "legacy_identity_cleanup": legacy_cleanup,
@@ -1648,19 +1663,27 @@ def _validate_bootstrap_transport(
     provision_caddy: bool,
 ) -> None:
     """Perform all bootstrap-only validation before durable state is written."""
-    missing = [key for key in BOOTSTRAP_VISION_KEYS if not raw_source.get(key)]
-    if missing:
-        raise FbctlError("bootstrap source environment is missing required " + ", ".join(missing))
-    token = raw_source["VISION_X_TOKEN"].strip()
-    profile_id = raw_source["VISION_PROFILE_ID"].strip()
-    if (
-        not token
-        or len(token) > 16_384
-        or "\r" in token
-        or "\n" in token
-        or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
-    ):
-        raise FbctlError("bootstrap Vision credentials are invalid")
+    present_vision = [key for key in BOOTSTRAP_VISION_KEYS if raw_source.get(key)]
+    if len(present_vision) == 1:
+        # Один ключ из пары — неполный или устаревший source: явный отказ.
+        missing = [key for key in BOOTSTRAP_VISION_KEYS if not raw_source.get(key)]
+        raise FbctlError(
+            "bootstrap Vision credentials must provide both keys or neither; "
+            "missing: " + ", ".join(missing)
+        )
+    if len(present_vision) == 2:
+        # Оба ключа поданы — валидируем формат.
+        token = raw_source["VISION_X_TOKEN"].strip()
+        profile_id = raw_source["VISION_PROFILE_ID"].strip()
+        if (
+            not token
+            or len(token) > 16_384
+            or "\r" in token
+            or "\n" in token
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
+        ):
+            raise FbctlError("bootstrap Vision credentials are invalid")
+    # len(present_vision) == 0: оба ключа отсутствуют — штатный первый запуск, продолжаем.
     if not provision_caddy:
         return
     user = caddy_bootstrap["PANEL_BASIC_AUTH_USER"]
