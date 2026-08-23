@@ -32,6 +32,7 @@ import { OperatorUnavailableState } from "@/components/layout/OperatorPageBounda
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
+import { russianCountForm } from "@fb/shared";
 
 export const Route = createFileRoute("/offers/")({
   component: OffersPage,
@@ -300,7 +301,7 @@ function OffersHeader({ count, action }: { count: number | null; action?: React.
           <>
             <span className="text-bg-11 font-medium">{count}</span>
             <HeaderSep />
-            {pluralizeOffers(count)} в каталоге
+            {russianCountForm(count, "оффер", "оффера", "офферов")} в каталоге
           </>
         ) : undefined
       }
@@ -308,10 +309,4 @@ function OffersHeader({ count, action }: { count: number | null; action?: React.
   );
 }
 
-function pluralizeOffers(count: number): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return "оффер";
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "оффера";
-  return "офферов";
-}
+

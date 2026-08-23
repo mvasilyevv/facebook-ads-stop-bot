@@ -23,7 +23,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { useValidateConfig } from "@/lib/api/campaigns";
 import type { CampaignConfig, ValidatePlanOut, CampaignPlanOut } from "@/lib/api/campaigns";
 import type { WizardPreview } from "@/stores/campaignWizard";
-import { russianCountForm } from "@/lib/utils/russianCount";
+import { russianCountForm } from "@fb/shared";
 
 interface WizardStep6PreviewProps {
   config: CampaignConfig;

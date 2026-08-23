@@ -65,6 +65,7 @@ import type {
   OperatorSeverity,
   OperatorSnapshot,
 } from "@fb/shared/operator/contracts";
+import { russianCountForm } from "@fb/shared";
 
 import { Button } from "@/components/ui/Button";
 import { haptic, tgAlert } from "@/lib/tg";
@@ -470,7 +471,7 @@ function MiniApproachingStopLedger({
           ? "никто не подходит"
           : total === null
             ? "—"
-            : `${total} ${pluralAd(total)}`
+            : `${total} ${russianCountForm(total, "объявление", "объявления", "объявлений")}`
       }
       section={section}
       timezone={timezone}
@@ -519,14 +520,7 @@ function MiniApproachingStopLedger({
   );
 }
 
-function pluralAd(value: number): string {
-  const remainder100 = value % 100;
-  const remainder10 = value % 10;
-  if (remainder100 >= 11 && remainder100 <= 14) return "объявлений";
-  if (remainder10 === 1) return "объявление";
-  if (remainder10 >= 2 && remainder10 <= 4) return "объявления";
-  return "объявлений";
-}
+
 
 function MiniPortfolioLedger({
   section,

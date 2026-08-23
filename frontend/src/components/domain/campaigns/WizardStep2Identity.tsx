@@ -26,7 +26,7 @@ import { useAdAccountContext, useAdAccountPages, useAdAccountPixels } from "@/li
 import { useOffers } from "@/lib/api/offers";
 import type { Offer } from "@fb/shared";
 import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
-import { formatRussianCount } from "@/lib/utils/russianCount";
+import { formatRussianCount } from "@fb/shared";
 
 interface WizardStep2IdentityProps {
   values: WizardIdentity;
