@@ -47,6 +47,7 @@ from fbctl.config import (
     load_active,
     prepare_candidate,
     project_bootstrap_source,
+    validate_bootstrap_source_check,
 )
 from fbctl.controller import (
     LEGACY_DOCKER_RESOURCES,
@@ -1822,6 +1823,22 @@ def test_bootstrap_projection_drops_legacy_runtime_values_before_candidate_persi
     )
     for legacy_value in legacy_values.values():
         assert legacy_value not in persisted_env
+
+
+def test_missing_bootstrap_keys_are_reported_together() -> None:
+    """Оба обязательных Vision-ключа перечисляются в одном сообщении об ошибке.
+
+    Проверяет, что при отсутствии VISION_X_TOKEN и VISION_PROFILE_ID:
+    - исключение поднимается одно, и оба имени присутствуют в тексте;
+    - значения из словаря (sentinel-value) не проникают в текст ошибки.
+    """
+    source = {"API_KEY": "sentinel-value"}
+    with pytest.raises(FbctlError) as exc_info:
+        validate_bootstrap_source_check(source)
+    message = str(exc_info.value)
+    assert "VISION_X_TOKEN" in message
+    assert "VISION_PROFILE_ID" in message
+    assert "sentinel-value" not in message
 
 
 def test_bootstrap_source_check_is_in_memory_and_redacts_values(
