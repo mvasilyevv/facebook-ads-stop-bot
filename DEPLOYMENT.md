@@ -87,12 +87,14 @@ docker compose -p fb_agent_monitoring -f deploy/monitoring/docker-compose.agent.
 «Первый запуск на чистом host». Manifest уже вложен в control bundle и не
 передаётся в `deploy` отдельным аргументом.
 
-Для единственного проверенного перехода со старого host identity Release
-workflow до сборки images отправляет маленький deterministic preflight bundle и
-source только через stdin. Проверка читает фиксированные root-owned файлы
-`/opt/fb-agent/shared/source.env` и `/opt/fb-agent/shared/.env`, ничего не пишет
-и не запускает Docker/БД. Реальный bootstrap повторяет ту же проверку с явным
-`--migrate-existing-bootstrap-identity`.
+Release workflow до сборки images отправляет маленький deterministic preflight
+bundle и source только через stdin. Проверка ничего не пишет и не запускает
+Docker/БД.
+
+Переход со старого host identity больше не поддерживается: тот host утрачен
+вместе с провайдером, и `--migrate-existing-bootstrap-identity` из workflow
+удалён. Флаг остаётся в `fbctl` для ручного вызова, но CI выполняет только
+документированный ниже bootstrap чистого host.
 
 Миграция наследует только атомарную пару `TELEGRAM_OIDC_CLIENT_ID` +
 `TELEGRAM_OIDC_CLIENT_SECRET` и отдельно
