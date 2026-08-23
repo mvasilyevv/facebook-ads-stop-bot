@@ -411,7 +411,7 @@ def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None
     assert "--project-known-legacy-source" not in routine
     assert "--project-known-legacy-source" in bootstrap
     assert "--migrate-existing-bootstrap-identity" not in routine
-    assert "--migrate-existing-bootstrap-identity" in bootstrap
+    assert "--migrate-existing-bootstrap-identity" not in bootstrap
     assert "github.event_name == 'workflow_dispatch' && inputs.bootstrap" in bootstrap
     assert "/opt/fb-agent/shared/adoption-bundle-v1.json" in bootstrap
     assert "/opt/fb-agent/shared/desktop-profile-seed" in bootstrap
@@ -419,7 +419,7 @@ def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None
     assert "--provision-caddy" not in bootstrap
 
 
-def test_existing_bootstrap_identity_is_validated_remotely_before_expensive_jobs() -> None:
+def test_bootstrap_source_is_validated_remotely_before_expensive_jobs() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     preflight = _job_block(release, "bootstrap-source-preflight")
     images = _job_block(release, "images")
@@ -440,12 +440,12 @@ def test_existing_bootstrap_identity_is_validated_remotely_before_expensive_jobs
     assert "--bundle fbctl-preflight.pyz" in preflight
     assert "--source-env-stdin" in preflight
     assert "--project-known-legacy-source" in preflight
-    assert "--migrate-existing-bootstrap-identity" in preflight
+    assert "--migrate-existing-bootstrap-identity" not in preflight
     assert preflight.index("Build deterministic bootstrap preflight bundle") < preflight.index(
         "Configure pinned SSH host identity"
     )
     assert preflight.index("Configure pinned SSH host identity") < preflight.index(
-        "Validate bootstrap source and existing host identity"
+        "- name: Validate bootstrap source"
     )
     assert "StrictHostKeyChecking yes" in preflight
     assert "UserKnownHostsFile ~/.ssh/known_hosts" in preflight
@@ -493,7 +493,7 @@ def test_skipped_bootstrap_ancestor_does_not_skip_release_gates() -> None:
     )
 
 
-def test_bootstrap_identity_migration_is_absent_from_routine_release_paths() -> None:
+def test_bootstrap_identity_migration_is_absent_from_release_workflow() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     preflight = _job_block(release, "bootstrap-source-preflight")
     deploy = _job_block(release, "deploy")
@@ -504,8 +504,11 @@ def test_bootstrap_identity_migration_is_absent_from_routine_release_paths() -> 
         "- name: Remove temporary GHCR credentials", 1
     )[0]
 
-    assert preflight.count("--migrate-existing-bootstrap-identity") == 1
-    assert bootstrap.count("--migrate-existing-bootstrap-identity") == 1
+    # Старый host утрачен вместе с провайдером, переносить identity больше не с
+    # чего: флаг обязан отсутствовать во всём релизе, а не только в routine.
+    assert "--migrate-existing-bootstrap-identity" not in release
+    assert "--migrate-existing-bootstrap-identity" not in preflight
+    assert "--migrate-existing-bootstrap-identity" not in bootstrap
     assert "--migrate-existing-bootstrap-identity" not in routine
     assert "bootstrap-remote-preflight" not in routine
     assert "PROD_ENV_B64" not in routine

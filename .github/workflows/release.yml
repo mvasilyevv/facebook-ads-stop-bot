@@ -31,7 +31,7 @@ jobs:
       full_run: ${{ github.event_name == 'workflow_dispatch' }}
 
   bootstrap-source-preflight:
-    name: Validate existing bootstrap identity
+    name: Validate bootstrap source
     needs: verify
     if: github.event_name == 'workflow_dispatch' && inputs.bootstrap && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -74,7 +74,7 @@ jobs:
             '  ServerAliveCountMax 6' > ~/.ssh/config
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
           ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
-      - name: Validate bootstrap source and existing host identity
+      - name: Validate bootstrap source
         env:
           PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
@@ -85,8 +85,7 @@ jobs:
             --host "$DEPLOY_TARGET" \
             --bundle fbctl-preflight.pyz \
             --source-env-stdin \
-            --project-known-legacy-source \
-            --migrate-existing-bootstrap-identity
+            --project-known-legacy-source
 
   images:
     name: Resolve or publish images
@@ -338,7 +337,6 @@ jobs:
             --bootstrap \
             --reuse-existing-caddy-credentials \
             --project-known-legacy-source \
-            --migrate-existing-bootstrap-identity \
             --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
             --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED" \
             --enable-scanning
