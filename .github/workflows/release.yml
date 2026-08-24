@@ -317,6 +317,11 @@ jobs:
           --bundle release-inputs/fbctl.pyz
           --root "$DEPLOY_ROOT"
           --docker-config "$DEPLOY_DOCKER_CONFIG"
+      # `--reuse-existing-caddy-credentials` нужен обоим режимам, а не только
+      # миграции: пара BasicAuth панели живёт в root-owned env на host и в
+      # source не приходит. По `_resolve_caddy_bootstrap_credentials` пара из
+      # source имеет приоритет, а флаг срабатывает запасным путём при её
+      # отсутствии — поэтому он безопасен для обоих контрактов source.
       - name: Bootstrap host and deploy first release (clean)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap && inputs.bootstrap_mode == 'clean' }}
         timeout-minutes: 25
@@ -338,6 +343,7 @@ jobs:
             --source-env-stdin \
             --docker-config "$DEPLOY_DOCKER_CONFIG" \
             --bootstrap \
+            --reuse-existing-caddy-credentials \
             --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
             --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED"
       - name: Bootstrap host and deploy first release (migrate-identity)
