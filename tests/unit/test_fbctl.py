@@ -3849,6 +3849,40 @@ def test_channel_address_rejects_a_bare_ip() -> None:
         canonicalize_source(source, incumbent={})
 
 
+def test_bootstrap_drops_a_bind_address_inherited_from_another_host() -> None:
+    """Адрес привязки с прежней машины на новой не существует и валит стол.
+
+    Боевой bootstrap встал на `cannot assign requested address`: source нёс
+    `DESKTOP_RUSTDESK_BIND=100.73.162.127` со старого host. Реле не поднялось,
+    следом клиент rustdesk в столе не запустился, и проверка здоровья стола
+    осталась красной — при том что Vision и Xvfb внутри работали.
+
+    Такое значение не несёт намерения оператора: это наследие мёртвого
+    экспорта. На bootstrap оно отбрасывается с упоминанием в dropped, а
+    привязка возвращается к дефолту, согласованному с адресом брокера.
+    """
+
+    source = {"DESKTOP_RUSTDESK_BIND": "100.73.162.127"}
+
+    projected, dropped = project_bootstrap_source(source, project_known_legacy_source=False)
+
+    assert "DESKTOP_RUSTDESK_BIND" not in projected
+    assert "DESKTOP_RUSTDESK_BIND" in dropped
+
+
+def test_bootstrap_keeps_a_wildcard_bind_address() -> None:
+    """Привязка ко всем интерфейсам верна на любой машине и не отбрасывается."""
+
+    for wildcard in ("0.0.0.0", "::"):
+        projected, dropped = project_bootstrap_source(
+            {"DESKTOP_RUSTDESK_BIND": wildcard},
+            project_known_legacy_source=False,
+        )
+
+        assert projected["DESKTOP_RUSTDESK_BIND"] == wildcard
+        assert "DESKTOP_RUSTDESK_BIND" not in dropped
+
+
 def test_channel_bind_default_matches_the_advertised_broker(tmp_path: Path) -> None:
     """Интерфейс брокера согласован с адресом, который объявляют оператору.
 

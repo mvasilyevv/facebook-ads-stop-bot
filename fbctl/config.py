@@ -645,6 +645,18 @@ def project_bootstrap_source(
             result.pop("DESKTOP_RUSTDESK_SERVER")
             dropped.append("DESKTOP_RUSTDESK_SERVER")
 
+    # Адрес привязки брокера принадлежит конкретной машине: на новом host его
+    # просто нет, и Docker отвечает `cannot assign requested address`. Реле не
+    # поднимается, следом не стартует клиент rustdesk в столе, и стол выглядит
+    # больным при исправных Xvfb и Vision внутри. Значение со старого host —
+    # такое же наследие мёртвого экспорта, как голый IP в адресе канала, и
+    # отбрасывается так же. Привязка ко всем интерфейсам верна на любой машине
+    # и остаётся: её оператор мог задать осознанно.
+    bind = result.get("DESKTOP_RUSTDESK_BIND")
+    if bind and bind not in {"0.0.0.0", "::"}:
+        result.pop("DESKTOP_RUSTDESK_BIND")
+        dropped.append("DESKTOP_RUSTDESK_BIND")
+
     unknown = sorted(set(result) - SOURCE_ALLOWED_KEYS)
     if unknown:
         raise FbctlError("source environment contains unsupported keys: " + ", ".join(unknown))
