@@ -172,7 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     if result is not None:
         print(json.dumps(result, indent=2, sort_keys=True))
     if args.command in {"doctor", "status"} and result is not None:
-        return 0 if result.get("status") == "READY" else 1
+        status = result.get("status")
+        if status == "READY":
+            return 0
+        if args.command == "doctor" and status == "UNCONFIGURED":
+            return 2
+        return 1
     return 0
 
 

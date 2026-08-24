@@ -4352,3 +4352,159 @@ def test_invalid_source_values_are_reported_together() -> None:
     assert "desktop channel address must be a DNS name" in message
     assert "sentinel-api-key" not in message
     assert "sentinel-secret" not in message
+
+
+# ---------------------------------------------------------------------------
+# Issue #299: doctor distinguishes UNCONFIGURED from FAILED
+# ---------------------------------------------------------------------------
+
+
+def _doctor_root_with_vision(tmp_path, *, with_vision_keys):
+    """Build a root accepted by trusted_shared_directory + doctor.
+
+    Uses _root() so the directory tree has required ownership and mode=0o755.
+    prepare_candidate is called to produce a canonical source.env with all
+    generated secrets, then it is copied to shared/ so doctor's
+    validate_source_values passes.  Vision keys are added only when requested.
+    """
+    root = _root(tmp_path)
+    release = _materialize(root / "candidate")
+    config = prepare_candidate(
+        root=root,
+        release=release,
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+    # Canonical source.env has all generated secrets; copy to shared/ for doctor.
+    canonical = (config.layout.base / "source.env").read_bytes()
+    if with_vision_keys:
+        canonical += ("VISION_X_TOKEN=" + "v" * 40 + "\nVISION_PROFILE_ID=profile-1\n").encode()
+    _write(root / "shared" / "source.env", canonical)
+    return root, config
+
+
+def _patch_doctor_infra(monkeypatch, config):
+    """Patch away I/O-heavy doctor sub-checks unrelated to Vision key detection."""
+    monkeypatch.setattr(fbctl_operations, "load_active", lambda *_a, **_kw: config)
+    monkeypatch.setattr(
+        fbctl_operations,
+        "inspect_bundle",
+        lambda _p: SimpleNamespace(schema=BUNDLE_SCHEMA, release_id=config.layout.release_id),
+    )
+    monkeypatch.setattr(fbctl_operations, "verify_materialized_resources", lambda _p: None)
+    monkeypatch.setattr(fbctl_operations, "read_release_manifest", lambda *_a, **_kw: None)
+    monkeypatch.setattr(fbctl_operations, "require_ok_status", lambda *_a, **_kw: None)
+    # _require_caddy_host_config reads /etc/fb-agent/caddy.env, absent in CI.
+    monkeypatch.setattr(
+        fbctl_controller.ProductionController,
+        "_require_caddy_host_config",
+        lambda _self, _config: None,
+    )
+
+
+def test_doctor_healthy_without_vision_keys_is_unconfigured(
+    tmp_path,
+    monkeypatch,
+):
+    """Healthy host with no VISION_X_TOKEN / VISION_PROFILE_ID -> UNCONFIGURED.
+
+    Both key names must appear in the result so the operator knows what to fill.
+    Must fail (by assertion) on the old binary doctor that only has READY/FAILED.
+    """
+    root, config = _doctor_root_with_vision(tmp_path, with_vision_keys=False)
+    _patch_doctor_infra(monkeypatch, config)
+
+    result = doctor(root=root, runner=FakeRunner())
+
+    # Must be UNCONFIGURED, not READY and not FAILED
+    assert result["status"] == "UNCONFIGURED", (
+        f"expected UNCONFIGURED, got {result['status']!r}; errors={result.get('errors')}"
+    )
+    # Both Vision key names must be present so the operator knows what to fill
+    missing = result.get("missing_config", [])
+    assert "VISION_X_TOKEN" in missing, f"VISION_X_TOKEN not in missing_config: {missing}"
+    assert "VISION_PROFILE_ID" in missing, f"VISION_PROFILE_ID not in missing_config: {missing}"
+    # No genuine infrastructure errors expected
+    assert not result.get("errors"), f"unexpected errors: {result.get('errors')}"
+
+
+def test_doctor_healthy_with_vision_keys_is_ready(
+    tmp_path,
+    monkeypatch,
+):
+    """Healthy host with both Vision keys supplied -> READY (classic green state)."""
+    root, config = _doctor_root_with_vision(tmp_path, with_vision_keys=True)
+    _patch_doctor_infra(monkeypatch, config)
+
+    result = doctor(root=root, runner=FakeRunner())
+
+    assert result["status"] == "READY", (
+        f"expected READY, got {result['status']!r}; errors={result.get('errors')}"
+    )
+    assert not result.get("errors")
+    assert not result.get("missing_config")
+
+
+def test_doctor_broken_host_without_vision_keys_is_failed(
+    tmp_path,
+    monkeypatch,
+):
+    """Broken host (docker compose unavailable) without Vision keys -> FAILED, not UNCONFIGURED.
+
+    A real error must not be masked by the not-configured state.
+    """
+    root, config = _doctor_root_with_vision(tmp_path, with_vision_keys=False)
+    _patch_doctor_infra(monkeypatch, config)
+
+    class _DockerFailRunner(FakeRunner):
+        def run(
+            self,
+            command,
+            *,
+            step,
+            env=None,
+            capture=False,
+            check=True,
+            input_text=None,
+            timeout=None,
+        ):
+            argv = tuple(os.fspath(part) for part in command)
+            if argv[:3] == ("docker", "compose", "version"):
+                failed = CommandResult(1, "")
+                if check:
+                    raise FbctlError("docker compose unavailable", step=step)
+                return failed
+            return super().run(
+                command,
+                step=step,
+                env=env,
+                capture=capture,
+                check=check,
+                input_text=input_text,
+                timeout=timeout,
+            )
+
+    result = doctor(root=root, runner=_DockerFailRunner())
+
+    assert result["status"] == "FAILED", f"expected FAILED, got {result['status']!r}"
+    assert any("docker_compose_unavailable" in str(e) for e in result.get("errors", [])), (
+        f"expected docker_compose_unavailable in errors: {result.get('errors')}"
+    )
+
+
+def test_doctor_unconfigured_exit_code_is_2(monkeypatch, capsys):
+    """CLI must return exit code 2 for UNCONFIGURED status."""
+    monkeypatch.setattr(
+        fbctl_main,
+        "_dispatch",
+        lambda _args: {
+            "status": "UNCONFIGURED",
+            "checks": {},
+            "errors": [],
+            "missing_config": ["VISION_X_TOKEN", "VISION_PROFILE_ID"],
+        },
+    )
+    code = fbctl_main.main(["doctor", "--root", "/tmp/fb-agent-test"])
+    assert code == 2, f"expected exit code 2 for UNCONFIGURED, got {code}"
+    assert '"status"' in capsys.readouterr().out
