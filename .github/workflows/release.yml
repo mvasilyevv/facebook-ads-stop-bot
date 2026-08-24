@@ -317,6 +317,24 @@ jobs:
           --bundle release-inputs/fbctl.pyz
           --root "$DEPLOY_ROOT"
           --docker-config "$DEPLOY_DOCKER_CONFIG"
+      # Bundle приезжает из секрета, а не лежит на host заранее. Иначе чистый
+      # bootstrap молча зависит от файла, положенного руками: его содержимое
+      # никак не сверяется с релизом, а поправить его может только тот, у кого
+      # в этот момент есть SSH. Контракт `shared` соблюдается ровно тот же —
+      # обычный root-owned файл mode 0600 без hard-link aliases.
+      - name: Materialize reviewed adoption bundle on production
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap && inputs.bootstrap_mode == 'clean' }}
+        timeout-minutes: 5
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          ADOPTION_BUNDLE_B64: ${{ secrets.ADOPTION_BUNDLE_B64 }}
+          BOOTSTRAP_ADOPTION_BUNDLE: /opt/fb-agent/shared/adoption-bundle-v1.json
+        run: |
+          set -euo pipefail
+          test -n "$ADOPTION_BUNDLE_B64"
+          # shellcheck disable=SC2029
+          printf '%s' "$ADOPTION_BUNDLE_B64" | base64 --decode | ssh "$DEPLOY_TARGET" \
+            "umask 077 && cat > '$BOOTSTRAP_ADOPTION_BUNDLE' && chown root:root '$BOOTSTRAP_ADOPTION_BUNDLE' && chmod 600 '$BOOTSTRAP_ADOPTION_BUNDLE'"
       # `--reuse-existing-caddy-credentials` нужен обоим режимам, а не только
       # миграции: пара BasicAuth панели живёт в root-owned env на host и в
       # source не приходит. По `_resolve_caddy_bootstrap_credentials` пара из
