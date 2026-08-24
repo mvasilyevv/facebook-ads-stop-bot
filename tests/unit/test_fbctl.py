@@ -1986,6 +1986,62 @@ def test_bootstrap_source_check_is_in_memory_and_redacts_values(
     assert list(tmp_path.rglob("*")) == before
 
 
+def test_bootstrap_source_check_runs_without_legacy_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Чистый режим зовёт проверку без проекции legacy — и она обязана запускаться.
+
+    Флаг `--project-known-legacy-source` объявлялся обязательным, поэтому шаг
+    clean в релизе падал на argparse с кодом 2, не дойдя до самой проверки.
+    Для чистого source проекция не нужна: `dropped_keys` должен быть пуст.
+    """
+
+    source = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in _source_env(tmp_path).read_text(encoding="utf-8").splitlines()
+    }
+    source["VISION_X_TOKEN"] = "vision-super-secret"
+    source["VISION_PROFILE_ID"] = "profile-1"
+    payload = "".join(f"{key}={value}\n" for key, value in source.items()).encode()
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8"))
+
+    assert fbctl_main.main(["bootstrap-source-check", "--stdin"]) == 0
+
+    output = capsys.readouterr().out
+    assert '"status": "READY"' in output
+    assert '"dropped_keys": []' in output
+    assert "vision-super-secret" not in output
+
+
+def test_bootstrap_source_check_without_projection_names_legacy_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Без проекции legacy-ключи не проглатываются молча, а называются вслух."""
+
+    source = {
+        **{
+            line.split("=", 1)[0]: line.split("=", 1)[1]
+            for line in _source_env(tmp_path).read_text(encoding="utf-8").splitlines()
+        },
+        **_legacy_source_values(),
+        "VISION_X_TOKEN": "vision-super-secret",
+        "VISION_PROFILE_ID": "profile-1",
+    }
+    payload = "".join(f"{key}={value}\n" for key, value in source.items()).encode()
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8"))
+
+    assert fbctl_main.main(["bootstrap-source-check", "--stdin"]) == 1
+
+    error = capsys.readouterr().err
+    assert "unsupported keys" in error
+    assert "API_HOST" in error
+    assert "vision-super-secret" not in error
+
+
 def test_bootstrap_source_check_rejects_duplicate_dotenv_in_memory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
