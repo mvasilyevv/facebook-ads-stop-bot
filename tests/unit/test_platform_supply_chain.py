@@ -488,6 +488,29 @@ def test_skipped_bootstrap_ancestor_does_not_skip_release_gates() -> None:
     )
 
 
+def test_both_bootstrap_modes_reuse_existing_caddy_credentials() -> None:
+    """Пара BasicAuth панели живёт на host, а не в source — флаг нужен обоим режимам.
+
+    Чистый bootstrap падал на `Caddy bootstrap credentials are missing from
+    source environment`: `PROD_ENV_B64` этой пары не несёт, а запасной путь был
+    включён только в режиме migrate-identity. По
+    `_resolve_caddy_bootstrap_credentials` пара из source имеет приоритет,
+    поэтому флаг безопасен для обоих контрактов source.
+    """
+
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    deploy = _job_block(release, "deploy")
+    clean = deploy.split("- name: Bootstrap host and deploy first release (clean)", 1)[1].split(
+        "- name: Bootstrap host and deploy first release (migrate-identity)", 1
+    )[0]
+    migrate = deploy.split("- name: Bootstrap host and deploy first release (migrate-identity)", 1)[
+        1
+    ].split("- name: Remove temporary GHCR credentials", 1)[0]
+
+    assert "--reuse-existing-caddy-credentials" in clean
+    assert "--reuse-existing-caddy-credentials" in migrate
+
+
 def test_bootstrap_identity_migration_is_absent_from_release_workflow() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     preflight = _job_block(release, "bootstrap-source-preflight")
