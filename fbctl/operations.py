@@ -17,6 +17,7 @@ from fbctl.bundle import (
     verify_materialized_resources,
 )
 from fbctl.config import (
+    BOOTSTRAP_VISION_KEYS,
     SOURCE_ALLOWED_KEYS,
     RuntimeConfig,
     load_active,
@@ -61,6 +62,8 @@ def doctor(
     root = require_absolute_path(root, label="root")
     checks: dict[str, str] = {}
     errors: list[str] = []
+    # source_values is populated inside the try block; kept here for Vision check.
+    source_values: dict[str, str] = {}
     if sys.version_info < (3, 12):
         errors.append("python_3_12_required")
     else:
@@ -160,7 +163,22 @@ def doctor(
         errors.append("less_than_5_gib_free")
     else:
         checks["disk"] = "ready"
-    return {"status": "READY" if not errors else "FAILED", "checks": checks, "errors": errors}
+    # Determine the three-way status.
+    # Priority: FAILED > UNCONFIGURED > READY.
+    # Absent Vision keys are never an error on their own — they represent the
+    # intentional "first launch without credentials" state introduced in #297.
+    # If there are real errors alongside missing keys the host is still FAILED.
+    missing_vision: list[str] = [key for key in BOOTSTRAP_VISION_KEYS if not source_values.get(key)]
+    if errors:
+        status = "FAILED"
+    elif missing_vision:
+        status = "UNCONFIGURED"
+    else:
+        status = "READY"
+    out: dict[str, object] = {"status": status, "checks": checks, "errors": errors}
+    if missing_vision:
+        out["missing_config"] = missing_vision
+    return out
 
 
 def status(
