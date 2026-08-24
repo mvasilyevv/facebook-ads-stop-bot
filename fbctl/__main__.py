@@ -119,7 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
         "bootstrap-source-check", help="validate one bootstrap source without host changes"
     )
     source_check.add_argument("--stdin", action="store_true", required=True)
-    source_check.add_argument("--project-known-legacy-source", action="store_true", required=True)
+    # Проекция legacy — свойство конкретного source, а не самой проверки. Чистый
+    # bootstrap зовёт её без флага и обязан получить пустой dropped_keys; при
+    # обязательном флаге шаг clean падал на argparse, не дойдя до проверки.
+    source_check.add_argument("--project-known-legacy-source", action="store_true")
 
     status_parser = subparsers.add_parser("status", help="show active runtime evidence")
     status_parser.add_argument("--root", type=_path, default=DEFAULT_ROOT)
