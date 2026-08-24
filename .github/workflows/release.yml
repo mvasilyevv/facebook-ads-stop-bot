@@ -57,6 +57,19 @@ jobs:
       # сама отвергает вызов без него. Ценность гейта в том, чтобы отвергнуть
       # негодный source до сборки images, а это проверка самого source — без
       # доступа к host и без деплойного ключа в этой джобе.
+      # Оба шага ниже условны по режиму, и оба пропускаются, если режим не
+      # выбран. Без этого гейта bootstrap с пустым bootstrap_mode прошёл бы
+      # зелёным, ничего не сделав: пропущенный шаг в GitHub Actions неотличим
+      # от успешного. Отказ здесь — до сборки images, как и остальной гейт.
+      - name: Require an explicit bootstrap mode
+        run: |
+          set -euo pipefail
+          mode='${{ inputs.bootstrap_mode }}'
+          if [ -z "$mode" ]; then
+            echo "::error::bootstrap запрошен, но bootstrap_mode не выбран. Укажите clean для чистого host или migrate-identity для переноса identity." >&2
+            exit 1
+          fi
+          echo "bootstrap_mode=$mode"
       - name: Validate bootstrap source (clean)
         if: ${{ inputs.bootstrap_mode == 'clean' }}
         env:
