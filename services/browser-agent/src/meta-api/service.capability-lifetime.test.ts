@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import * as grpc from '@grpc/grpc-js';
@@ -25,6 +25,30 @@ import {
 //    доказанных pre-send отказов; после — исход остаётся неоднозначным,
 //    потому что fetch мог уже уйти в Meta.
 
+// Часы здесь заморожены намеренно. Прежняя редакция брала окно гранта в одну
+// настоящую секунду от Date.now(): на загруженном раннере она истекала раньше,
+// чем операция доходила до переверификации свежести, — тогда consume и fetch
+// не вызывались вовсе, тест вис на своей точке синхронизации и отменялся по
+// времени (`# cancelled 2` при `# fail 0`). Момент истечения обязан задаваться
+// явно, а не выжидаться: расширение окна секундами лечит не причину, а частоту.
+const FROZEN_NOW_MS = 1_760_000_000_000;
+const FROZEN_NOW_SECONDS = Math.floor(FROZEN_NOW_MS / 1_000);
+// Грант живёт 10 секунд модельного времени: это внутри 40-секундного потолка
+// MAX_TTL_SECONDS_BY_RPC (иначе переверификация отвергнет его как unbounded) и
+// заметно раньше 30-секундного дедлайна вызова, поэтому тик ниже будит ровно
+// таймер капабилити и никакой другой.
+const GRANT_TTL_SECONDS = 10;
+const TICK_PAST_EXPIRY_MS = GRANT_TTL_SECONDS * 1_000 + 1;
+
+/**
+ * Замораживает и часы, и таймеры до сборки запроса: дедлайн вызова считается
+ * от того же модельного времени, что и срок гранта, поэтому их порядок задан
+ * числами, а не тем, что успел раннер.
+ */
+function freezeClock(t: TestContext): void {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: FROZEN_NOW_MS });
+}
+
 function trailerReason(error: { metadata?: grpc.Metadata }): string | undefined {
   const values = error.metadata?.get(BROWSER_OPERATION_REJECTION_METADATA_KEY);
   return values && values.length > 0 ? String(values[0]) : undefined;
@@ -44,7 +68,8 @@ function unaryCall(request: Record<string, unknown>): EventEmitter & {
 }
 
 describe('money capability grant lifetime vs the control-page FIFO queue', () => {
-  it('rejects a grant that is already stale by the time work starts, even past a bypassed entry check', async () => {
+  it('rejects a grant that is already stale by the time work starts, even past a bypassed entry check', async (t) => {
+    freezeClock(t);
     _resetPageLocks();
     const session = { id: 'session-1', visionProfileId: 'profile-1' };
     let pageTouched = false;
@@ -70,7 +95,7 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
       vision_profile_id: 'profile-1',
       // Грант подписан на короткое окно и уже истёк: именно так выглядит
       // операция, чью FIFO-очередь пережила её TTL.
-      capability_expires_at: Math.floor(Date.now() / 1_000) - 5,
+      capability_expires_at: FROZEN_NOW_SECONDS - 5,
       ad_account_id: '123',
       method: 'POST',
       endpoint: '/987654321',
@@ -89,7 +114,8 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
     assert.equal(pageTouched, false);
   });
 
-  it('an expiry proven before the grant is consumed answers like the rest of the pre-send family', async () => {
+  it('an expiry proven before the grant is consumed answers like the rest of the pre-send family', async (t) => {
+    freezeClock(t);
     _resetPageLocks();
     const session = { id: 'session-1', visionProfileId: 'profile-1' };
     let consumeStarted!: () => void;
@@ -119,10 +145,10 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
     const call = unaryCall({
       session_id: 'session-1',
       vision_profile_id: 'profile-1',
-      // Достаточно свеж, чтобы пройти переверификацию на захвате lock (см.
-      // assertCapabilityStillFresh в handler'е), но истекает мгновение
-      // спустя — во время самого consume, а не до него.
-      capability_expires_at: Math.floor(Date.now() / 1_000) + 1,
+      // Свеж на захвате lock (см. assertCapabilityStillFresh в handler'е);
+      // истечение наступит от тика ниже — во время самого consume, а не до
+      // него, и наступит независимо от загруженности машины.
+      capability_expires_at: FROZEN_NOW_SECONDS + GRANT_TTL_SECONDS,
       ad_account_id: '123',
       method: 'POST',
       endpoint: '/987654321',
@@ -136,6 +162,10 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
     });
 
     await consumeStartedPromise;
+    // Операция стоит внутри consume — грант ещё не списан необратимо. Только
+    // теперь двигаем модельные часы за срок гранта: будится таймер капабилити
+    // (10 с) и не будится ни дедлайн вызова, ни таймаут fetch (оба 30 с).
+    t.mock.timers.tick(TICK_PAST_EXPIRY_MS);
     try {
       const error = await result;
       assert.equal(error.code, grpc.status.PERMISSION_DENIED);
@@ -147,10 +177,11 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
     }
   });
 
-  it('an expiry after the grant is consumed stays ambiguous, exactly as before', async () => {
+  it('an expiry after the grant is consumed stays ambiguous, exactly as before', async (t) => {
     // Регресс-замок на существующий тест поведения: как только send boundary
     // пересечён, capability_expired не должен обзаводиться кодом причины —
     // fetch мог уже уйти, и REJECTED здесь означал бы потерю доказательства.
+    freezeClock(t);
     _resetPageLocks();
     const session = { id: 'session-1', visionProfileId: 'profile-1' };
     let startedResolve!: () => void;
@@ -178,7 +209,7 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
       vision_profile_id: 'profile-1',
       // Тем же образом: свеж на захвате lock, истекает уже во время fetch —
       // после того, как authorizeOperationCapability «списал» грант.
-      capability_expires_at: Math.floor(Date.now() / 1_000) + 1,
+      capability_expires_at: FROZEN_NOW_SECONDS + GRANT_TTL_SECONDS,
       ad_account_id: '123',
       method: 'POST',
       endpoint: '/987654321',
@@ -192,6 +223,9 @@ describe('money capability grant lifetime vs the control-page FIFO queue', () =>
     });
 
     await started;
+    // fetch ушёл со страницы и не вернётся сам; грант уже списан. Двигаем
+    // часы за срок гранта — истечение приходит после send boundary.
+    t.mock.timers.tick(TICK_PAST_EXPIRY_MS);
     const error = await result;
 
     assert.equal(error.code, grpc.status.DEADLINE_EXCEEDED);
