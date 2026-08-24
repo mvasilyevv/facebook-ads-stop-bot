@@ -10,6 +10,16 @@ on:
         required: true
         type: boolean
         default: false
+      bootstrap_mode:
+        description: >-
+          Bootstrap mode (required when bootstrap is true).
+          clean — brand-new host, no prior identity; migration flags must not be used.
+          migrate-identity — carry over OIDC/owner identity from the legacy source.
+        required: false
+        type: choice
+        options:
+          - clean
+          - migrate-identity
 
 permissions:
   contents: read
@@ -47,7 +57,17 @@ jobs:
       # сама отвергает вызов без него. Ценность гейта в том, чтобы отвергнуть
       # негодный source до сборки images, а это проверка самого source — без
       # доступа к host и без деплойного ключа в этой джобе.
-      - name: Validate bootstrap source
+      - name: Validate bootstrap source (clean)
+        if: ${{ inputs.bootstrap_mode == 'clean' }}
+        env:
+          PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$PROD_ENV_B64"
+          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl bootstrap-source-check \
+            --stdin
+      - name: Validate bootstrap source (migrate-identity)
+        if: ${{ inputs.bootstrap_mode == 'migrate-identity' }}
         env:
           PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
         run: |
@@ -284,8 +304,31 @@ jobs:
           --bundle release-inputs/fbctl.pyz
           --root "$DEPLOY_ROOT"
           --docker-config "$DEPLOY_DOCKER_CONFIG"
-      - name: Bootstrap host and deploy first release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+      - name: Bootstrap host and deploy first release (clean)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap && inputs.bootstrap_mode == 'clean' }}
+        timeout-minutes: 25
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_ROOT: /opt/fb-agent
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+          PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
+          BOOTSTRAP_ADOPTION_BUNDLE: /opt/fb-agent/shared/adoption-bundle-v1.json
+          BOOTSTRAP_DESKTOP_PROFILE_SEED: /opt/fb-agent/shared/desktop-profile-seed
+        run: |
+          test -n "$PROD_ENV_B64"
+          test -n "$BOOTSTRAP_ADOPTION_BUNDLE"
+          test -n "$BOOTSTRAP_DESKTOP_PROFILE_SEED"
+          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl publish \
+            --host "$DEPLOY_TARGET" \
+            --bundle release-inputs/fbctl.pyz \
+            --root "$DEPLOY_ROOT" \
+            --source-env-stdin \
+            --docker-config "$DEPLOY_DOCKER_CONFIG" \
+            --bootstrap \
+            --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
+            --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED"
+      - name: Bootstrap host and deploy first release (migrate-identity)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap && inputs.bootstrap_mode == 'migrate-identity' }}
         timeout-minutes: 25
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}

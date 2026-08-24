@@ -91,10 +91,12 @@ Release workflow до сборки images отправляет маленьки�
 bundle и source только через stdin. Проверка ничего не пишет и не запускает
 Docker/БД.
 
-Переход со старого host identity больше не поддерживается: тот host утрачен
-вместе с провайдером, и `--migrate-existing-bootstrap-identity` из workflow
-удалён. Флаг остаётся в `fbctl` для ручного вызова, но CI выполняет только
-документированный ниже bootstrap чистого host.
+CI поддерживает два явных режима bootstrap через вход `bootstrap_mode`:
+`clean` — для нового host без прежней identity (migration-флаги не передаются);
+`migrate-identity` — для переноса OIDC/owner identity со старого source
+(`--project-known-legacy-source` и `--reuse-existing-caddy-credentials`
+передаются точно как при ручном вызове). Режим называет оператор;
+автоопределения нет.
 
 Миграция наследует только атомарную пару `TELEGRAM_OIDC_CLIENT_ID` +
 `TELEGRAM_OIDC_CLIENT_SECRET` и отдельно
@@ -262,7 +264,7 @@ Vision/Caddy значения, но не смотрит filesystem, Docker, БД
 
 ```bash
 sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap-source-check --stdin \
-  --project-known-legacy-source < /opt/fb-agent/shared/source.env
+  < /opt/fb-agent/shared/source.env
 ```
 
 Для чистого source поле `dropped_keys` в результате должно быть пустым. Если
