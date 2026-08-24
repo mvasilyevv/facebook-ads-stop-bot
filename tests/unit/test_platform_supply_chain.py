@@ -488,6 +488,37 @@ def test_skipped_bootstrap_ancestor_does_not_skip_release_gates() -> None:
     )
 
 
+def test_clean_bootstrap_delivers_its_own_adoption_bundle() -> None:
+    """Чистый bootstrap не зависит от файла, положенного на host руками.
+
+    Bundle приезжает из секрета и раскладывается тем же контрактом `shared`:
+    обычный root-owned файл mode 0600. Иначе содержимое каталога никак не
+    сверяется с релизом, а поправить его может только тот, у кого в этот момент
+    есть SSH к прод-машине.
+    """
+
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    deploy = _job_block(release, "deploy")
+    step = deploy.split("- name: Materialize reviewed adoption bundle on production", 1)[1].split(
+        "- name: Bootstrap host and deploy first release (clean)", 1
+    )[0]
+
+    assert "inputs.bootstrap_mode == 'clean'" in step
+    assert "ADOPTION_BUNDLE_B64: ${{ secrets.ADOPTION_BUNDLE_B64 }}" in step
+    assert 'test -n "$ADOPTION_BUNDLE_B64"' in step
+    assert "base64 --decode | ssh" in step
+    assert "chmod 600" in step
+    assert "chown root:root" in step
+    assert "timeout-minutes: 5" in step
+    # Секрет не должен оседать файлом на раннере и попадать в артефакты.
+    assert "base64 --decode >" not in step
+    assert "upload-artifact" not in step
+    # Шаг обязан идти до самого bootstrap, иначе bundle приедет после чтения.
+    assert deploy.index(
+        "- name: Materialize reviewed adoption bundle on production"
+    ) < deploy.index("- name: Bootstrap host and deploy first release (clean)")
+
+
 def test_both_bootstrap_modes_reuse_existing_caddy_credentials() -> None:
     """Пара BasicAuth панели живёт на host, а не в source — флаг нужен обоим режимам.
 
