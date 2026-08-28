@@ -1909,6 +1909,45 @@ def test_vision_bootstrap_both_keys_present_transport_is_created(tmp_path: Path)
     assert "VISION_X_TOKEN=" not in secret_contents
 
 
+def test_missing_transport_uses_regular_empty_file_not_dev_null(tmp_path: Path) -> None:
+    """Непереданный транспорт → заглушка-регулярный-файл, а не /dev/null.
+
+    Инвариант: значения ADOPTION_BUNDLE_FILE и VISION_BOOTSTRAP_ENV_FILE
+    в runtime.env при отсутствии обоих транспортов должны указывать на
+    существующий обычный файл (stat.S_ISREG), пустой по содержимому.
+
+    На старом коде (подстановка /dev/null) тест падает именно на ассерте
+    ``assert stat.S_ISREG(path.stat().st_mode)``, потому что /dev/null —
+    символьное устройство (S_ISCHR), а не регулярный файл.
+    """
+    root = _root(tmp_path)
+    release = _materialize(root / "candidate")
+
+    config = prepare_candidate(
+        root=root,
+        release=release,
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,  # транспорт не передан
+        bootstrap=False,  # vision bootstrap тоже не передаётся
+    )
+
+    for key in ("ADOPTION_BUNDLE_FILE", "VISION_BOOTSTRAP_ENV_FILE"):
+        value = config.values[key]
+        path = Path(value)
+        assert path.is_file(), (
+            f"{key}={value!r}: ожидался существующий файл, но Path.is_file() → False; "
+            "на /dev/null is_file() всегда False (это символьное устройство)"
+        )
+        assert stat.S_ISREG(path.stat().st_mode), (
+            f"{key}={value!r}: ожидался обычный файл (S_ISREG), "
+            f"получен режим {path.stat().st_mode:#o}"
+        )
+        assert path.read_bytes() == b"", (
+            f"{key}={value!r}: заглушка должна быть пустой, получено {path.read_bytes()!r}"
+        )
+
+
 def test_vision_bootstrap_half_pair_and_invalid_profile_are_rejected(tmp_path: Path) -> None:
     """Один ключ из пары и негодный формат профиля отвергаются.
 
