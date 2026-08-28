@@ -15,6 +15,7 @@ from apps.health_watchdog.main import (
     META_CHANNEL_INCIDENT_KEY,
     check_meta_api_channel,
 )
+from core.vision.channel_config import VisionChannelConfiguration
 
 
 @dataclass
@@ -80,6 +81,17 @@ def _scanning_enabled(monkeypatch):
     monkeypatch.setattr(
         "apps.health_watchdog.main._load_canonical_vision_profile_id",
         AsyncMock(return_value="vision-profile-1"),
+    )
+    # Канал настроен: эти тесты про поведение живой пробы, а тишину
+    # ненастроенного канала проверяет test_health_watchdog_unconfigured_channel.
+    monkeypatch.setattr(
+        "apps.health_watchdog.main.load_vision_channel_configuration",
+        AsyncMock(
+            return_value=VisionChannelConfiguration(
+                has_token=True,
+                profile_id="vision-profile-1",
+            )
+        ),
     )
 
 
