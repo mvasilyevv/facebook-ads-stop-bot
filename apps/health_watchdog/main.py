@@ -67,6 +67,7 @@ from core.telegram.worker_notify import (
     resolve_recurring_incident,
     resolve_recurring_incident_in_transaction,
 )
+from core.vision.channel_config import load_vision_channel_configuration
 from core.vision.token_refresh import refresh_vision_token_if_needed
 from core.wording import ads_ru, commands_ru
 from core.worker_liveness import record_worker_heartbeat
@@ -640,6 +641,26 @@ async def check_meta_api_channel(
     except Exception:  # noqa: BLE001
         logger.exception("meta probe: observer_config недоступен — probe пропущен")
         return False
+
+    # Ненастроенный канал — штатное состояние первого запуска, а не авария:
+    # учётные данные вводит оператор уже после выкатки. Условие смотрит именно
+    # на введённость, а не на ответ канала: настроенный канал падает по той же
+    # ветке кода, и подавление по факту отказа закрыло бы настоящую аварию.
+    try:
+        configuration = await load_vision_channel_configuration(engine)
+    except Exception:  # noqa: BLE001
+        # Нечитаемая конфигурация — это «неизвестно», а не «не настроено».
+        # Тишина по неизвестности глушила бы настоящий отказ, поэтому проба
+        # идёт своим обычным путём и отказ канала остаётся аварией.
+        logger.exception("meta probe: конфигурация канала недоступна — проба идёт как обычно")
+    else:
+        if not configuration.has_token or not configuration.profile_id:
+            logger.info(
+                "meta probe: канал Vision не настроен (токен %s, профиль %s) — проба пропущена",
+                "введён" if configuration.has_token else "не введён",
+                "выбран" if configuration.profile_id else "не выбран",
+            )
+            return False
 
     expected_profile_id = ""
     try:
