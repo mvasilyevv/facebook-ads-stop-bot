@@ -68,7 +68,7 @@ services:
     <<: *job-common
     env_file:
       - ${APP_ENV_FILE:?set APP_ENV_FILE}
-      - ${VISION_BOOTSTRAP_ENV_FILE:-/dev/null}
+      - ${VISION_BOOTSTRAP_ENV_FILE:?set VISION_BOOTSTRAP_ENV_FILE}
     entrypoint: ["python", "/app/scripts/bootstrap-vision-config.py"]
 
   telegram_webhook_configurator:

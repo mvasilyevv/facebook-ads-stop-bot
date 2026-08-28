@@ -38,7 +38,7 @@ def test_release_jobs_are_isolated_from_long_running_services() -> None:
     assert "database_check:" in source
     assert "runtime_config_bootstrap:" in source
     assert "vision_config_bootstrap:" in source
-    assert "${VISION_BOOTSTRAP_ENV_FILE:-/dev/null}" in source
+    assert "${VISION_BOOTSTRAP_ENV_FILE:?set VISION_BOOTSTRAP_ENV_FILE}" in source
     assert "telegram_webhook_configurator:" in source
     assert "${ADOPTION_BUNDLE_FILE:-/dev/null}" in source
     for forbidden in ("api:", "frontend:", "mini-app:", "observer:"):

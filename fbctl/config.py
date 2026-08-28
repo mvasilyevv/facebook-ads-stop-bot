@@ -418,6 +418,12 @@ def prepare_candidate(
     if vision_bootstrap is not None:
         vision_bootstrap_path = layout.base / "secrets" / "vision-bootstrap.env"
         atomic_write(vision_bootstrap_path, render_dotenv(vision_bootstrap), mode=0o600)
+    # Заглушка вместо /dev/null: compose v5.5.0 отказывается читать символьное
+    # устройство как env_file (регресс относительно v5.1.0).  Пустой обычный
+    # файл с режимом 0o400 решает проблему без изменения семантики: нет данных —
+    # транспорт не передаётся, инвариант load_active проверяет это по пути.
+    null_transport = layout.base / "secrets" / "null-transport.env"
+    atomic_write(null_transport, b"", mode=0o400)
     require_directory(layout.shared / "vision-config")
     # Каталог ключей брокера RustDesk создаём сами: в отличие от профиля Vision
     # его никто не приносит извне, а без него брокер сгенерирует новую пару
@@ -448,10 +454,12 @@ def prepare_candidate(
         "DESKTOP_ENV_FILE": os.fspath(layout.desktop_env),
         **{key: os.fspath(path) for key, path in browser_paths.items()},
         "ADOPTION_BUNDLE_FILE": (
-            os.fspath(adoption_bundle) if adoption_bundle is not None else "/dev/null"
+            os.fspath(adoption_bundle) if adoption_bundle is not None else os.fspath(null_transport)
         ),
         "VISION_BOOTSTRAP_ENV_FILE": (
-            os.fspath(vision_bootstrap_path) if vision_bootstrap_path is not None else "/dev/null"
+            os.fspath(vision_bootstrap_path)
+            if vision_bootstrap_path is not None
+            else os.fspath(null_transport)
         ),
         "VISION_CONFIG_DIR": os.fspath(layout.shared / "vision-config"),
         # Ключи брокера RustDesk обязаны пережить пересоздание контейнера: после
@@ -509,9 +517,13 @@ def load_active(root: Path, *, docker_config: Path | None = None) -> RuntimeConf
     for key, expected_path in expected_paths.items():
         if Path(values[key]) != expected_path:
             raise FbctlError(f"active runtime points {key} outside its canonical path")
+    # Активный runtime обязан доказуемо не удерживать bootstrap-only транспорт:
+    # оба поля должны указывать на canonical-заглушку внутри layout.base,
+    # а не на реальный secret или /dev/null.
+    null_transport = layout.base / "secrets" / "null-transport.env"
     if (
-        values["ADOPTION_BUNDLE_FILE"] != "/dev/null"
-        or values["VISION_BOOTSTRAP_ENV_FILE"] != "/dev/null"
+        Path(values["ADOPTION_BUNDLE_FILE"]) != null_transport
+        or Path(values["VISION_BOOTSTRAP_ENV_FILE"]) != null_transport
     ):
         raise FbctlError("active runtime retains bootstrap-only file transport")
     for key in IMAGE_KEYS:
