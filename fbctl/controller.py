@@ -1729,18 +1729,52 @@ def _resolve_caddy_bootstrap_credentials(
 
 
 def _normalize_profile_tree(root: Path, *, uid: int, gid: int) -> None:
+    """Выставить владельца uid:gid на всё дерево канонического профиля.
+
+    Обход идёт без следования симлинкам: симлинк на каталог нормализуется как
+    сама ссылка, её цель не обходится и владельца не получает. Сокеты, FIFO и
+    прочие типы записей допускаются — они создаются запущенным рабочим столом.
+
+    Единственное настоящее ограничение: обычный файл с несколькими жёсткими
+    ссылками безопасен, только если все его ссылки лежат внутри дерева профиля.
+    Иначе chown изменил бы владельца файла за пределами профиля.
+    """
     if not (1 <= uid <= 65_535 and 1 <= gid <= 65_535):
         raise FbctlError("Vision runtime UID/GID is invalid")
     require_directory(root)
-    paths = [root, *root.rglob("*")]
-    for path in paths:
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not (
-            stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
-        ):
-            raise FbctlError("canonical Vision profile contains an unsafe entry")
-        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
-            raise FbctlError("canonical Vision profile contains a hard-linked file")
+
+    # Собираем пути без следования симлинкам; в каталог-симлинк не спускаемся.
+    paths: list[Path] = []
+    # Для обычных файлов с nlink > 1: сколько раз встречен inode внутри дерева.
+    inode_counts: dict[tuple[int, int], int] = {}
+    # Ожидаемое полное число жёстких ссылок для каждого inode.
+    inode_nlinks: dict[tuple[int, int], int] = {}
+
+    def _collect(directory: Path) -> None:
+        try:
+            scan = list(os.scandir(directory))
+        except OSError as exc:
+            raise FbctlError("canonical Vision profile cannot be read") from exc
+        for entry in scan:
+            path = Path(entry.path)
+            paths.append(path)
+            meta = entry.stat(follow_symlinks=False)
+            if stat.S_ISREG(meta.st_mode) and meta.st_nlink > 1:
+                key = (meta.st_dev, meta.st_ino)
+                inode_counts[key] = inode_counts.get(key, 0) + 1
+                inode_nlinks[key] = meta.st_nlink
+            # Спускаемся только в настоящие каталоги, не в симлинки на каталог.
+            if entry.is_dir(follow_symlinks=False):
+                _collect(path)
+
+    paths.append(root)
+    _collect(root)
+
+    # Проверка hard links: все ссылки файла обязаны лежать внутри дерева.
+    for key, total_links in inode_nlinks.items():
+        if inode_counts[key] != total_links:
+            raise FbctlError("canonical Vision profile contains a hard link from outside")
+
     for path in paths:
         os.chown(path, uid, gid, follow_symlinks=False)
 
