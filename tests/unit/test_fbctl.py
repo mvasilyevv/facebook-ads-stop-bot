@@ -3709,7 +3709,6 @@ def test_normalize_profile_allows_socket_symlink_and_internal_hard_link(
         assert profile / "data.link" in chowned_set
 
 
-
 def test_normalize_profile_symlink_outside_does_not_chown_target(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3767,9 +3766,7 @@ def test_normalize_profile_rejects_hard_link_with_external_reference(
         _normalize_profile_tree(profile, uid=1000, gid=1000)
 
 
-def test_normalize_profile_directory_symlink_is_not_traversed(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_normalize_profile_directory_symlink_is_not_traversed(tmp_path: Path, monkeypatch) -> None:
     """Симлинк на каталог не обходится: записи внутри цели владельца не получают.
 
     Это ключевая гарантия: обход не выходит за дерево через симлинк на каталог.
@@ -3796,15 +3793,10 @@ def test_normalize_profile_directory_symlink_is_not_traversed(
     _normalize_profile_tree(profile, uid=1000, gid=1000)
 
     chowned_set = set(chowned)
-    assert outside_file not in chowned_set, (
-        "Файл внутри каталога-симлинка не должен получать chown"
-    )
-    assert outside_dir not in chowned_set, (
-        "Каталог-цель симлинка не должен получать chown"
-    )
+    assert outside_file not in chowned_set, "Файл внутри каталога-симлинка не должен получать chown"
+    assert outside_dir not in chowned_set, "Каталог-цель симлинка не должен получать chown"
     # Сам симлинк нормализуется
     assert profile / "dir-link" in chowned_set
-
 
 
 def _snapshot_live_profile(profile: Path):
@@ -4065,6 +4057,38 @@ def test_bootstrap_keeps_a_wildcard_bind_address() -> None:
 
         assert projected["DESKTOP_RUSTDESK_BIND"] == wildcard
         assert "DESKTOP_RUSTDESK_BIND" not in dropped
+
+
+def test_bind_address_from_another_host_is_not_inherited_from_incumbent() -> None:
+    """Отброшенный на входе адрес привязки не возвращается через incumbent.
+
+    Боевой прогон 28.08 упал на `cannot assign requested address`, хотя source
+    из секрета ключа не нёс: #324 его отбрасывает. Значение вернулось с host —
+    `DESKTOP_RUSTDESK_BIND` входит в DURABLE_KEYS, а в candidate/source.env
+    лежал адрес утраченной машины, записанный прогонами до этого фикса.
+
+    Адрес привязки принадлежит конкретной машине, поэтому наследуется по тем же
+    правилам, по каким принимается: только привязка ко всем интерфейсам.
+    """
+
+    values = canonicalize_source(
+        _minimal_source(),
+        incumbent={"DESKTOP_RUSTDESK_BIND": "100.73.162.127"},
+    )
+
+    assert "DESKTOP_RUSTDESK_BIND" not in values
+
+
+def test_wildcard_bind_address_is_still_inherited_from_incumbent() -> None:
+    """Осознанная привязка ко всем интерфейсам переживает деплой."""
+
+    for wildcard in ("0.0.0.0", "::"):
+        values = canonicalize_source(
+            _minimal_source(),
+            incumbent={"DESKTOP_RUSTDESK_BIND": wildcard},
+        )
+
+        assert values["DESKTOP_RUSTDESK_BIND"] == wildcard
 
 
 def test_channel_bind_default_matches_the_advertised_broker(tmp_path: Path) -> None:

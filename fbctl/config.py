@@ -84,6 +84,9 @@ RETIRED_SOURCE_KEYS = frozenset(
         "DESKTOP_RUSTDESK_KEY",
     }
 )
+# Единственные значения привязки брокера, верные на любой машине. Всё
+# остальное — адрес конкретного host, и на другом host его нет.
+WILDCARD_BIND_ADDRESSES = frozenset({"0.0.0.0", "::"})
 BOOTSTRAP_VISION_KEYS = ("VISION_X_TOKEN", "VISION_PROFILE_ID")
 BOOTSTRAP_CADDY_KEYS = ("PANEL_BASIC_AUTH_USER", "PANEL_BASIC_AUTH_HASH")
 BOOTSTRAP_LEGACY_DROP_KEYS = frozenset(
@@ -597,6 +600,13 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
         if old_value and new_value and old_value != new_value:
             raise FbctlError(f"source environment attempts to rotate durable {key}")
         if old_value and not new_value:
+            # Адрес привязки брокера принадлежит машине, а не установке: на
+            # новом host его просто нет, и Docker отвечает `cannot assign
+            # requested address`. Наследование идёт по тем же правилам, по
+            # каким значение принимается на входе (#324), иначе отброшенный
+            # адрес прежнего host возвращается через incumbent и валит стол.
+            if key == "DESKTOP_RUSTDESK_BIND" and old_value not in WILDCARD_BIND_ADDRESSES:
+                continue
             result[key] = old_value
     if not result.get("FB_AGENT_BOOTSTRAP_CLUSTER_ID"):
         result["FB_AGENT_BOOTSTRAP_CLUSTER_ID"] = uuid.uuid4().hex
@@ -665,7 +675,7 @@ def project_bootstrap_source(
     # отбрасывается так же. Привязка ко всем интерфейсам верна на любой машине
     # и остаётся: её оператор мог задать осознанно.
     bind = result.get("DESKTOP_RUSTDESK_BIND")
-    if bind and bind not in {"0.0.0.0", "::"}:
+    if bind and bind not in WILDCARD_BIND_ADDRESSES:
         result.pop("DESKTOP_RUSTDESK_BIND")
         dropped.append("DESKTOP_RUSTDESK_BIND")
 
