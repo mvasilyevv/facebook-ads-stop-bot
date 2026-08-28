@@ -3623,6 +3623,151 @@ def test_nested_vision_profile_is_normalized_for_runtime_uid(tmp_path: Path, mon
     assert all(item[1:] == (1000, 1000, False) for item in ownership)
 
 
+def test_normalize_profile_allows_socket_symlink_and_internal_hard_link(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Unix-сокет, симлинк внутрь дерева и hard link внутри дерева — норма.
+
+    Запущенный рабочий стол сам создаёт такие записи в профиле. Функция обязана
+    нормализовать их без ошибки и выставить владельца на каждую запись.
+    """
+    import tempfile
+
+    # AF_UNIX path на macOS ограничен 104 байтами; используем короткий путь.
+    with tempfile.TemporaryDirectory(prefix="fbt-") as short_tmp:
+        profile = Path(short_tmp) / "vc"
+        profile.mkdir(mode=0o700)
+
+        # Обычный файл
+        data = _write(profile / "data.txt", "hello", 0o600)
+
+        # Unix-сокет (как gpg-agent)
+        sock_path = profile / "S.gpg-agent"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.bind(str(sock_path))
+
+        # Hard link на тот же файл — оба внутри дерева
+        hardlink = profile / "data.hard"
+        os.link(data, hardlink)
+
+        # Симлинк внутрь дерева
+        os.symlink("data.txt", profile / "data.link")
+
+        chowned: list[Path] = []
+        monkeypatch.setattr(
+            os,
+            "chown",
+            lambda path, uid, gid, *, follow_symlinks: chowned.append(Path(path)),
+        )
+
+        _normalize_profile_tree(profile, uid=1000, gid=1000)
+
+        chowned_set = set(chowned)
+        assert profile in chowned_set
+        assert sock_path in chowned_set
+        assert data in chowned_set
+        assert hardlink in chowned_set
+        assert profile / "data.link" in chowned_set
+
+
+
+def test_normalize_profile_symlink_outside_does_not_chown_target(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Симлинк, указывающий наружу, не разыменовывается: файл-цель не получает chown.
+
+    Обход не следует симлинкам, поэтому путь за пределами профиля не затрагивается.
+    """
+    profile = tmp_path / "vision-config"
+    profile.mkdir(mode=0o700)
+
+    # Файл вне дерева профиля
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    # Симлинк внутри профиля → файл снаружи
+    os.symlink(str(outside), profile / "escape.link")
+
+    chowned: list[Path] = []
+    monkeypatch.setattr(
+        os,
+        "chown",
+        lambda path, uid, gid, *, follow_symlinks: chowned.append(Path(path)),
+    )
+
+    _normalize_profile_tree(profile, uid=1000, gid=1000)
+
+    assert outside not in set(chowned), (
+        "Цель симлинка за пределами профиля не должна получать chown"
+    )
+    # Сам симлинк нормализуется
+    assert profile / "escape.link" in set(chowned)
+
+
+def test_normalize_profile_rejects_hard_link_with_external_reference(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Обычный файл с жёсткой ссылкой снаружи дерева — FbctlError.
+
+    chown такого файла изменил бы владельца записи за пределами профиля.
+    """
+    profile = tmp_path / "vision-config"
+    profile.mkdir(mode=0o700)
+    _write(profile / "blob", b"data", 0o600)
+
+    # Hard link на тот же inode, но вне профиля
+    os.link(profile / "blob", tmp_path / "external.link")
+
+    monkeypatch.setattr(
+        os,
+        "chown",
+        lambda path, uid, gid, *, follow_symlinks: None,
+    )
+
+    with pytest.raises(FbctlError, match="hard link from outside"):
+        _normalize_profile_tree(profile, uid=1000, gid=1000)
+
+
+def test_normalize_profile_directory_symlink_is_not_traversed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Симлинк на каталог не обходится: записи внутри цели владельца не получают.
+
+    Это ключевая гарантия: обход не выходит за дерево через симлинк на каталог.
+    """
+    profile = tmp_path / "vision-config"
+    profile.mkdir(mode=0o700)
+
+    # Каталог вне профиля с файлом
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    outside_file = outside_dir / "secret.txt"
+    outside_file.write_text("sensitive", encoding="utf-8")
+
+    # Симлинк-каталог внутри профиля → каталог снаружи
+    os.symlink(str(outside_dir), profile / "dir-link")
+
+    chowned: list[Path] = []
+    monkeypatch.setattr(
+        os,
+        "chown",
+        lambda path, uid, gid, *, follow_symlinks: chowned.append(Path(path)),
+    )
+
+    _normalize_profile_tree(profile, uid=1000, gid=1000)
+
+    chowned_set = set(chowned)
+    assert outside_file not in chowned_set, (
+        "Файл внутри каталога-симлинка не должен получать chown"
+    )
+    assert outside_dir not in chowned_set, (
+        "Каталог-цель симлинка не должен получать chown"
+    )
+    # Сам симлинк нормализуется
+    assert profile / "dir-link" in chowned_set
+
+
+
 def _snapshot_live_profile(profile: Path):
     return snapshot_profile_tree(
         profile,
