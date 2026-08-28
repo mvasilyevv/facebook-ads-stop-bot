@@ -129,6 +129,7 @@ def validate_bootstrap_vision_profile(
         required_uid=canonical_required_uid,
         required_gid=canonical_required_gid,
         missing_ok=True,
+        allow_runtime_sockets=True,
     )
     seed = snapshot_profile_tree(
         seed_path,
@@ -162,6 +163,7 @@ def validate_production_vision_profile() -> VisionProfileBootstrapInput:
             required_gid=VISION_RUNTIME_GID,
             missing_ok=True,
             directory_fd=shared_fd,
+            allow_runtime_sockets=True,
         )
         seed = snapshot_profile_tree(
             PRODUCTION_DESKTOP_PROFILE_SEED,
@@ -235,8 +237,14 @@ def snapshot_profile_tree(
     required_gid: int,
     missing_ok: bool = False,
     directory_fd: int | None = None,
+    allow_runtime_sockets: bool = False,
 ) -> VisionProfileTreeReceipt | None:
-    """Capture a bounded tree through no-follow file descriptors."""
+    """Capture a bounded tree through no-follow file descriptors.
+
+    ``allow_runtime_sockets`` включается только для канонического профиля: это
+    живой каталог приложения, и запущенный стол сам создаёт в нём сокеты
+    (``.gnupg/S.gpg-agent*``). Seed вносится снаружи и остаётся строгим.
+    """
 
     parent_fd: int | None = None
     root_fd: int | None = None
@@ -262,6 +270,7 @@ def snapshot_profile_tree(
             label=label,
             required_uid=required_uid,
             required_gid=required_gid,
+            allow_runtime_sockets=allow_runtime_sockets,
         )
         return VisionProfileTreeReceipt(
             path=path,
@@ -287,6 +296,7 @@ def bootstrap_profile_is_current(profile: VisionProfileBootstrapInput) -> bool:
         required_uid=profile.canonical_required_uid,
         required_gid=profile.canonical_required_gid,
         expected=profile.canonical_receipt,
+        allow_runtime_sockets=True,
     ):
         return False
     return _optional_profile_receipt_is_current(
@@ -305,6 +315,7 @@ def _optional_profile_receipt_is_current(
     required_uid: int,
     required_gid: int,
     expected: VisionProfileTreeReceipt | None,
+    allow_runtime_sockets: bool = False,
 ) -> bool:
     try:
         current = snapshot_profile_tree(
@@ -313,6 +324,7 @@ def _optional_profile_receipt_is_current(
             required_uid=required_uid,
             required_gid=required_gid,
             missing_ok=True,
+            allow_runtime_sockets=allow_runtime_sockets,
         )
     except FbctlError:
         return False
@@ -367,6 +379,7 @@ def copy_profile_from_receipt(
                 label="staged managed Vision configuration",
                 required_uid=uid,
                 required_gid=gid,
+                allow_runtime_sockets=True,
             )
             assert staged is not None
             _rename_noreplace(
@@ -380,6 +393,7 @@ def copy_profile_from_receipt(
                 label="managed Vision configuration",
                 required_uid=uid,
                 required_gid=gid,
+                allow_runtime_sockets=True,
             )
             assert published is not None
             if not _same_tree_after_root_rename(staged, published):
@@ -473,6 +487,7 @@ def _capture_open_tree(
     label: str,
     required_uid: int,
     required_gid: int,
+    allow_runtime_sockets: bool = False,
 ) -> tuple[TreeEntryReceipt, ...]:
     entries: list[TreeEntryReceipt] = []
     total_bytes = 0
@@ -563,6 +578,20 @@ def _capture_open_tree(
                         hashlib.sha256(target.encode("utf-8")).hexdigest(),
                     )
                 )
+            elif allow_runtime_sockets and stat.S_ISSOCK(metadata.st_mode):
+                # gpg-agent создаёт свои сокеты при первом же старте стола:
+                # .gnupg/S.gpg-agent и три его собрата. Отвергать их значило бы,
+                # что bootstrap перестаёт быть повторяемым ровно тогда, когда
+                # система начинает работать. В снимок они не попадают: сокет
+                # эфемерен, его появление и исчезновение не меняет профиль, а
+                # содержимого, которое можно было бы сверить, у него нет.
+                # Владельца и права проверяем здесь же, а не общим валидатором:
+                # тот отвечает за записи, попадающие в снимок, и разрешать в нём
+                # новый тип значило бы ослабить проверку и для seed.
+                if metadata.st_uid != required_uid or metadata.st_gid != required_gid:
+                    raise FbctlError(f"{label} has invalid ownership")
+                if stat.S_IMODE(metadata.st_mode) & 0o022:
+                    raise FbctlError(f"{label} contains an unsafe entry")
             else:
                 raise FbctlError(f"{label} contains an unsafe entry")
             if len(entries) > MAX_PROFILE_ENTRIES:

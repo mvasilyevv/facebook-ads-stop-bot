@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -152,6 +153,78 @@ def test_bootstrap_profile_rejects_unsafe_canonical_without_falling_back_to_seed
         (canonical / "browser" / "Preferences").chmod(0o620)
 
     with pytest.raises(FbctlError, match="(marker is invalid|contains an unsafe entry)"):
+        validate_bootstrap_vision_profile(
+            canonical_profile=canonical,
+            desktop_profile_seed=seed,
+            seed_required_uid=os.getuid(),
+            seed_required_gid=os.getgid(),
+            canonical_required_uid=os.getuid(),
+            canonical_required_gid=os.getgid(),
+        )
+
+
+def _bind_socket(directory: Path, name: str) -> None:
+    """Создать unix-сокет в каталоге.
+
+    Bind идёт из самого каталога: полный путь под tmp_path не влезает в лимит
+    длины адреса AF_UNIX, а в проде эти сокеты создаются точно так же — процессом,
+    у которого профиль является рабочим каталогом.
+    """
+    previous = os.getcwd()
+    os.chdir(directory)
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(name)
+        finally:
+            sock.close()
+    finally:
+        os.chdir(previous)
+
+
+def test_canonical_profile_tolerates_sockets_left_by_the_running_desktop(
+    tmp_path: Path,
+) -> None:
+    """Сокеты gpg-agent появляются сами при первом старте стола.
+
+    Боевой bootstrap 28.08 встал на `managed Vision configuration contains an
+    unsafe entry`: в живом профиле лежат четыре сокета `.gnupg/S.gpg-agent*`.
+    Их создаёт запущенный стол, а не оператор, и отвергать их значит, что любой
+    повторный bootstrap после первого запуска невозможен.
+
+    В снимок сокеты не попадают: они эфемерны, их появление и исчезновение не
+    является изменением профиля.
+    """
+    canonical = _write_profile(tmp_path / "shared" / "vision-config")
+    gnupg = canonical / ".gnupg"
+    gnupg.mkdir(mode=0o700)
+    for name in ("S.gpg-agent", "S.gpg-agent.browser", "S.gpg-agent.extra"):
+        _bind_socket(gnupg, name)
+
+    result = validate_bootstrap_vision_profile(
+        canonical_profile=canonical,
+        desktop_profile_seed=None,
+        seed_required_uid=os.getuid(),
+        seed_required_gid=os.getgid(),
+        canonical_required_uid=os.getuid(),
+        canonical_required_gid=os.getgid(),
+    )
+
+    receipt = result.active_receipt
+    assert receipt is not None
+    names = [entry.relative[-1] for entry in receipt.entries if entry.relative]
+    assert not [name for name in names if name.startswith("S.gpg-agent")]
+    # Остальное дерево в снимок попало — пропущены именно сокеты, а не каталог.
+    assert VISION_PROFILE_MARKER in names
+
+
+def test_seed_still_rejects_a_socket(tmp_path: Path) -> None:
+    """Seed вносится снаружи и остаётся строгим: сокету там взяться неоткуда."""
+    canonical = tmp_path / "shared" / "vision-config"
+    seed = _write_profile(tmp_path / "shared" / "desktop-profile-seed")
+    _bind_socket(seed / "browser", "S.smuggled")
+
+    with pytest.raises(FbctlError, match="contains an unsafe entry"):
         validate_bootstrap_vision_profile(
             canonical_profile=canonical,
             desktop_profile_seed=seed,
