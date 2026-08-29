@@ -29,6 +29,9 @@ VISION_PROFILE_MARKER_CONTENT = b"fb-agent-vision-profile-v1\n"
 # рабочий стол, записаны в этих координатах. Должна совпадать с целью тома
 # VISION_CONFIG_DIR в deploy/compose/docker-compose.desktop-agent.yml.
 CONTAINER_PROFILE_ROOT = "/config"
+# Единственное место вне профиля, куда живой стол законно ставит ссылки: сюда
+# Chromium и PulseAudio кладут свои сокеты, и ссылки на них создаёт не оператор.
+RUNTIME_SOCKET_ROOT = "/tmp"
 MAX_PROFILE_ENTRIES = 10_000
 # Профиль хранит не только настройки: Vision докачивает в него собственную
 # сборку браузера при первом запуске. На боевом хосте это 672 МиБ из 698 МиБ
@@ -564,6 +567,14 @@ def _capture_open_tree(
                     required_gid=required_gid,
                     root=False,
                 )
+                if allow_runtime_sockets and _links_to_runtime_socket(directory_fd, name):
+                    # Запущенный Chromium и PulseAudio держат в профиле ссылки на
+                    # свои сокеты в /tmp: SingletonSocket и pulse-runtime. Это
+                    # рантайм, а не содержимое профиля — цель эфемерна, живёт вне
+                    # дерева и пересоздаётся при следующем запуске. Ссылка не
+                    # разыменовывается и в снимок не попадает: сверять у неё нечего,
+                    # а копировать её было бы копированием чужого сокета.
+                    continue
                 target = _readlink_inside_tree(
                     directory_fd,
                     name,
@@ -894,6 +905,25 @@ def _readlink_inside_tree(
         else:
             depth += 1
     return target
+
+
+def _links_to_runtime_socket(directory_fd: int, name: str) -> bool:
+    """True для ссылки на эфемерный рантайм-сокет в ``/tmp``.
+
+    Послабление узкое намеренно: цель обязана быть абсолютным путём внутри
+    ``/tmp`` и не содержать восхождений. Ссылка в любое другое место вне профиля
+    остаётся отказом — это по-прежнему способ вывести чтение за проверенное
+    дерево.
+    """
+    try:
+        target = os.readlink(name, dir_fd=directory_fd)
+    except OSError:
+        return False
+    if not target or "\x00" in target:
+        return False
+    if not target.startswith(f"{RUNTIME_SOCKET_ROOT}/"):
+        return False
+    return ".." not in target.split("/")
 
 
 def _validate_entry_metadata(

@@ -218,6 +218,69 @@ def test_canonical_profile_tolerates_sockets_left_by_the_running_desktop(
     assert VISION_PROFILE_MARKER in names
 
 
+def test_canonical_profile_tolerates_runtime_links_into_tmp(tmp_path: Path) -> None:
+    """Запущенный браузер оставляет в профиле ссылки на свои сокеты в /tmp.
+
+    Боевой прогон 29.08 упал на `managed Vision configuration contains an unsafe
+    link` сразу после того, как стол впервые заработал: Chromium создал
+    `SingletonSocket -> /tmp/org.chromium.Chromium.…`, PulseAudio — `…-runtime ->
+    /tmp/pulse-…`. Это рантайм, а не содержимое профиля.
+
+    Ссылка не разыменовывается и в снимок не попадает: воспроизводить её незачем,
+    её создаёт само приложение при следующем запуске.
+    """
+    canonical = _write_profile(tmp_path / "shared" / "vision-config")
+    (canonical / "SingletonSocket").symlink_to("/tmp/org.chromium.Chromium.jokXTb/SingletonSocket")
+
+    result = validate_bootstrap_vision_profile(
+        canonical_profile=canonical,
+        desktop_profile_seed=None,
+        seed_required_uid=os.getuid(),
+        seed_required_gid=os.getgid(),
+        canonical_required_uid=os.getuid(),
+        canonical_required_gid=os.getgid(),
+    )
+
+    receipt = result.active_receipt
+    assert receipt is not None
+    names = [entry.relative[-1] for entry in receipt.entries if entry.relative]
+    assert "SingletonSocket" not in names
+    assert VISION_PROFILE_MARKER in names
+
+
+def test_canonical_profile_still_rejects_a_link_outside_tmp(tmp_path: Path) -> None:
+    """Послабление касается только рантайма: ссылка в систему остаётся отказом."""
+    canonical = _write_profile(tmp_path / "shared" / "vision-config")
+    (canonical / "borrowed").symlink_to("/etc/passwd")
+
+    with pytest.raises(FbctlError, match="contains an unsafe link"):
+        validate_bootstrap_vision_profile(
+            canonical_profile=canonical,
+            desktop_profile_seed=None,
+            seed_required_uid=os.getuid(),
+            seed_required_gid=os.getgid(),
+            canonical_required_uid=os.getuid(),
+            canonical_required_gid=os.getgid(),
+        )
+
+
+def test_seed_still_rejects_a_runtime_link(tmp_path: Path) -> None:
+    """Seed вносится снаружи: рантайму там взяться неоткуда, ссылка — отказ."""
+    canonical = tmp_path / "shared" / "vision-config"
+    seed = _write_profile(tmp_path / "shared" / "desktop-profile-seed")
+    (seed / "SingletonSocket").symlink_to("/tmp/org.chromium.Chromium.jokXTb/SingletonSocket")
+
+    with pytest.raises(FbctlError, match="contains an unsafe link"):
+        validate_bootstrap_vision_profile(
+            canonical_profile=canonical,
+            desktop_profile_seed=seed,
+            seed_required_uid=os.getuid(),
+            seed_required_gid=os.getgid(),
+            canonical_required_uid=os.getuid(),
+            canonical_required_gid=os.getgid(),
+        )
+
+
 def test_seed_still_rejects_a_socket(tmp_path: Path) -> None:
     """Seed вносится снаружи и остаётся строгим: сокету там взяться неоткуда."""
     canonical = tmp_path / "shared" / "vision-config"
