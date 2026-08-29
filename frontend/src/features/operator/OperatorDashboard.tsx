@@ -582,7 +582,7 @@ function AttentionLedger({
           ))}
         </ol>
       )}
-      <Link className="ledger-attention-item__action min-h-11 px-5" to="/incidents">
+      <Link className="ledger-attention-item__action" to="/incidents">
         Все инциденты
         <ArrowRight size={14} aria-hidden="true" />
       </Link>
@@ -707,7 +707,7 @@ function ApproachingStopLedger({
       )}
       {total ? (
         <Link
-          className="ledger-attention-item__action min-h-11 px-5"
+          className="ledger-attention-item__action"
           to="/ads"
           search={{ sort: OPERATOR_ADS_STOP_PROXIMITY_SORT, direction: "desc" }}
         >

@@ -178,6 +178,7 @@
 
 .ledger-section__title h2 {
   margin: 0;
+  min-width: 0;
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 650;
@@ -607,13 +608,13 @@
 .ledger-attention-item__action,
 .ledger-action-item__link {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 2.75rem;
   align-items: center;
   gap: 8px;
   margin-top: 10px;
   border: 1px solid var(--color-hairline-strong);
   border-radius: var(--radius-1);
-  padding: 0 12px;
+  padding: 0 1.25rem;
   color: var(--color-bg-11);
   font-size: 14px;
   font-weight: 600;
