@@ -32,7 +32,7 @@ export const SEVERITY_LABEL: Record<OperatorSeverity, string> = {
   ok: "В норме",
   warning: "Требует внимания",
   critical: "Критично",
-  unknown: "Не подтверждено",
+  unknown: "не подтверждено",
 };
 
 export const ACTION_STATE_LABEL: Record<OperatorActionState, string> = {
@@ -48,7 +48,7 @@ const WORKER_STATUS_LABEL: Record<string, string> = {
   online: "В работе",
   offline: "Недоступен",
   degraded: "С ограничениями",
-  unknown: "Не подтверждено",
+  unknown: "не подтверждено",
   // Наблюдение за кабинетом (актёры сканирования, cabinet_runtime).
   running: "Сканирует",
   stale: "Не отвечает",
