@@ -11,7 +11,7 @@
 
 import { useState } from "react";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
-import { severityForDataState, snapshotForRealtimeState } from "@fb/shared/operator/viewModel";
+import { severityForDataState, snapshotForRealtimeState, workerStatusLabel } from "@fb/shared/operator/viewModel";
 import { PulseDot } from "@/components/data/PulseDot";
 import { useOperatorSnapshot } from "@/lib/api/operator";
 
@@ -61,7 +61,9 @@ export function WorkerPulse() {
 
   // offline вперёд для popover.
   const sorted = [...workers].sort(
-    (a, b) => (a.status === "ONLINE" ? 1 : 0) - (b.status === "ONLINE" ? 1 : 0),
+    (a, b) =>
+      (a.status.trim().toLowerCase() === "online" ? 1 : 0) -
+      (b.status.trim().toLowerCase() === "online" ? 1 : 0),
   );
 
   return (
@@ -135,7 +137,7 @@ export function WorkerPulse() {
                       color: severity === "critical" ? "var(--color-danger)" : "var(--color-bg-8)",
                     }}
                   >
-                    {confirmed ? w.status : "не подтверждено"}
+                    {confirmed ? workerStatusLabel(w.status) : "не подтверждено"}
                   </span>
                 </div>
               );
