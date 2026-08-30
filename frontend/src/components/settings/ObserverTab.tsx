@@ -61,7 +61,7 @@ export const ObserverTab: FC = () => {
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [selectedAmColumns, setSelectedAmColumns] = useState<string[]>([]);
   const [intervalError, setIntervalError] = useState<string | null>(null);
-  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false);
+  const [stopScanningConfirmOpen, setStopScanningConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!settingsQuery.data) return;
@@ -137,25 +137,34 @@ export const ObserverTab: FC = () => {
     }
   }
 
-  async function applyToggleScanning(next: boolean) {
+  /** false — состояние не изменилось; причина уже показана тостом. */
+  async function applyScanning(next: boolean): Promise<boolean> {
     try {
       await toggleScanning.mutateAsync(next);
       toast.success(next ? "Сканирование включено" : "Сканирование остановлено");
+      return true;
     } catch (error) {
       toast.error(
         "Состояние сканирования не изменено",
         safeApiProblemMessage(error, "Проверьте готовность Observer"),
       );
+      return false;
     }
   }
 
+  async function confirmStopScanning() {
+    // ConfirmDialog закрывается только при успехе: неудача оставляет диалог открытым.
+    if (!(await applyScanning(false))) throw new Error("scanning-not-stopped");
+  }
+
   function handleToggleScanning() {
+    // Выключение ослепляет авто-стоп, поэтому проходит через подтверждение;
+    // включение возвращает наблюдение и подтверждения не требует.
     if (settings.is_scanning_enabled) {
-      // Выключение снимает защитный контур с кабинетов — не одним кликом.
-      setConfirmDisableOpen(true);
+      setStopScanningConfirmOpen(true);
       return;
     }
-    void applyToggleScanning(true);
+    void applyScanning(true);
   }
 
   async function handleScanNow() {
@@ -495,13 +504,13 @@ export const ObserverTab: FC = () => {
       </section>
 
       <ConfirmDialog
-        open={confirmDisableOpen}
-        onOpenChange={setConfirmDisableOpen}
+        open={stopScanningConfirmOpen}
+        onOpenChange={setStopScanningConfirmOpen}
         title="Выключить сканирование?"
         description="Авто-стоп перестанет следить за кабинетами до включения."
-        confirmLabel="Выключить сканирование"
+        confirmLabel="Выключить"
         confirmVariant="warning"
-        onConfirm={() => applyToggleScanning(false)}
+        onConfirm={confirmStopScanning}
       />
     </div>
   );
