@@ -1,6 +1,6 @@
 ---
 name: python-testing-patterns
-description: Implement comprehensive testing strategies with pytest, fixtures, mocking, and test-driven development. Use when writing Python tests, setting up test suites, or implementing testing best practices.
+description: Implement comprehensive testing strategies with pytest, fixtures, mocking, and test-driven development. Use when writing Python tests, setting up test suites, implementing testing best practices, and ALWAYS when an existing test turns red - before deleting, skipping, or rewriting any assertion.
 ---
 
 # Python Testing Patterns
@@ -19,6 +19,34 @@ Comprehensive guide to implementing robust testing strategies in Python using py
 - Implementing property-based testing
 - Testing database operations
 - Debugging failing tests
+
+## Красный тест — это зафиксированное поведение, а не препятствие
+
+Упавший тест означает, что правка сломала свойство, которое кто-то записал намеренно.
+До того, как трогать файл теста, назови вслух, какой из трёх случаев перед тобой:
+
+1. **Ошибка в коде** — чинить код. Предположение по умолчанию.
+2. **Свойство действительно изменилось** — этого попросил владелец или ADR.
+   Тогда правишь assert *и* пишешь в отчёте, какой инвариант снят и с чьей санкции.
+3. **Тест неверно описывает свой же предмет** — переписать, сохранив само свойство.
+
+Без явной команды владельца в текущем диалоге запрещено:
+
+- удалять файл теста, чтобы прогон стал зелёным;
+- инвертировать assert, рядом с которым стоит пометка инварианта
+  (`# ВАЖНО (money)`, `# money:`, `# audit`, `# regression`, `# H-\d`, `# fencing`);
+- вешать `@pytest.mark.skip` / `xfail` на тест, который до этого проходил;
+- ослаблять строгое сравнение (`assert x == 5` → `assert x is not None`), чтобы пройти мимо падения.
+
+Проверка перед правкой любого теста:
+
+```bash
+git log -1 --format='%h %s' -- <файл-теста>   # зачем этот тест появился
+grep -nE '# *(ВАЖНО|money|audit|regression|fencing|H-[0-9]|M-[0-9])' <файл-теста>
+```
+
+Совпадение на той строке, которую собираешься менять, — стоп и вопрос владельцу.
+Самый дешёвый способ соврать себе — зелёный прогон, который больше ничего не охраняет.
 
 ## Core Concepts
 

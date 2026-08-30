@@ -1,6 +1,6 @@
 ---
 name: bash-defensive-patterns
-description: Master defensive Bash programming techniques for production-grade scripts. Use when writing robust shell scripts, CI/CD pipelines, or system utilities requiring fault tolerance and safety.
+description: Master defensive Bash programming techniques for production-grade scripts. Use when writing robust shell scripts, CI/CD pipelines, or system utilities requiring fault tolerance and safety, and when running one-off shell commands on this macOS/zsh workstation (no coreutils timeout, zsh glob expansion, project .venv).
 ---
 
 # Bash Defensive Patterns
@@ -17,6 +17,27 @@ Comprehensive guidance for writing production-ready Bash scripts using defensive
 - Building maintainable shell script libraries
 - Implementing comprehensive logging and monitoring
 - Creating scripts that must work across different platforms
+
+## Эта машина: macOS + zsh (прочесть до первой команды)
+
+Команды агента здесь идут через **zsh на macOS**, а не через bash на Linux. Три промаха
+повторяются из сессии в сессию, и каждый стоит лишнего круга:
+
+| Ловушка | Что происходит | Как надо |
+|---|---|---|
+| `timeout 60 cmd` | `command not found: timeout` — GNU coreutils не установлены | таймаут самого инструмента: `curl --max-time`, `ssh -o ConnectTimeout=` |
+| незакавыченный glob в аргументе: `grep --include=*.py`, `for d in */` | zsh раскрывает шаблон сам и роняет команду целиком с `no matches found` | кавычки: `grep --include='*.py'`, `for d in ./*/` |
+| голый `python` / `pytest` | `command not found: python` либо Homebrew 3.14 без зависимостей проекта | всегда `.venv/bin/python -m pytest` или `uv run pytest` |
+
+Если команда умерла, не дав вывода:
+
+```bash
+command -v timeout gtimeout || echo "timeout на этом хосте нет"
+test -x .venv/bin/python && echo venv-готов
+```
+
+`command not found` от оболочки — это не факт о проверяемом коде. Сначала переписать команду,
+и только потом делать из её вывода выводы.
 
 ## Core Defensive Principles
 
