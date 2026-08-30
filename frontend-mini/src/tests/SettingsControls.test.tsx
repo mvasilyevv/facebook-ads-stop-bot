@@ -50,6 +50,8 @@ const mockTgConfirm = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/tg", () => ({
   haptic: { notify: vi.fn(), impact: vi.fn(), selection: vi.fn() },
   tgConfirm: mockTgConfirm,
+  // Вне Telegram MainButton недоступен — компоненты остаются на своей кнопке.
+  getMainButton: () => undefined,
 }));
 
 vi.mock("@/lib/api", () => ({

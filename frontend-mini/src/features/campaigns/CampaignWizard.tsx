@@ -44,6 +44,7 @@ import {
 import type { LaunchOut } from "@/lib/campaigns";
 import { cn } from "@/lib/cn";
 import { haptic } from "@/lib/tg";
+import { useTelegramMainButton } from "@/lib/useTelegramMainButton";
 import { CampaignTagPicker } from "./CampaignTagPicker";
 import { useCampaignWizardDraft } from "./useCampaignWizardDraft";
 
@@ -85,6 +86,39 @@ export function CampaignWizard() {
   const [problem, setProblem] = useState<string | null>(null);
   const [launchReceipt, setLaunchReceipt] = useState<LaunchOut | null>(null);
 
+  // state/config считаются здесь (а не после ранних return) — они нужны хуку
+  // MainButton ниже, а хуки обязаны вызываться в одном порядке на каждый рендер.
+  const state = wizard.state;
+  let config: ReturnType<typeof buildCampaignConfig> | null = null;
+  if (state.currentStep >= 6) {
+    try {
+      config = buildCampaignConfig(state);
+    } catch {
+      config = null;
+    }
+  }
+
+  // Единственное подтверждающее действие визарда — Telegram MainButton.
+  // «Назад» остаётся обычной кнопкой в странице (MainButton — это один слот).
+  // validateAndNext/queueLaunch объявлены ниже как function-декларации — они
+  // хойстятся, ссылаться на них здесь безопасно.
+  const draftReady = wizard.revision > 0 && wizard.syncState === "saved";
+  const launchBlocked =
+    !config || !draftReady || (state.identity.ad_account_ids ?? []).length === 0;
+  const mainButtonText =
+    state.currentStep === 7
+      ? "Подтвердить и поставить в очередь"
+      : state.currentStep === 6
+        ? "Подтвердить план"
+        : "Далее";
+  const mainButton = useTelegramMainButton({
+    text: mainButtonText,
+    onClick: state.currentStep === 7 ? () => void queueLaunch() : validateAndNext,
+    visible: !wizard.isHydrating && !wizard.isHydrationError && !launchReceipt,
+    disabled: state.currentStep === 7 ? launchBlocked : false,
+    loading: state.currentStep === 7 && launch.isPending,
+  });
+
   if (wizard.isHydrating) {
     return (
       <div className="space-y-3 px-4 py-5" aria-busy="true" aria-label="Восстановление черновика">
@@ -114,7 +148,6 @@ export function CampaignWizard() {
     );
   }
 
-  const state = wizard.state;
   const selectedPreset =
     presets.data?.find((preset) => preset.id === state.start.preset_id) ?? null;
   const selectedOffer = offers.data?.find(
@@ -126,14 +159,6 @@ export function CampaignWizard() {
     isError: presets.isError,
     count: presets.data?.length ?? 0,
   });
-  let config: ReturnType<typeof buildCampaignConfig> | null = null;
-  if (state.currentStep >= 6) {
-    try {
-      config = buildCampaignConfig(state);
-    } catch {
-      config = null;
-    }
-  }
 
   function patchIdentity(value: Parameters<typeof wizard.dispatch>[0] & { type: "patchIdentity" }) {
     wizard.dispatch(value);
@@ -664,10 +689,11 @@ export function CampaignWizard() {
           <LaunchStep
             config={config}
             accountIds={state.identity.ad_account_ids ?? []}
-            draftReady={wizard.revision > 0 && wizard.syncState === "saved"}
+            draftReady={draftReady}
             receipt={launchReceipt}
             loading={launch.isPending}
             onLaunch={() => void queueLaunch()}
+            hidePrimaryAction={mainButton.available}
           />
         ) : null}
       </section>
@@ -694,7 +720,7 @@ export function CampaignWizard() {
               <ChevronLeft size={16} aria-hidden="true" />
               Назад
             </Button>
-            {state.currentStep < 7 ? (
+            {state.currentStep < 7 && !mainButton.available ? (
               <Button onClick={validateAndNext}>
                 {state.currentStep === 6 ? "Подтвердить план" : "Далее"}
                 <ChevronRight size={16} aria-hidden="true" />
@@ -1297,6 +1323,7 @@ function LaunchStep({
   receipt,
   loading,
   onLaunch,
+  hidePrimaryAction = false,
 }: {
   config: ReturnType<typeof buildCampaignConfig>;
   accountIds: string[];
@@ -1304,6 +1331,8 @@ function LaunchStep({
   receipt: LaunchOut | null;
   loading: boolean;
   onLaunch: () => void;
+  /** Telegram MainButton уже показывает это же действие нативно. */
+  hidePrimaryAction?: boolean;
 }) {
   // Единица залива — кампания: у каждой своя задача и свой исход.
   const units = campaignLaunchUnits(receipt?.accounts);
@@ -1404,17 +1433,23 @@ function LaunchStep({
           Ждём сохранения точной версии черновика.
         </p>
       ) : null}
-      <Button
-        size="lg"
-        fullWidth
-        className="mt-5"
-        loading={loading}
-        disabled={!draftReady || accountIds.length === 0}
-        onClick={onLaunch}
-      >
-        <ShieldCheck size={17} aria-hidden="true" />
-        Подтвердить и поставить в очередь
-      </Button>
+      {!hidePrimaryAction ? (
+        <Button
+          size="lg"
+          fullWidth
+          className="mt-5"
+          loading={loading}
+          disabled={!draftReady || accountIds.length === 0}
+          onClick={onLaunch}
+        >
+          <ShieldCheck size={17} aria-hidden="true" />
+          Подтвердить и поставить в очередь
+        </Button>
+      ) : (
+        <p className="mt-5 text-[13px] leading-5 text-bg-8">
+          Подтвердите запуск нижней кнопкой Telegram.
+        </p>
+      )}
     </Card>
   );
 }

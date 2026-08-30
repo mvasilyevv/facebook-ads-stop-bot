@@ -20,6 +20,10 @@ import { Route as AnalyticsIndexRouteImport } from './routes/analytics/index'
 import { Route as AdsIndexRouteImport } from './routes/ads/index'
 import { Route as ActionsIndexRouteImport } from './routes/actions/index'
 import { Route as SystemSourcesRouteImport } from './routes/system/sources'
+import { Route as SettingsVisionRouteImport } from './routes/settings/vision'
+import { Route as SettingsTelegramRouteImport } from './routes/settings/telegram'
+import { Route as SettingsObserverRouteImport } from './routes/settings/observer'
+import { Route as SettingsDisplayRouteImport } from './routes/settings/display'
 import { Route as IncidentsIncidentIdRouteImport } from './routes/incidents/$incidentId'
 import { Route as CabinetsCabinetIdRouteImport } from './routes/cabinets/$cabinetId'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
@@ -82,6 +86,26 @@ const SystemSourcesRoute = SystemSourcesRouteImport.update({
   path: '/system/sources',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsVisionRoute = SettingsVisionRouteImport.update({
+  id: '/settings/vision',
+  path: '/settings/vision',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsTelegramRoute = SettingsTelegramRouteImport.update({
+  id: '/settings/telegram',
+  path: '/settings/telegram',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsObserverRoute = SettingsObserverRouteImport.update({
+  id: '/settings/observer',
+  path: '/settings/observer',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsDisplayRoute = SettingsDisplayRouteImport.update({
+  id: '/settings/display',
+  path: '/settings/display',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IncidentsIncidentIdRoute = IncidentsIncidentIdRouteImport.update({
   id: '/incidents/$incidentId',
   path: '/incidents/$incidentId',
@@ -120,6 +144,10 @@ export interface FileRoutesByFullPath {
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
+  '/settings/display': typeof SettingsDisplayRoute
+  '/settings/observer': typeof SettingsObserverRoute
+  '/settings/telegram': typeof SettingsTelegramRoute
+  '/settings/vision': typeof SettingsVisionRoute
   '/system/sources': typeof SystemSourcesRoute
   '/actions/': typeof ActionsIndexRoute
   '/ads/': typeof AdsIndexRoute
@@ -139,6 +167,10 @@ export interface FileRoutesByTo {
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
+  '/settings/display': typeof SettingsDisplayRoute
+  '/settings/observer': typeof SettingsObserverRoute
+  '/settings/telegram': typeof SettingsTelegramRoute
+  '/settings/vision': typeof SettingsVisionRoute
   '/system/sources': typeof SystemSourcesRoute
   '/actions': typeof ActionsIndexRoute
   '/ads': typeof AdsIndexRoute
@@ -159,6 +191,10 @@ export interface FileRoutesById {
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
+  '/settings/display': typeof SettingsDisplayRoute
+  '/settings/observer': typeof SettingsObserverRoute
+  '/settings/telegram': typeof SettingsTelegramRoute
+  '/settings/vision': typeof SettingsVisionRoute
   '/system/sources': typeof SystemSourcesRoute
   '/actions/': typeof ActionsIndexRoute
   '/ads/': typeof AdsIndexRoute
@@ -180,6 +216,10 @@ export interface FileRouteTypes {
     | '/ads/$fbAdId'
     | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
+    | '/settings/display'
+    | '/settings/observer'
+    | '/settings/telegram'
+    | '/settings/vision'
     | '/system/sources'
     | '/actions/'
     | '/ads/'
@@ -199,6 +239,10 @@ export interface FileRouteTypes {
     | '/ads/$fbAdId'
     | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
+    | '/settings/display'
+    | '/settings/observer'
+    | '/settings/telegram'
+    | '/settings/vision'
     | '/system/sources'
     | '/actions'
     | '/ads'
@@ -218,6 +262,10 @@ export interface FileRouteTypes {
     | '/ads/$fbAdId'
     | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
+    | '/settings/display'
+    | '/settings/observer'
+    | '/settings/telegram'
+    | '/settings/vision'
     | '/system/sources'
     | '/actions/'
     | '/ads/'
@@ -238,6 +286,10 @@ export interface RootRouteChildren {
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
   CabinetsCabinetIdRoute: typeof CabinetsCabinetIdRoute
   IncidentsIncidentIdRoute: typeof IncidentsIncidentIdRoute
+  SettingsDisplayRoute: typeof SettingsDisplayRoute
+  SettingsObserverRoute: typeof SettingsObserverRoute
+  SettingsTelegramRoute: typeof SettingsTelegramRoute
+  SettingsVisionRoute: typeof SettingsVisionRoute
   SystemSourcesRoute: typeof SystemSourcesRoute
   ActionsIndexRoute: typeof ActionsIndexRoute
   AdsIndexRoute: typeof AdsIndexRoute
@@ -330,6 +382,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SystemSourcesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/vision': {
+      id: '/settings/vision'
+      path: '/settings/vision'
+      fullPath: '/settings/vision'
+      preLoaderRoute: typeof SettingsVisionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/telegram': {
+      id: '/settings/telegram'
+      path: '/settings/telegram'
+      fullPath: '/settings/telegram'
+      preLoaderRoute: typeof SettingsTelegramRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/observer': {
+      id: '/settings/observer'
+      path: '/settings/observer'
+      fullPath: '/settings/observer'
+      preLoaderRoute: typeof SettingsObserverRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/display': {
+      id: '/settings/display'
+      path: '/settings/display'
+      fullPath: '/settings/display'
+      preLoaderRoute: typeof SettingsDisplayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/incidents/$incidentId': {
       id: '/incidents/$incidentId'
       path: '/incidents/$incidentId'
@@ -382,6 +462,10 @@ const rootRouteChildren: RootRouteChildren = {
   AdsFbAdIdRoute: AdsFbAdIdRoute,
   CabinetsCabinetIdRoute: CabinetsCabinetIdRoute,
   IncidentsIncidentIdRoute: IncidentsIncidentIdRoute,
+  SettingsDisplayRoute: SettingsDisplayRoute,
+  SettingsObserverRoute: SettingsObserverRoute,
+  SettingsTelegramRoute: SettingsTelegramRoute,
+  SettingsVisionRoute: SettingsVisionRoute,
   SystemSourcesRoute: SystemSourcesRoute,
   ActionsIndexRoute: ActionsIndexRoute,
   AdsIndexRoute: AdsIndexRoute,

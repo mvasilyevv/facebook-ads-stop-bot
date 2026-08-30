@@ -5,21 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramSettings } from "@fb/shared";
 
 const routeState = vi.hoisted(() => ({
-  section: undefined as
-    | "display"
-    | "observer"
-    | "telegram"
-    | "vision"
-    | undefined,
   role: "owner",
 }));
 const mockNavigate = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (options: { component: ComponentType }) => ({
-    ...options,
-    useSearch: () => ({ section: routeState.section }),
-  }),
+  createFileRoute: () => (options: { component: ComponentType }) => options,
   useNavigate: () => mockNavigate,
 }));
 
@@ -79,7 +70,6 @@ const SettingsPage = (Route as unknown as { component: ComponentType })
 describe("TMA settings route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    routeState.section = undefined;
     routeState.role = "owner";
     globalThis.localStorage.clear();
     mockUseObserverSettings.mockReturnValue({
@@ -160,13 +150,19 @@ describe("TMA settings route", () => {
     expect(screen.queryByText(/редкие настройки/i)).not.toBeInTheDocument();
   });
 
-  it("keeps section state in the typed settings URL", () => {
+  it("открывает каждый раздел полноэкранным роутом вместо общего Sheet", () => {
     render(<SettingsPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Отображение/i }));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/settings/display" });
+
     fireEvent.click(screen.getByRole("button", { name: /Observer/i }));
-    expect(mockNavigate).toHaveBeenCalledWith({
-      to: "/settings",
-      search: { section: "observer" },
-    });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/settings/observer" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Telegram/i }));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/settings/telegram" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Vision и desktop/i }));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/settings/vision" });
   });
 
   it("renders a fail-closed owner gate for notification-only recipients", () => {

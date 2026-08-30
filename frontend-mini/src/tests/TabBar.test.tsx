@@ -103,6 +103,16 @@ describe("TabBar", () => {
     expect(screen.getByLabelText("Сейчас")).toBeInTheDocument();
   });
 
+  // Полноэкранные роуты настроек (issue #342, часть 2) — тот же паттерн, что
+  // /desktop и /analytics: вторичный экран, а не detail с единственным
+  // объектом, поэтому tab-bar остаётся видимым и подсвечивает «Ещё».
+  it("не прячет tab-bar и подсвечивает «Ещё» на полноэкранных настройках", () => {
+    mockLocation.pathname = "/settings/observer";
+    const { container } = render(<TabBar />);
+    expect(container.firstChild).not.toBeNull();
+    expect(screen.getByLabelText("Ещё")).toHaveAttribute("aria-current", "page");
+  });
+
   it("подсвечивает «Ещё» на мобильной аналитике", () => {
     mockLocation.pathname = "/analytics";
     render(<TabBar />);

@@ -46,4 +46,21 @@ describe("TelegramBackButton", () => {
     act(() => mocks.handler?.());
     expect(mocks.historyBack).toHaveBeenCalled();
   });
+
+  // Полноэкранные роуты настроек (issue #342, часть 2) — тот же паттерн
+  // detail-экрана, что /analytics и /desktop.
+  it.each([
+    "/settings/display",
+    "/settings/observer",
+    "/settings/telegram",
+    "/settings/vision",
+  ])("показывает BackButton на %s", (pathname) => {
+    mocks.location.pathname = pathname;
+    mocks.handler = null;
+    render(<TelegramBackButton />);
+
+    expect(mocks.handler).not.toBeNull();
+    act(() => mocks.handler?.());
+    expect(mocks.historyBack).toHaveBeenCalled();
+  });
 });

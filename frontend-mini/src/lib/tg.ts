@@ -53,6 +53,11 @@ interface TelegramWebApp {
     onClick(fn: () => void): void;
     offClick(fn: () => void): void;
     isVisible: boolean;
+    /** Не во всех клиентах — feature-detect перед вызовом. */
+    enable?(): void;
+    disable?(): void;
+    showProgress?(leaveActive?: boolean): void;
+    hideProgress?(): void;
   };
   viewportHeight: number;
   viewportStableHeight: number;
@@ -238,6 +243,38 @@ export function registerBackButton(onBack: () => void): () => void {
 /** Скрыть BackButton без callback (при переходе на root-вкладку). */
 export function hideBackButton(): void {
   getTg()?.BackButton.hide();
+}
+
+// ─── MainButton ───────────────────────────────────────────────────────────
+
+export type TelegramMainButtonHandle = TelegramWebApp["MainButton"];
+
+/**
+ * Низкоуровневый доступ к Telegram MainButton. `undefined` вне Telegram —
+ * вызывающий код обязан остаться на своей fallback-кнопке (fail-closed).
+ * Используется только из `useTelegramMainButton`.
+ */
+export function getMainButton(): TelegramMainButtonHandle | undefined {
+  return getTg()?.MainButton;
+}
+
+// ─── Vertical swipes (pull-to-refresh vs нативное закрытие) ───────────────
+
+/**
+ * Отключает нативный жест Telegram «смахнуть вниз чтобы закрыть» (Bot API
+ * 7.7+). Не во всех клиентах доступно — feature-detect и no-op иначе.
+ */
+export function disableVerticalSwipes(): void {
+  (
+    getTg() as unknown as { disableVerticalSwipes?(): void } | undefined
+  )?.disableVerticalSwipes?.();
+}
+
+/** Возвращает нативный жест закрытия (пара к {@link disableVerticalSwipes}). */
+export function enableVerticalSwipes(): void {
+  (
+    getTg() as unknown as { enableVerticalSwipes?(): void } | undefined
+  )?.enableVerticalSwipes?.();
 }
 
 // ─── Viewport ─────────────────────────────────────────────────────────────

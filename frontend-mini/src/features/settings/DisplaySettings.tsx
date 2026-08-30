@@ -10,6 +10,7 @@ import {
   useOperatorDisplayPreference,
   useUpdateOperatorDisplayPreference,
 } from "@/lib/settingsApi";
+import { useTelegramMainButton } from "@/lib/useTelegramMainButton";
 
 const COMMON_TIMEZONES = [
   "Europe/Kaliningrad",
@@ -41,11 +42,25 @@ export function DisplaySettings({ canEdit }: { canEdit: boolean }) {
     }
   }, [preferenceQuery.data?.timezone_name]);
 
-  if (!canEdit) return <OwnerOnlyNotice />;
-
+  // Считаем здесь (а не после ранних return) — нужно хуку MainButton ниже,
+  // а хуки обязаны вызываться в одном порядке на каждый рендер.
   const effective = preferenceQuery.data?.timezone_name;
   const normalizedManual = manual.trim();
   const valid = isOperatorDisplayTimezoneCandidate(normalizedManual);
+
+  // save объявлена как function-декларация (хойстится) — ссылаться на неё
+  // до её текстового определения ниже безопасно.
+  const mainButton = useTelegramMainButton({
+    text: updatePreference.isPending ? "Сохраняем…" : "Сохранить",
+    onClick: () => save(manual),
+    visible: canEdit && !preferenceQuery.isPending && !preferenceQuery.isError,
+    disabled:
+      !valid || normalizedManual === effective || updatePreference.isPending,
+    loading: updatePreference.isPending,
+  });
+
+  if (!canEdit) return <OwnerOnlyNotice />;
+
   const inputError =
     manual.length > 0 && !valid
       ? "Введите IANA timezone без пробелов"
@@ -133,19 +148,21 @@ export function DisplaySettings({ canEdit }: { canEdit: boolean }) {
             <option key={timezone} value={timezone} />
           ))}
         </datalist>
-        <Button
-          className="mt-3"
-          variant="primary"
-          fullWidth
-          disabled={
-            !valid ||
-            normalizedManual === effective ||
-            updatePreference.isPending
-          }
-          onClick={() => save(manual)}
-        >
-          {updatePreference.isPending ? "Сохраняем…" : "Сохранить"}
-        </Button>
+        {!mainButton.available ? (
+          <Button
+            className="mt-3"
+            variant="primary"
+            fullWidth
+            disabled={
+              !valid ||
+              normalizedManual === effective ||
+              updatePreference.isPending
+            }
+            onClick={() => save(manual)}
+          >
+            {updatePreference.isPending ? "Сохраняем…" : "Сохранить"}
+          </Button>
+        ) : null}
         <Button
           className="mt-3"
           variant="secondary"

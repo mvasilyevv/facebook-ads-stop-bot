@@ -20,6 +20,10 @@ const BACK_BUTTON_PATTERNS: RegExp[] = [
   /^\/offers$/,
   /^\/analytics$/,
   /^\/desktop$/,
+  /^\/settings\/display$/,
+  /^\/settings\/observer$/,
+  /^\/settings\/telegram$/,
+  /^\/settings\/vision$/,
 ];
 
 function needsBackButton(pathname: string): boolean {

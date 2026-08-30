@@ -10,12 +10,8 @@ import {
 
 import { Eyebrow } from "@fb/operator-ui";
 
-import { Badge, Sheet } from "@/components/ui";
+import { Badge } from "@/components/ui";
 import { MiniHeader } from "@/components/layout/MiniHeader";
-import { DisplaySettings } from "@/features/settings/DisplaySettings";
-import { ObserverSettings } from "@/features/settings/ObserverSettings";
-import { TelegramSettings } from "@/features/settings/TelegramSettings";
-import { VisionSettings } from "@/features/settings/VisionSettings";
 import {
   useObserverSettings,
   useOperatorDisplayPreference,
@@ -26,37 +22,26 @@ import {
 import { getStoredRole } from "@/lib/auth";
 import { haptic } from "@/lib/tg";
 
-const SETTINGS_SECTIONS = [
-  "display",
-  "observer",
-  "telegram",
-  "vision",
-] as const;
-type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+type SettingsSection = "display" | "observer" | "telegram" | "vision";
+type SettingsSectionRoute =
+  | "/settings/display"
+  | "/settings/observer"
+  | "/settings/telegram"
+  | "/settings/vision";
 
-interface SettingsSearch {
-  section?: SettingsSection;
-}
+const SECTION_ROUTES: Record<SettingsSection, SettingsSectionRoute> = {
+  display: "/settings/display",
+  observer: "/settings/observer",
+  telegram: "/settings/telegram",
+  vision: "/settings/vision",
+};
 
 export const Route = createFileRoute("/settings/")({
-  validateSearch: (search: Record<string, unknown>): SettingsSearch => ({
-    section: SETTINGS_SECTIONS.includes(search.section as SettingsSection)
-      ? (search.section as SettingsSection)
-      : undefined,
-  }),
   component: SettingsPage,
 });
 
-const SECTION_TITLES: Record<SettingsSection, string> = {
-  display: "Отображение",
-  observer: "Observer",
-  telegram: "Telegram",
-  vision: "Vision и desktop",
-};
-
 function SettingsPage() {
   const navigate = useNavigate();
-  const { section } = Route.useSearch();
   const canEdit = getStoredRole() === "owner";
   const displayPreferenceQuery = useOperatorDisplayPreference(canEdit);
   const observerQuery = useObserverSettings();
@@ -66,11 +51,7 @@ function SettingsPage() {
 
   function openSection(next: SettingsSection) {
     haptic.selection();
-    void navigate({ to: "/settings", search: { section: next } });
-  }
-
-  function closeSection() {
-    void navigate({ to: "/settings", search: {} });
+    void navigate({ to: SECTION_ROUTES[next] });
   }
 
   function navTo(
@@ -238,18 +219,6 @@ function SettingsPage() {
           </div>
         </section>
       </div>
-
-      <Sheet
-        open={section !== undefined}
-        onClose={closeSection}
-        eyebrow="СИСТЕМА · НАСТРОЙКИ"
-        title={section ? SECTION_TITLES[section] : "Настройки"}
-      >
-        {section === "display" ? <DisplaySettings canEdit={canEdit} /> : null}
-        {section === "observer" ? <ObserverSettings canEdit={canEdit} /> : null}
-        {section === "telegram" ? <TelegramSettings canEdit={canEdit} /> : null}
-        {section === "vision" ? <VisionSettings canEdit={canEdit} /> : null}
-      </Sheet>
     </div>
   );
 }
