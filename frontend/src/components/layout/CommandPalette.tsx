@@ -13,6 +13,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Search,
   LayoutDashboard,
+  Activity,
+  ShieldAlert,
   Table,
   Radar,
   Package,
@@ -42,6 +44,18 @@ const PAGES = [
     label: "Обзор",
     kw: "dashboard панель главная обзор",
     icon: <LayoutDashboard size={15} />,
+  },
+  {
+    to: "/actions",
+    label: "Действия",
+    kw: "actions действия команды очередь pause activate",
+    icon: <Activity size={15} />,
+  },
+  {
+    to: "/incidents",
+    label: "Инциденты",
+    kw: "incidents инциденты алерты предупреждения критично",
+    icon: <ShieldAlert size={15} />,
   },
   { to: "/ads", label: "Объявления", kw: "ads объявления реклама", icon: <Table size={15} /> },
   {

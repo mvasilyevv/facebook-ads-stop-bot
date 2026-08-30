@@ -13,6 +13,7 @@ import { Search, Menu } from "lucide-react";
 import type { RefObject } from "react";
 import { WorkerPulse } from "./WorkerPulse";
 import { useCommandPalette } from "@/stores/commandPalette";
+import { useOperatorCabinetSnapshot } from "@/lib/api/operator";
 
 // pathname → лейбл текущего раздела для breadcrumb.
 const ROUTE_CRUMB: Record<string, string> = {
@@ -37,6 +38,8 @@ function getCrumb(pathname: string): string {
   return "—";
 }
 
+const CABINET_ID_RE = /^\/cabinets\/([^/]+)/;
+
 interface TopBarProps {
   onOpenNavigation?: () => void;
   navigationButtonRef?: RefObject<HTMLButtonElement | null>;
@@ -44,7 +47,12 @@ interface TopBarProps {
 
 export function TopBar({ onOpenNavigation, navigationButtonRef }: TopBarProps) {
   const { location } = useRouterState();
-  const crumb = getCrumb(location.pathname);
+  const cabinetId = location.pathname.match(CABINET_ID_RE)?.[1] ?? "";
+  // Тот же снапшот, что уже держит в кэше страница /cabinets/$cabinetId —
+  // здесь только чтение уже загруженных данных, без своего похода в сеть.
+  const cabinetSnapshot = useOperatorCabinetSnapshot(cabinetId, { window: "today" });
+  const cabinetName = cabinetId ? cabinetSnapshot.data?.meta.account.name : null;
+  const crumb = cabinetName || getCrumb(location.pathname);
   const openPalette = useCommandPalette((s) => s.toggle);
 
   return (

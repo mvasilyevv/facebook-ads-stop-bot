@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { validateCampaignStep, type CampaignWizardStep } from "@fb/features/campaigns";
 import { createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, Clock, Plus, Save } from "lucide-react";
@@ -22,8 +22,17 @@ import { usePresets } from "@/lib/api/campaigns";
 import { cn } from "@/lib/utils/cn";
 import { getWizardFeatureState, useWizardStore } from "@/stores/campaignWizard";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const Route = createFileRoute("/campaigns/create/")({
   component: CampaignCreatePage,
+  // ?preset=<uuid> — карточка пресета ведёт сюда «Применить и создать» одной
+  // ссылкой, без повторного выбора того же пресета на шаге 1. Значение из
+  // адресной строки не доверенное — что не похоже на id пресета, то отброшено.
+  validateSearch: (search: Record<string, unknown>): { preset?: string } => {
+    const raw = search.preset;
+    return typeof raw === "string" && UUID_RE.test(raw) ? { preset: raw.toLowerCase() } : {};
+  },
 });
 
 type PageTab = "wizard" | "history";
@@ -217,6 +226,7 @@ function formatDraftTime(value: string): string {
 
 function WizardLayout() {
   const store = useWizardStore();
+  const search = Route.useSearch();
   const { data: presets } = usePresets();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const selectedPreset = presets?.find((preset) => preset.id === store.start.preset_id) ?? null;
@@ -231,6 +241,21 @@ function WizardLayout() {
       }
     }
   };
+
+  // «Применить и создать» на карточке пресета ведёт сюда с ?preset=<id>:
+  // применяем его один раз за значение, а не на каждый рендер — иначе
+  // операторская правка полей визарда откатывалась бы обратно к пресету.
+  const { setStart, applyPreset } = store;
+  const appliedFromSearchRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!search.preset || appliedFromSearchRef.current === search.preset) return;
+    const preset = presets?.find((candidate) => candidate.id === search.preset);
+    if (!preset) return;
+    appliedFromSearchRef.current = search.preset;
+    setStart({ mode: "preset", preset_id: preset.id });
+    applyPreset(preset);
+    toast.success(`Пресет «${preset.name}» применён`);
+  }, [search.preset, presets, setStart, applyPreset]);
 
   const validateAndNext = () => {
     const nextErrors = validateCampaignStep(getWizardFeatureState(), store.currentStep);

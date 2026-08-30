@@ -10,6 +10,8 @@
  *
  * Count-badges (реальные данные):
  *   - Объявления: ads_in_warning + ads_in_stop (активные инциденты, из stats).
+ *   - Инциденты: attention.data.items с kind="incident" (тот же снапшот, что
+ *     кормит секцию «Требует внимания» на дашборде — без отдельного запроса).
  * 196px expanded / 64px collapsed (state в Zustand).
  */
 
@@ -26,6 +28,7 @@ import {
   MonitorUp,
   PanelLeft,
   Rocket,
+  ShieldAlert,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -39,7 +42,7 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   /** Ключ для подстановки count-badge. */
-  badgeKey?: "actions";
+  badgeKey?: "actions" | "incidents";
   /** Вложенные пункты (отрисовываются с отступом под родителем). */
   children?: NavItem[];
 }
@@ -57,6 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/", label: "Сейчас", icon: LayoutDashboard },
       { to: "/actions", label: "Действия", icon: Activity, badgeKey: "actions" },
+      { to: "/incidents", label: "Инциденты", icon: ShieldAlert, badgeKey: "incidents" },
     ],
   },
   {
@@ -113,7 +117,16 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
             item.state === "unknown",
         ).length ?? 0)
       : null;
-  const badgeFor = (key?: "actions"): number | null => (key === "actions" ? actionBadge : 0);
+  // Дешёвый счётчик: те же attention-элементы, что кормят секцию «Требует
+  // внимания» на дашборде (без отдельного запроса) — считаем только kind
+  // "incident", остальное (action/source/recommendation) сюда не относится.
+  const incidentBadge: number | null =
+    realtimeStatus === "connected" && operatorSnapshot?.attention?.state === "ready"
+      ? (operatorSnapshot.attention.data?.items.filter((item) => item.kind === "incident")
+          .length ?? 0)
+      : null;
+  const badgeFor = (key?: "actions" | "incidents"): number | null =>
+    key === "actions" ? actionBadge : key === "incidents" ? incidentBadge : 0;
 
   // Активность по самому длинному совпавшему пути: на /campaigns/create
   // горит только «Создание», а «Кампании» — приглушённо как родитель.
@@ -126,6 +139,9 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
   //   active — полная подсветка (bg + accent + левый бар),
   //   muted  — приглушённый родитель (активен дочерний маршрут),
   //   child  — отступ и уменьшенная иконка для вложенного пункта.
+  const badgeUnknownLabel = (key?: "actions" | "incidents"): string =>
+    key === "incidents" ? "Количество инцидентов не подтверждено" : "Количество действий не подтверждено";
+
   const renderLink = (
     item: NavItem,
     opts: { active: boolean; muted?: boolean; child?: boolean },
@@ -161,7 +177,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
         {!collapsed && item.badgeKey && badge !== 0 && (
           <span
             role={badge === null ? "status" : undefined}
-            aria-label={badge === null ? "Количество действий не подтверждено" : undefined}
+            aria-label={badge === null ? badgeUnknownLabel(item.badgeKey) : undefined}
             data-state={badge === null ? "unknown" : "ready"}
             className={cn(
               "font-display text-[12px] tabular-nums",

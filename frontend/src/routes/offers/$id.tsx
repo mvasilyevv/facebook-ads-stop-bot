@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 
 import { useOffers, useOfferRules, useUpdateOfferRules } from "@/lib/api/offers";
 import {
@@ -93,7 +94,7 @@ function OfferRulesPage() {
         <OperatorUnavailableState
           title="Правила оффера недоступны"
           resource="правила оффера"
-          details={error instanceof Error ? error.message : undefined}
+          details={safeApiProblemMessage(error, "Не удалось загрузить правила оффера.")}
           onRetry={() => void refetch()}
         />
       )}

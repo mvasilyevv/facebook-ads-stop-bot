@@ -61,8 +61,7 @@ function errorToAssistantText(err: unknown): string {
     }
     return `Ассистент недоступен: ${err.message}`;
   }
-  const message = err instanceof Error ? err.message : "нет соединения с сервером";
-  return `Ассистент недоступен: ${message}`;
+  return "Ассистент недоступен: нет соединения с сервером";
 }
 
 interface ChatWidgetState {

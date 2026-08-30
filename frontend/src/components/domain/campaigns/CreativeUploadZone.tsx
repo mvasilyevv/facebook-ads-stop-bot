@@ -9,6 +9,7 @@
  */
 import { useRef, useState, type FC } from "react";
 import { Upload, AlertCircle } from "lucide-react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import { cn } from "@/lib/utils/cn";
 import { Spinner } from "@/components/ui/Spinner";
 import { uploadConcepts } from "@/lib/api/campaigns";
@@ -48,7 +49,7 @@ export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
       }));
       onUploaded(result.upload_id, newConcepts, result.added_refs);
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "Ошибка загрузки");
+      setUploadError(safeApiProblemMessage(e, "Не удалось загрузить файлы. Попробуйте ещё раз."));
     } finally {
       setUploading(false);
     }

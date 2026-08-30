@@ -118,6 +118,8 @@ describe("web actions realtime projection", () => {
     useOperatorAction.mockReturnValue({
       data: undefined,
       isPending: true,
+      isLoading: true,
+      isFetched: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
@@ -128,6 +130,65 @@ describe("web actions realtime projection", () => {
     expect(screen.getByRole("heading", { name: "Действие" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Все действия" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Загрузка действия" })).toBeInTheDocument();
+  });
+
+  it("shows an unavailable state with retry instead of a skeleton on query error", () => {
+    useOperatorAction.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isLoading: false,
+      isFetched: true,
+      isError: true,
+      error: new Error("Действие недоступно"),
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionDetailPage />, "connected");
+
+    expect(screen.queryByRole("status", { name: "Загрузка действия" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+  });
+
+  it("shows an unavailable state with retry instead of hanging forever when the query never runs", () => {
+    // Регресс на #336: невалидный actionId выключает запрос (enabled: false).
+    // status остаётся "pending" навсегда — isPending true, но fetchStatus
+    // никогда не переходит в "fetching", так что isLoading остаётся false.
+    useOperatorAction.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isLoading: false,
+      isFetched: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionDetailPage />, "connected");
+
+    expect(screen.queryByRole("status", { name: "Загрузка действия" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+  });
+
+  it("offers retry on a fetched-but-missing action instead of a dead end", () => {
+    const refetch = vi.fn();
+    useOperatorAction.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isLoading: false,
+      isFetched: true,
+      isError: false,
+      error: null,
+      refetch,
+    });
+
+    renderWithRealtime(<ActionDetailPage />, "connected");
+
+    expect(screen.getByText(/отсутствует или недоступна/)).toBeInTheDocument();
+    const retryButton = screen.getByRole("button", { name: "Повторить" });
+    fireEvent.click(retryButton);
+    expect(refetch).toHaveBeenCalled();
   });
 
   it("opens mobile filters as a focus-managed dialog with 44px controls and resets URL state", async () => {

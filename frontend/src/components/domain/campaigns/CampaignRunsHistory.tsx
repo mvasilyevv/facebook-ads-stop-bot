@@ -118,7 +118,7 @@ export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ openRunId = 
       <OperatorUnavailableState
         title="История запусков недоступна"
         resource="историю запусков"
-        details={error instanceof Error ? error.message : undefined}
+        details={safeApiProblemMessage(error, "Не удалось загрузить историю запусков.")}
         onRetry={() => void refetch()}
       />
     );
@@ -318,7 +318,7 @@ function RunExpandedDetails({
         <OperatorUnavailableState
           title="Детали запуска недоступны"
           resource="детали запуска"
-          details={query.error instanceof Error ? query.error.message : undefined}
+          details={safeApiProblemMessage(query.error, "Не удалось загрузить детали запуска.")}
           onRetry={() => void query.refetch()}
         />
       </div>

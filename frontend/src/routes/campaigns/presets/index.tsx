@@ -9,7 +9,7 @@ import {
 } from "@fb/features/campaigns";
 import { safeApiProblemMessage } from "@fb/operator-api";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, Layers3, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Layers3, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { CampaignTagPicker } from "@/components/domain/campaigns/CampaignTagPicker";
@@ -215,6 +215,16 @@ function PresetRecord({
       <div className="mt-5 border-t border-[var(--color-hairline)] pt-3 text-[12px] text-bg-8">
         Нейминг: {preset.naming_template || "стандартный"} · URL tags:{" "}
         {preset.url_tags_template ? "свой шаблон" : "SOP"}
+      </div>
+      <div className="mt-4 flex justify-end">
+        <Link
+          to="/campaigns/create"
+          search={{ preset: preset.id }}
+          className={buttonStyles({ variant: "secondary", size: "sm" })}
+        >
+          Применить и создать
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
       </div>
     </article>
   );

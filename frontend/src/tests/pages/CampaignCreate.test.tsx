@@ -13,11 +13,15 @@
 
 import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
 
 // ─── Моки ─────────────────────────────────────────────────────────────────────
+
+// ?preset=<id> — карточка пресета ведёт на /campaigns/create с этим query
+// (#345 QW11). Управляемое состояние, чтобы конкретный тест мог задать его.
+const createRouteSearch = vi.hoisted(() => ({ value: {} as { preset?: string } }));
 
 // Мок TanStack Router (роут createFileRoute)
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -27,7 +31,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
     createFileRoute:
       () =>
       <T,>(options: T): T =>
-        options,
+        ({ ...options, useSearch: () => createRouteSearch.value }) as T,
     Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
       <a href={to}>{children}</a>
     ),
@@ -1141,6 +1145,36 @@ describe("CampaignCreatePage responsive policy", () => {
         value: originalMatchMedia,
       });
     }
+  });
+});
+
+// #345 QW11 — карточка пресета вела «Применить и создать» на /campaigns/create,
+// но без ?preset= визард не знал, какой пресет применить: оператор снова
+// выбирал его вручную на шаге 1.
+describe("CampaignCreatePage query preset (#345 QW11)", () => {
+  afterEach(() => {
+    createRouteSearch.value = {};
+  });
+
+  it("применяет ?preset= к визарду сразу при открытии", async () => {
+    useWizardStore.getState().reset();
+    createRouteSearch.value = { preset: "preset-1" };
+
+    render(wrap(<CampaignCreatePage />));
+
+    await waitFor(() => expect(useWizardStore.getState().start.preset_id).toBe("preset-1"));
+    expect(useWizardStore.getState().start.mode).toBe("preset");
+    expect(useWizardStore.getState().goal.countries).toEqual(["GH"]);
+  });
+
+  it("без ?preset= не трогает режим старта", () => {
+    useWizardStore.getState().reset();
+    createRouteSearch.value = {};
+
+    render(wrap(<CampaignCreatePage />));
+
+    expect(useWizardStore.getState().start.mode).toBe("new");
+    expect(useWizardStore.getState().start.preset_id).toBeFalsy();
   });
 });
 

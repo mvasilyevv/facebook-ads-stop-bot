@@ -11,7 +11,17 @@ const api = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => options,
-  Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({
+    children,
+    to,
+    search,
+  }: {
+    children: ReactNode;
+    to: string;
+    search?: Record<string, string>;
+  }) => (
+    <a href={search ? `${to}?${new URLSearchParams(search).toString()}` : to}>{children}</a>
+  ),
 }));
 
 vi.mock("@/components/layout/PageHeader", () => ({
@@ -147,5 +157,14 @@ describe("CampaignPresetsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Удалить US broad" }));
     fireEvent.click(screen.getByRole("button", { name: "Удалить пресет" }));
     await waitFor(() => expect(api.remove).toHaveBeenCalledWith("preset-1"));
+  });
+
+  // #345 QW11 — карточка пресета вела только в редактор; применить его к
+  // новой кампании можно было только вручную выбрав тот же id на шаге 1.
+  it("ведёт «Применить и создать» на визард с выбранным пресетом", () => {
+    render(<PresetsPage />);
+
+    const link = screen.getByRole("link", { name: /Применить и создать/ });
+    expect(link).toHaveAttribute("href", "/campaigns/create?preset=preset-1");
   });
 });

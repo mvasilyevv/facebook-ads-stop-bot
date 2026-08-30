@@ -56,7 +56,11 @@ function ActionDetailPage() {
       </OperatorPageBoundary>
     );
   }
-  if (actionQuery.isPending && !projection) {
+  // isLoading (не isPending!) — иначе запрос, который так и не стартовал
+  // (невалидный actionId → enabled:false) держит скелетон вечно: status
+  // остаётся "pending" навсегда, хотя fetchStatus так и не переходит в
+  // "fetching". См. #336.
+  if (actionQuery.isLoading && !projection) {
     return (
       <OperatorPageBoundary
         title="Действие"
@@ -67,15 +71,24 @@ function ActionDetailPage() {
     );
   }
   if (!action) {
+    // Разбираем два разных исхода одним честным состоянием с retry:
+    // запрос действительно завершился и действия нет (isFetched) —
+    // или ответ не удалось разобрать/запрос не выполнился вовсе.
+    const notFound = actionQuery.isFetched && !actionQuery.isError;
     return (
       <OperatorPageBoundary
         title="Действие"
         navigation={<ActionBreadcrumb />}
       >
         <OperatorUnavailableState
-          title="Действие не найдено"
+          title={notFound ? "Действие не найдено" : "Действие недоступно"}
           resource="действие"
-          details={`Задача #${actionId} отсутствует или недоступна.`}
+          details={
+            notFound
+              ? `Задача #${actionId} отсутствует или недоступна.`
+              : operatorProblemMessage(actionQuery.error)
+          }
+          onRetry={() => void actionQuery.refetch()}
         />
       </OperatorPageBoundary>
     );

@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Tag, Plus } from "lucide-react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 
 import {
   useOffers,
@@ -100,7 +101,7 @@ function OffersPage() {
         <OperatorUnavailableState
           title="Офферы недоступны"
           resource="каталог офферов"
-          details={error instanceof Error ? error.message : undefined}
+          details={safeApiProblemMessage(error, "Не удалось загрузить каталог офферов.")}
           onRetry={() => void refetch()}
         />
       </div>

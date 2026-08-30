@@ -34,6 +34,10 @@ vi.mock("@/lib/api/operator", () => ({
     isLoading: false,
     isError: false,
   }),
+  // TopBar (#345 QW12) читает кэш этого запроса на /cabinets/:id — в smoke-тестах
+  // Shell путь всегда "/", поэтому хук отключён (enabled: Boolean(cabinetId));
+  // мок нужен только чтобы модуль резолвился.
+  useOperatorCabinetSnapshot: () => ({ data: undefined }),
 }));
 
 beforeEach(() => {
@@ -200,6 +204,7 @@ describe("Sidebar — smoke-рендер с роутером", () => {
     expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
       "Сейчас",
       "Действия",
+      "Инциденты",
       "Объявления",
       "Кампании",
       "Создание",
@@ -235,6 +240,33 @@ describe("Sidebar — smoke-рендер с роутером", () => {
 
     const actions = await screen.findByRole("link", { name: "Действия" });
     expect(actions).toHaveTextContent("Действия1");
+  });
+
+  it("считает открытые инциденты дешёвым бейджем из attention-снапшота", async () => {
+    operatorSnapshotMock.data = {
+      actions: { state: "ready", data: { items: [] } },
+      attention: {
+        state: "ready",
+        data: {
+          items: [
+            { kind: "incident" },
+            { kind: "incident" },
+            { kind: "action" },
+            { kind: "source" },
+          ],
+        },
+      },
+    };
+    const router = makeSidebarRouter();
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const incidents = await screen.findByRole("link", { name: "Инциденты" });
+    expect(incidents).toHaveTextContent("Инциденты2");
+    expect(incidents).toHaveAttribute("href", "/incidents");
   });
 
   it("не показывает устаревший action badge при переподключении", async () => {

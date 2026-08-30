@@ -53,6 +53,16 @@ export function OperatorCardSkeleton({ label }: { label: string }) {
   );
 }
 
+/**
+ * Строка похожа на сырой дамп исключения или служебных данных (JSON, react-query
+ * queryKey, stack trace), а не на заранее написанный операторский текст.
+ * `details` обязан быть готовой копией (см. safeApiProblemMessage) — эта проверка
+ * защищает от регресса, если кто-то по ошибке прокинет error.message напрямую.
+ */
+function looksLikeRawDiagnostic(text: string): boolean {
+  return /[[\]{}]/.test(text) || /\.(?:ts|tsx|js|jsx|mjs|cjs):\d+(?::\d+)?/.test(text);
+}
+
 export function OperatorUnavailableState({
   title,
   resource,
@@ -61,13 +71,15 @@ export function OperatorUnavailableState({
 }: {
   title: string;
   resource: string;
+  /** Заранее написанный операторский текст (см. safeApiProblemMessage). Никогда не error.message. */
   details?: string;
   onRetry?: () => void;
 }) {
   const detail = details?.trim();
+  const safeDetail = detail && !looksLikeRawDiagnostic(detail) ? detail : undefined;
   const guidance =
-    detail && detail !== title
-      ? `${detail} Повторите запрос.`
+    safeDetail && safeDetail !== title
+      ? `${safeDetail} Повторите запрос.`
       : `Не удалось загрузить ${resource}. Повторите запрос.`;
 
   return <ErrorState title={title} error={guidance} onRetry={onRetry} />;

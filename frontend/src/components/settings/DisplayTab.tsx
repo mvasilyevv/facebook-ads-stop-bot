@@ -185,7 +185,11 @@ export function DisplayTab() {
         <div className="mt-5 break-words font-display text-[24px] tabular-nums text-bg-11">
           {preview ?? "—"}
         </div>
-        <div className="mt-2 break-all text-[14px] text-bg-8">
+        {/* break-words (overflow-wrap), а не break-all: последний перенос
+            рвал "Europe/Kaliningrad" посреди слова ("Kalining" / "rad") —
+            overflow-wrap переносит слово целиком, раз оно всё равно не
+            влезает рядом с префиксом. */}
+        <div className="mt-2 break-words text-[14px] text-bg-8">
           {effective
             ? `Сохранённый часовой пояс: ${effective}`
             : "Часовой пояс не подтверждён сервером"}

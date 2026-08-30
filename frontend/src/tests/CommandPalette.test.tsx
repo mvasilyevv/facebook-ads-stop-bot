@@ -41,6 +41,18 @@ describe("CommandPalette", () => {
     render(<CommandPalette />);
     expect(screen.getByText("Обзор")).toBeInTheDocument();
     expect(screen.getByText("Настройки")).toBeInTheDocument();
+    expect(screen.getByText("Действия")).toBeInTheDocument();
+    expect(screen.getByText("Инциденты")).toBeInTheDocument();
+  });
+
+  // #335 — «Действия» и «Инциденты» были доступны только через Sidebar,
+  // из палитры (⌘K) их было не найти.
+  it("Enter по «Инциденты» ведёт на /incidents", async () => {
+    useCommandPalette.setState({ open: true });
+    render(<CommandPalette />);
+    await userEvent.type(screen.getByLabelText("Поиск"), "инцид");
+    await userEvent.keyboard("{Enter}");
+    expect(navigateMock).toHaveBeenCalledWith({ to: "/incidents" });
   });
 
   // Ввод запроса фильтрует список разделов
