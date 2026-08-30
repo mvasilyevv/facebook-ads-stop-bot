@@ -406,7 +406,7 @@ export function MiniCabinetAdsSection({
           <DataStateNotice state={displayState} issues={displayPayload.issues} compact />
         </div>
       ) : null}
-      <div className="grid gap-3 px-4 py-3">
+      <div className="mini-cabinet-ads-list grid gap-3 px-4 py-3">
         {query.isError && !query.data ? (
           <ErrorState
             message={operatorProblemMessage(query.error)}
