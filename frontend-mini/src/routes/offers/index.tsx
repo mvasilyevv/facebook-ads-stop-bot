@@ -18,8 +18,8 @@ import {
   type OfferRulesValues,
 } from "@fb/features/offers";
 import { formatSpend } from "@fb/shared/format/number";
+import { Eyebrow } from "@fb/operator-ui";
 import { MiniHeader } from "@/components/layout/MiniHeader";
-import { Eyebrow } from "@/components/data/Eyebrow";
 import {
   Badge,
   Button,

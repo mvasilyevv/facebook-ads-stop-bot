@@ -22,13 +22,18 @@ import {
   formatOperatorCount,
   operatorActiveActionLabel,
   operatorDeliveryLabel,
-  operatorDeliverySeverity,
 } from "@fb/shared/operator/adsViewModel";
 import { operatorActionStateReason, operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { ACTION_STATE_LABEL, severityForDataState } from "@fb/shared/operator/viewModel";
-import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
+import {
+  DataStateBadge,
+  deliveryStatusTextClass,
+  Metric,
+  MetricCell,
+  StopProximityReadout,
+} from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { Button } from "@/components/ui/Button";
@@ -384,28 +389,8 @@ export function AdCommandButtons({
   );
 }
 
-function deliveryStatusTextClass(value: string | null): string {
-  const severity = operatorDeliverySeverity(value);
-  if (severity === "critical") return "font-semibold text-danger";
-  if (severity === "warning") return "font-semibold text-warning";
-  return "text-bg-8";
-}
-
 function operatorCommandProblemMessage(error: unknown): string {
   return isOperatorCommandIntentStorageError(error)
     ? `Безопасное действие заблокировано. ${error.userMessage}`
     : operatorProblemMessage(error);
-}
-
-function MetricCell({ value }: { value: string }) {
-  return <td className="px-3 py-3 text-right font-numeric text-[14px] text-bg-11">{value}</td>;
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-[12px] text-bg-8">{label}</dt>
-      <dd className="mt-1 font-numeric text-[14px] text-bg-11">{value}</dd>
-    </div>
-  );
 }

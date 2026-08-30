@@ -17,7 +17,7 @@
  */
 
 import { type ReactNode } from "react";
-import { Eyebrow } from "@/components/data/Eyebrow";
+import { Eyebrow } from "@fb/operator-ui";
 import { sectionForPath } from "@/lib/navigation";
 
 // ─── PageHeader ───────────────────────────────────────────────────────────────

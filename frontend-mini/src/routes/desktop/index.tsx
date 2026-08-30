@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Copy, MonitorUp } from "lucide-react";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Button } from "@/components/ui";
-import { Eyebrow } from "@/components/data";
+import { Eyebrow } from "@fb/operator-ui";
 import { tmaApi } from "@/lib/auth";
 import { haptic, tgAlert } from "@/lib/tg";
 

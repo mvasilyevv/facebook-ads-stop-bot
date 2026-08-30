@@ -3,7 +3,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 
 import { formatZonedDateTime } from "@fb/shared/format/time";
-import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import {
   OPERATOR_INCIDENT_STATUS_LABEL,
   operatorIncidentCopy,
@@ -12,7 +11,7 @@ import {
 } from "@fb/shared/operator/incidentViewModel";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { operatorSourceLabel } from "@fb/shared/operator/ledgerSemantics";
-import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import { DataStateBadge, DataStateNotice, incidentSeverityTone } from "@fb/operator-ui";
 
 import { Button } from "@/components/ui/Button";
 import {
@@ -204,23 +203,4 @@ function Row({ label, value }: { label: string; value: string }) {
       <dd className="m-0 mt-2 break-words text-[14px] text-bg-11">{value}</dd>
     </div>
   );
-}
-
-function incidentSeverityTone(
-  severity: OperatorSeverity,
-  state: "ready" | "empty" | "partial" | "stale" | "unavailable",
-): { surface: string } {
-  if (state !== "ready") {
-    return { surface: "border-warning/35 bg-warning-bg" };
-  }
-  if (severity === "critical") {
-    return { surface: "border-danger/35 bg-danger-bg" };
-  }
-  if (severity === "warning") {
-    return { surface: "border-warning/35 bg-warning-bg" };
-  }
-  if (severity === "ok") {
-    return { surface: "border-success/35 bg-success-bg" };
-  }
-  return { surface: "border-[var(--color-hairline-strong)] bg-bg-2" };
 }

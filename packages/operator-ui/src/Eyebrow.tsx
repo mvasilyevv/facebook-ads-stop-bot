@@ -4,13 +4,14 @@
  * Номер группы отображается приглушённым акцентом перед лейблом.
  * Внешние отступы задаёт родитель.
  *
- * Отдельно от layout/Eyebrow (тот завязан на PageHeader других страниц).
+ * Единый источник для обоих фронтов (раньше был файлом-близнецом в
+ * frontend/src/components/data и frontend-mini/src/components/data).
+ * Отдельно от layout/PageHeader-специфичных обёрток каждого фронта.
  */
 
 import { type CSSProperties, type ReactNode } from "react";
-import { cn } from "@/lib/utils/cn";
 
-interface EyebrowProps {
+export interface EyebrowProps {
   /** Номер группы ("01", "02"…), рендерится в accent-muted. */
   num?: string;
   children: ReactNode;
@@ -19,18 +20,18 @@ interface EyebrowProps {
 }
 
 export function Eyebrow({ num, children, className, style }: EyebrowProps) {
+  const classes = [
+    "inline-flex items-center gap-1.5",
+    "font-display text-[12px] font-semibold uppercase tracking-[0.12em] text-bg-9",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5",
-        "font-display text-[12px] font-semibold uppercase tracking-[0.12em] text-bg-9",
-        className,
-      )}
-      style={style}
-    >
+    <span className={classes} style={style}>
       {num ? (
         <>
-          <span className="text-accent-muted">{num}</span>
+          <span className="text-accent-muted tabular-nums">{num}</span>
           <span className="text-bg-8">/</span>
         </>
       ) : null}

@@ -6,7 +6,16 @@
  */
 import { type HTMLAttributes } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+import { BADGE_VARIANT_CLASSES, type BadgeVariant as SharedBadgeVariant } from "@fb/shared/tokens/badgeVariants";
 import { cn } from "@/lib/utils/cn";
+
+const SURFACE_VARIANTS = Object.fromEntries(
+  Object.entries(BADGE_VARIANT_CLASSES).map(([variant, classes]) => [variant, classes.surface]),
+) as Record<SharedBadgeVariant, string>;
+
+const DOT_VARIANTS = Object.fromEntries(
+  Object.entries(BADGE_VARIANT_CLASSES).map(([variant, classes]) => [variant, classes.dot]),
+) as Record<SharedBadgeVariant, string>;
 
 const badgeStyles = cva(
   [
@@ -17,25 +26,7 @@ const badgeStyles = cva(
   ],
   {
     variants: {
-      variant: {
-        // FSM alert_state
-        normal: "bg-bg-2 border-bg-6 text-bg-10",
-        warning: "bg-warning-bg border-warning/30 text-warning",
-        stop: "bg-danger-bg border-danger/30 text-danger",
-        claimed: "bg-info-bg border-info/30 text-info",
-        disabled: "bg-bg-2 border-bg-5 text-bg-9",
-        // Дополнительные
-        success: "bg-success-bg border-success/30 text-success",
-        info: "bg-info-bg border-info/30 text-info",
-        neutral: "bg-bg-3 border-bg-6 text-bg-10",
-        // Task statuses
-        pending: "bg-bg-3 border-bg-6 text-bg-9",
-        running: "bg-info-bg border-info/30 text-info",
-        done: "bg-success-bg border-success/30 text-success",
-        failed: "bg-danger-bg border-danger/30 text-danger",
-        retrying: "bg-warning-bg border-warning/30 text-warning",
-        cancelled: "bg-bg-2 border-bg-5 text-bg-9",
-      },
+      variant: SURFACE_VARIANTS,
       size: {
         sm: "h-6 px-2 text-[12px]",
         md: "h-7 px-2.5 text-[12px]",
@@ -50,22 +41,7 @@ const badgeStyles = cva(
 
 const dotStyles = cva("rounded-full shrink-0", {
   variants: {
-    variant: {
-      normal: "bg-bg-9",
-      warning: "bg-warning",
-      stop: "bg-danger",
-      claimed: "bg-info",
-      disabled: "bg-bg-8",
-      success: "bg-success",
-      info: "bg-info",
-      neutral: "bg-bg-8",
-      pending: "bg-bg-8",
-      running: "bg-info",
-      done: "bg-success",
-      failed: "bg-danger",
-      retrying: "bg-warning",
-      cancelled: "bg-bg-8",
-    },
+    variant: DOT_VARIANTS,
   },
   defaultVariants: { variant: "neutral" },
 });

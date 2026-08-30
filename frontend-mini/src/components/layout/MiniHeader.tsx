@@ -4,8 +4,8 @@
  * Без точки и ghost-числа (канон). Правый слот — счётчик/действие.
  */
 import type { ReactNode } from "react";
+import { Eyebrow } from "@fb/operator-ui";
 import { cn } from "@/lib/cn";
-import { Eyebrow } from "@/components/data/Eyebrow";
 
 interface MiniHeaderProps {
   /** Номер-маркер eyebrow (например "04"). */

@@ -1,13 +1,16 @@
 /**
  * PulseDot — пульсирующая «дышащая» точка (live-индикатор).
  *
- * Использует класс .wp-dot из tokens.css (keyframes fbPulse поверх currentColor).
- * Negative
- * animation-delay вычисляется один раз на mount от общего эпоха → все точки
- * на странице дышат в унисон, даже если смонтированы в разное время.
+ * Использует класс .wp-dot из packages/shared/src/tokens/tokens.css
+ * (keyframes fbPulse поверх currentColor). Negative animation-delay
+ * вычисляется один раз на mount от общего эпоха → все точки на странице
+ * дышат в унисон, даже если смонтированы в разное время.
  *
- * Цвет передаётся как CSS-значение (var(--color-success)/var(--color-warning)/…): задаётся
- * и в `background`, и в `color` — fbPulse строит box-shadow от currentColor.
+ * Цвет передаётся как CSS-значение (var(--color-success)/var(--color-warning)/…):
+ * задаётся и в `background`, и в `color` — fbPulse строит box-shadow от currentColor.
+ *
+ * Единый источник для обоих фронтов (раньше был файлом-близнецом в
+ * frontend/src/components/data и frontend-mini/src/components/data).
  */
 
 import { useState, type CSSProperties } from "react";
@@ -16,7 +19,7 @@ const PULSE_MS = 2400;
 // Эпоха фиксируется при загрузке модуля — единая фаза для всех инстансов.
 const PULSE_EPOCH = Date.now();
 
-interface PulseDotProps {
+export interface PulseDotProps {
   /** Диаметр в px. */
   size?: number;
   /** CSS-цвет (var(--color-success) и т.п.). */

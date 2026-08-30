@@ -15,7 +15,6 @@ import {
   formatOperatorCount,
   operatorActiveActionLabel,
   operatorDeliveryLabel,
-  operatorDeliverySeverity,
 } from "@fb/shared/operator/adsViewModel";
 import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
@@ -31,7 +30,12 @@ import {
   isOperatorCommandIntentStorageError,
   type OperatorCommandKind,
 } from "@fb/shared/operator/commandIntent";
-import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
+import {
+  DataStateBadge,
+  deliveryStatusTextClass,
+  Metric,
+  StopProximityReadout,
+} from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { Button } from "@/components/ui";
@@ -336,26 +340,8 @@ export function MiniAdCommand({
   );
 }
 
-function deliveryStatusTextClass(value: string | null): string {
-  const severity = operatorDeliverySeverity(value);
-  if (severity === "critical") return "font-semibold text-danger";
-  if (severity === "warning") return "font-semibold text-warning";
-  return "text-bg-8";
-}
-
 function operatorCommandProblemMessage(error: unknown): string {
   return isOperatorCommandIntentStorageError(error)
     ? `Безопасное действие заблокировано. ${error.userMessage}`
     : operatorProblemMessage(error);
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-[12px] text-bg-8">{label}</dt>
-      <dd className="mt-1 font-display text-[14px] tabular-nums text-bg-11">
-        {value}
-      </dd>
-    </div>
-  );
 }

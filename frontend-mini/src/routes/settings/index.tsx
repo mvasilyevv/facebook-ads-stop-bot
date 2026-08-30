@@ -8,8 +8,9 @@ import {
   MonitorUp,
 } from "lucide-react";
 
+import { Eyebrow } from "@fb/operator-ui";
+
 import { Badge, Sheet } from "@/components/ui";
-import { Eyebrow } from "@/components/data";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { DisplaySettings } from "@/features/settings/DisplaySettings";
 import { ObserverSettings } from "@/features/settings/ObserverSettings";

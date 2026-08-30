@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Eyebrow } from "@/components/data";
+import { Eyebrow } from "@fb/operator-ui";
 import {
   Badge,
   type BadgeVariant,

@@ -4,7 +4,6 @@ import {
   DATA_STATE_DESCRIPTION,
   DATA_STATE_LABEL,
 } from "@fb/shared/operator/viewModel";
-import { formatZonedDateTime } from "@fb/shared/format/time";
 import type {
   DataState,
   OperatorIncidentStatus,
@@ -16,6 +15,18 @@ import {
   stopProximityBarWidth,
   type OperatorStopProximity,
 } from "@fb/shared/operator/stopProximity";
+import { FreshnessLine } from "./FreshnessLine";
+
+export { Eyebrow, type EyebrowProps } from "./Eyebrow";
+export { PulseDot, type PulseDotProps } from "./PulseDot";
+export {
+  severityToneClass,
+  deliveryStatusTextClass,
+  incidentSeverityTone,
+  type IncidentSeverityTone,
+} from "./severity";
+export { MetricCell, type MetricCellProps, Metric, type MetricProps } from "./Metric";
+export { FreshnessLine, type FreshnessLineProps } from "./FreshnessLine";
 
 export interface DataStateBadgeProps {
   state: DataState;
@@ -363,13 +374,7 @@ export function AccessibleChartFrame({
         </div>
         <DataStateBadge state={completeness} compact />
       </figcaption>
-      <div className="operator-chart-meta">
-        <span>Часовой пояс: {timezone}</span>
-        <span>На: {formatTimestamp(asOf, timezone)}</span>
-        <span>
-          Источник: {sources.length ? sources.join(", ") : "не подтверждён"}
-        </span>
-      </div>
+      <FreshnessLine timezone={timezone} asOf={asOf} sources={sources} />
       <div
         className="operator-chart-visual"
         role="group"
@@ -419,9 +424,4 @@ function stateTone(state: DataState): DataStateTone {
 
 function slug(value: string): string {
   return `operator-${value.toLowerCase().replace(/[^a-zа-яё0-9]+/gi, "-")}`;
-}
-
-function formatTimestamp(value: string | null, timezone: string): string {
-  const formatted = formatZonedDateTime(value, timezone);
-  return formatted === "—" ? "не подтверждено" : formatted;
 }

@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { severityForDataState, snapshotForRealtimeState, workerStatusLabel } from "@fb/shared/operator/viewModel";
-import { PulseDot } from "@/components/data/PulseDot";
+import { PulseDot } from "@fb/operator-ui";
 import { useOperatorSnapshot } from "@/lib/api/operator";
 
 export function WorkerPulse() {
