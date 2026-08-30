@@ -136,7 +136,7 @@ export function TabBar() {
                 {badgeCount > 0 ? (
                   <span
                     aria-hidden="true"
-                    className="absolute -right-2 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-display text-[10px] font-semibold leading-none tabular-nums text-bg-0"
+                    className="absolute -right-2 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 font-display text-[12px] font-semibold leading-none tabular-nums text-bg-0"
                     style={{
                       backgroundColor: incidentBadge.critical
                         ? "var(--color-danger)"
