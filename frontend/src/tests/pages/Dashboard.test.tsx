@@ -187,10 +187,34 @@ describe("operator dashboard", () => {
     // next_scan_at фикстуры в прошлом относительно реальных часов — цикл ожидается.
     expect(within(control).getByText("цикл ожидается")).toBeInTheDocument();
 
+    // Выключение защитного контура — не одним кликом: тумблер только открывает подтверждение.
     await user.click(
       within(control).getByRole("switch", { name: "Остановить периодическое сканирование" }),
     );
+    expect(mockToggleScanning).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Авто-стоп перестанет следить за кабинетами до включения."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Выключить сканирование" }));
     expect(mockToggleScanning).toHaveBeenCalledWith(false);
+  });
+
+  it("включение сканирования из шапки не требует подтверждения", async () => {
+    const user = userEvent.setup();
+    mockToggleScanning.mockResolvedValue({});
+    mockObserverSettings.mockReturnValue({
+      data: { is_scanning_enabled: false },
+      isPending: false,
+    });
+    renderDashboard();
+
+    const control = screen.getByRole("group", { name: "Периодическое сканирование" });
+    await user.click(
+      within(control).getByRole("switch", { name: "Включить периодическое сканирование" }),
+    );
+    expect(mockToggleScanning).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("без подтверждённых настроек сканирования не рисует тумблер", () => {

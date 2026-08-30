@@ -20,7 +20,7 @@ import {
   useUpdateObserverOwnerTag,
   useUpdateObserverInterval,
 } from "@/lib/api";
-import { haptic } from "@/lib/tg";
+import { haptic, tgConfirm } from "@/lib/tg";
 
 export function ObserverSettings({ canEdit }: { canEdit: boolean }) {
   const settingsQuery = useObserverSettings();
@@ -93,6 +93,13 @@ export function ObserverSettings({ canEdit }: { canEdit: boolean }) {
   async function handleToggleScanning() {
     if (!canEdit) return;
     const enabled = !settings.is_scanning_enabled;
+    if (!enabled) {
+      // Выключение снимает защитный контур с кабинетов — не одним тапом.
+      const confirmed = await tgConfirm(
+        "Выключить сканирование? Авто-стоп перестанет следить за кабинетами до включения.",
+      );
+      if (!confirmed) return;
+    }
     try {
       await toggleScanning.mutateAsync(enabled);
       mutationSuccess(

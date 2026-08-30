@@ -9,6 +9,7 @@ import { safeApiProblemMessage } from "@fb/operator-api";
 import { RefreshCw, RotateCcw, ScanSearch } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/Input";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Switch } from "@/components/ui/Switch";
@@ -60,6 +61,7 @@ export const ObserverTab: FC = () => {
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [selectedAmColumns, setSelectedAmColumns] = useState<string[]>([]);
   const [intervalError, setIntervalError] = useState<string | null>(null);
+  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false);
 
   useEffect(() => {
     if (!settingsQuery.data) return;
@@ -135,8 +137,7 @@ export const ObserverTab: FC = () => {
     }
   }
 
-  async function handleToggleScanning() {
-    const next = !settings.is_scanning_enabled;
+  async function applyToggleScanning(next: boolean) {
     try {
       await toggleScanning.mutateAsync(next);
       toast.success(next ? "Сканирование включено" : "Сканирование остановлено");
@@ -146,6 +147,15 @@ export const ObserverTab: FC = () => {
         safeApiProblemMessage(error, "Проверьте готовность Observer"),
       );
     }
+  }
+
+  function handleToggleScanning() {
+    if (settings.is_scanning_enabled) {
+      // Выключение снимает защитный контур с кабинетов — не одним кликом.
+      setConfirmDisableOpen(true);
+      return;
+    }
+    void applyToggleScanning(true);
   }
 
   async function handleScanNow() {
@@ -224,7 +234,7 @@ export const ObserverTab: FC = () => {
           >
             <Switch
               checked={settings.is_scanning_enabled}
-              onChange={() => void handleToggleScanning()}
+              onChange={handleToggleScanning}
               disabled={toggleScanning.isPending}
               label={
                 settings.is_scanning_enabled
@@ -483,6 +493,16 @@ export const ObserverTab: FC = () => {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={confirmDisableOpen}
+        onOpenChange={setConfirmDisableOpen}
+        title="Выключить сканирование?"
+        description="Авто-стоп перестанет следить за кабинетами до включения."
+        confirmLabel="Выключить сканирование"
+        confirmVariant="warning"
+        onConfirm={() => applyToggleScanning(false)}
+      />
     </div>
   );
 };

@@ -243,6 +243,10 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
+// Взвод «Сохранить пороги» держится ограниченное время — истёк тап, значит
+// оператор передумал, а не подтвердил случайно спустя минуту.
+const SAVE_ARM_TIMEOUT_MS = 5_000;
+
 function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   const { data: rules, isLoading } = useOfferRules(offerId);
   const updateRules = useUpdateOfferRules();
@@ -253,6 +257,14 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   const [frequency, setFrequency] = useState("");
   const [initialized, setInitialized] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveArmed, setSaveArmed] = useState(false);
+  const armTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (armTimeoutRef.current !== null) window.clearTimeout(armTimeoutRef.current);
+    };
+  }, []);
 
   // Инициализируем значения при загрузке данных
   if (rules && !initialized) {
@@ -282,6 +294,23 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   });
 
   async function handleSave() {
+    // Двухфазная кнопка: первый тап только взводит подтверждение (как у переключателя
+    // активности оффера), реальное сохранение стоп-порогов — вторым тапом.
+    if (!saveArmed) {
+      haptic.selection();
+      setSaveArmed(true);
+      if (armTimeoutRef.current !== null) window.clearTimeout(armTimeoutRef.current);
+      armTimeoutRef.current = window.setTimeout(() => {
+        setSaveArmed(false);
+        armTimeoutRef.current = null;
+      }, SAVE_ARM_TIMEOUT_MS);
+      return;
+    }
+    if (armTimeoutRef.current !== null) {
+      window.clearTimeout(armTimeoutRef.current);
+      armTimeoutRef.current = null;
+    }
+    setSaveArmed(false);
     haptic.impact("medium");
     setSaveError(null);
     let payload;
@@ -512,7 +541,7 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
           loading={updateRules.isPending}
           fullWidth
         >
-          Сохранить пороги
+          {saveArmed ? "Подтвердить сохранение" : "Сохранить пороги"}
         </Button>
       </div>
     </div>

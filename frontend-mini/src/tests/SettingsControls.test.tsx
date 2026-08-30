@@ -45,8 +45,11 @@ const api = vi.hoisted(() => ({
   readDisplayPreference: vi.fn(),
 }));
 
+const mockTgConfirm = vi.hoisted(() => vi.fn());
+
 vi.mock("@/lib/tg", () => ({
   haptic: { notify: vi.fn(), impact: vi.fn(), selection: vi.fn() },
+  tgConfirm: mockTgConfirm,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -223,6 +226,8 @@ describe("TMA settings controls", () => {
     vi.clearAllMocks();
     globalThis.localStorage.clear();
     api.observerData.am_columns_use_default = false;
+    api.observerData.is_scanning_enabled = true;
+    mockTgConfirm.mockResolvedValue(true);
     for (const mutation of Object.values(api)) {
       if (typeof mutation === "function")
         mutation.mockResolvedValue({ status: "queued" });
@@ -267,6 +272,45 @@ describe("TMA settings controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить интервал" }));
     expect(await screen.findByText(/от 30 до 600 секунд/i)).toBeInTheDocument();
     expect(api.updateObserverInterval).not.toHaveBeenCalled();
+  });
+
+  it("выключение сканирования спрашивает подтверждение через tgConfirm", async () => {
+    render(<ObserverSettings canEdit />);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: /остановить периодическое сканирование/i }),
+    );
+
+    await waitFor(() =>
+      expect(mockTgConfirm).toHaveBeenCalledWith(
+        expect.stringMatching(/авто-стоп перестанет следить за кабинетами/i),
+      ),
+    );
+    await waitFor(() => expect(api.toggleScanning).toHaveBeenCalledWith(false));
+  });
+
+  it("отказ в tgConfirm не выключает сканирование", async () => {
+    mockTgConfirm.mockResolvedValueOnce(false);
+    render(<ObserverSettings canEdit />);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: /остановить периодическое сканирование/i }),
+    );
+
+    await waitFor(() => expect(mockTgConfirm).toHaveBeenCalledTimes(1));
+    expect(api.toggleScanning).not.toHaveBeenCalled();
+  });
+
+  it("включение сканирования не спрашивает подтверждение", async () => {
+    api.observerData.is_scanning_enabled = false;
+    render(<ObserverSettings canEdit />);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: /включить периодическое сканирование/i }),
+    );
+
+    await waitFor(() => expect(api.toggleScanning).toHaveBeenCalledWith(true));
+    expect(mockTgConfirm).not.toHaveBeenCalled();
   });
 
   it("disables Observer mutations for a notification-only recipient", () => {

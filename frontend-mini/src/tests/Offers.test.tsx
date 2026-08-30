@@ -4,7 +4,7 @@
  */
 import type { ComponentType } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import type { Offer, OfferRules } from "@fb/shared";
 
 const routeState = vi.hoisted(() => ({ filter: "all", role: "owner" }));
@@ -341,6 +341,49 @@ describe("OffersPage", () => {
     expect(codeInput).toBeDisabled();
     // Кнопка «Сохранить» появляется
     expect(screen.getByText("Сохранить")).toBeInTheDocument();
+  });
+
+  // Сохранение порогов — двухфазная кнопка (как toggle активности оффера):
+  // первый тап только взводит подтверждение, второй сохраняет.
+  it("сохранение порогов требует второго тапа", async () => {
+    const mutateAsync = vi.fn().mockResolvedValue(MOCK_RULES);
+    mockUseUpdateOfferRules.mockReturnValue({ mutateAsync, isPending: false });
+
+    render(<OffersTestWrapper />);
+    fireEvent.click(screen.getByRole("button", { name: /Оффер GH_AVI/i }));
+    fireEvent.click(screen.getByText("Пороги"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить пороги" }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Подтвердить сохранение" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить сохранение" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+  });
+
+  it("взвод сохранения порогов сбрасывается по таймауту", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OffersTestWrapper />);
+      fireEvent.click(screen.getByRole("button", { name: /Оффер GH_AVI/i }));
+      fireEvent.click(screen.getByText("Пороги"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить пороги" }));
+      expect(
+        screen.getByRole("button", { name: "Подтвердить сохранение" }),
+      ).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(
+        screen.getByRole("button", { name: "Сохранить пороги" }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Восемь настраиваемых порогов стоп-правил

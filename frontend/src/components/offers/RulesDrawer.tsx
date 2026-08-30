@@ -5,7 +5,7 @@
  * (CPA + ползунки чувствительности + live-разбивка), что и форма оффера.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Drawer } from "@/components/ui/Drawer";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -27,6 +27,10 @@ interface RulesDrawerProps {
   onOpenChange: (open: boolean) => void;
 }
 
+// Взвод «Сохранить правила» держится ограниченное время — истёк тап, значит
+// оператор передумал, а не подтвердил случайно спустя минуту.
+const SAVE_ARM_TIMEOUT_MS = 5_000;
+
 export function RulesDrawer({ offer, open, onOpenChange }: RulesDrawerProps) {
   const offerId = offer?.id ?? "";
 
@@ -34,13 +38,41 @@ export function RulesDrawer({ offer, open, onOpenChange }: RulesDrawerProps) {
   const updateMutation = useUpdateOfferRules(offerId);
 
   const [values, setValues] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
+  const [saveArmed, setSaveArmed] = useState(false);
+  const armTimeoutRef = useRef<number | null>(null);
+
+  function clearArmTimeout() {
+    if (armTimeoutRef.current !== null) {
+      window.clearTimeout(armTimeoutRef.current);
+      armTimeoutRef.current = null;
+    }
+  }
 
   // Подтягиваем серверные значения при загрузке / смене оффера.
   useEffect(() => {
     setValues(rulesValuesFromOut(rules));
   }, [rules, offerId]);
 
+  // Смена оффера или закрытие drawer сбрасывает взвод — иначе можно случайно
+  // подтвердить сохранение чужих порогов вторым тапом.
+  useEffect(() => {
+    setSaveArmed(false);
+    clearArmTimeout();
+  }, [offerId, open]);
+
+  useEffect(() => clearArmTimeout, []);
+
   async function handleSave() {
+    // Двухфазная кнопка: первый клик только взводит подтверждение, реальное
+    // сохранение стоп-порогов — вторым кликом.
+    if (!saveArmed) {
+      setSaveArmed(true);
+      clearArmTimeout();
+      armTimeoutRef.current = window.setTimeout(() => setSaveArmed(false), SAVE_ARM_TIMEOUT_MS);
+      return;
+    }
+    clearArmTimeout();
+    setSaveArmed(false);
     await updateMutation.mutateAsync(rulesValuesToPayload(values));
     toast.success("Правила сохранены");
     onOpenChange(false);
@@ -88,7 +120,7 @@ export function RulesDrawer({ offer, open, onOpenChange }: RulesDrawerProps) {
                 loading={updateMutation.isPending}
                 onClick={() => void handleSave()}
               >
-                Сохранить правила
+                {saveArmed ? "Подтвердить сохранение" : "Сохранить правила"}
               </Button>
             </div>
           </>

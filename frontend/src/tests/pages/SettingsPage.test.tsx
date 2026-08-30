@@ -264,12 +264,41 @@ describe("ObserverTab", () => {
     ).toHaveAttribute("aria-checked", "true");
   });
 
-  // Клик на switch вызывает точечный PATCH useToggleScanning (не partial PUT — фикс бага 422)
-  it("клик toggle вызывает useToggleScanning с новым значением", async () => {
+  // Выключение снимает защитный контур с кабинетов — не одним кликом (#343).
+  it("клик toggle открывает подтверждение и не выключает сканирование сразу", async () => {
     const user = userEvent.setup();
     render(wrap(<ObserverTab />));
     await user.click(screen.getByRole("switch", { name: "Остановить периодическое сканирование" }));
+
+    expect(mockToggleScanning).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Авто-стоп перестанет следить за кабинетами до включения."),
+    ).toBeInTheDocument();
+  });
+
+  // Клик на switch → confirm вызывает точечный PATCH useToggleScanning (не partial PUT — фикс бага 422)
+  it("подтверждение диалога вызывает useToggleScanning с новым значением", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ObserverTab />));
+    await user.click(screen.getByRole("switch", { name: "Остановить периодическое сканирование" }));
+    await user.click(screen.getByRole("button", { name: "Выключить сканирование" }));
     expect(mockToggleScanning).toHaveBeenCalledWith(false);
+  });
+
+  // Включение возвращает защитный контур — остаётся одним кликом, без подтверждения.
+  it("включение сканирования не требует подтверждения", async () => {
+    mockObserverData.is_scanning_enabled = false;
+    const user = userEvent.setup();
+    try {
+      render(wrap(<ObserverTab />));
+      await user.click(
+        screen.getByRole("switch", { name: "Включить периодическое сканирование" }),
+      );
+      expect(mockToggleScanning).toHaveBeenCalledWith(true);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    } finally {
+      mockObserverData.is_scanning_enabled = true;
+    }
   });
 
   it("валидирует интервал и показывает честный queued scan lifecycle", async () => {

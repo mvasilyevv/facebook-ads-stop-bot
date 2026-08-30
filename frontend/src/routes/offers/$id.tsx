@@ -6,7 +6,7 @@
  * При успехе — навигация обратно на /offers.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
 import { safeApiProblemMessage } from "@fb/operator-api";
@@ -29,6 +29,10 @@ export const Route = createFileRoute("/offers/$id")({
   component: OfferRulesPage,
 });
 
+// Взвод «Сохранить правила» держится ограниченное время — истёк тап, значит
+// оператор передумал, а не подтвердил случайно спустя минуту.
+const SAVE_ARM_TIMEOUT_MS = 5_000;
+
 function OfferRulesPage() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
@@ -47,11 +51,36 @@ function OfferRulesPage() {
   const updateMutation = useUpdateOfferRules(id);
 
   const [values, setValues] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
+  const [saveArmed, setSaveArmed] = useState(false);
+  const armTimeoutRef = useRef<number | null>(null);
+
   useEffect(() => {
     setValues(rulesValuesFromOut(rules));
   }, [rules]);
 
+  useEffect(() => {
+    return () => {
+      if (armTimeoutRef.current !== null) window.clearTimeout(armTimeoutRef.current);
+    };
+  }, []);
+
   async function handleSave() {
+    // Двухфазная кнопка: первый клик только взводит подтверждение, реальное
+    // сохранение стоп-порогов — вторым кликом.
+    if (!saveArmed) {
+      setSaveArmed(true);
+      if (armTimeoutRef.current !== null) window.clearTimeout(armTimeoutRef.current);
+      armTimeoutRef.current = window.setTimeout(() => {
+        setSaveArmed(false);
+        armTimeoutRef.current = null;
+      }, SAVE_ARM_TIMEOUT_MS);
+      return;
+    }
+    if (armTimeoutRef.current !== null) {
+      window.clearTimeout(armTimeoutRef.current);
+      armTimeoutRef.current = null;
+    }
+    setSaveArmed(false);
     await updateMutation.mutateAsync(rulesValuesToPayload(values));
     toast.success("Правила сохранены");
     void navigate({ to: "/offers" });
@@ -121,7 +150,7 @@ function OfferRulesPage() {
               loading={updateMutation.isPending}
               onClick={() => void handleSave()}
             >
-              Сохранить правила
+              {saveArmed ? "Подтвердить сохранение" : "Сохранить правила"}
             </Button>
           </div>
         </>

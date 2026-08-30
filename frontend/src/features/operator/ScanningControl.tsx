@@ -12,6 +12,7 @@ import { Radar } from "lucide-react";
 import { safeApiProblemMessage } from "@fb/operator-api";
 import type { OperatorSnapshot } from "@fb/shared/operator/contracts";
 
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Switch } from "@/components/ui/Switch";
 import { toast } from "@/components/ui/toastStore";
 import { useObserverSettings, useToggleScanning } from "@/lib/api/settings";
@@ -36,6 +37,7 @@ export function ScanningControl({ system }: { system: OperatorSnapshot["system"]
   const settingsQuery = useObserverSettings();
   const toggleScanning = useToggleScanning();
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), ETA_TICK_MS);
@@ -46,9 +48,7 @@ export function ScanningControl({ system }: { system: OperatorSnapshot["system"]
   const systemTrusted = system.state === "ready" || system.state === "partial";
   const eta = systemTrusted ? nextScanEtaLabel(system.data?.next_scan_at ?? null, nowMs) : null;
 
-  async function handleToggle() {
-    if (enabled === null) return;
-    const next = !enabled;
+  async function applyToggle(next: boolean) {
     try {
       await toggleScanning.mutateAsync(next);
       toast.success(next ? "Сканирование включено" : "Сканирование остановлено");
@@ -58,6 +58,16 @@ export function ScanningControl({ system }: { system: OperatorSnapshot["system"]
         safeApiProblemMessage(error, "Проверьте готовность Observer"),
       );
     }
+  }
+
+  function handleToggle() {
+    if (enabled === null) return;
+    if (enabled) {
+      // Выключение снимает защитный контур с кабинетов — не одним кликом.
+      setConfirmDisableOpen(true);
+      return;
+    }
+    void applyToggle(true);
   }
 
   return (
@@ -79,7 +89,7 @@ export function ScanningControl({ system }: { system: OperatorSnapshot["system"]
           <Switch
             checked={enabled}
             disabled={toggleScanning.isPending}
-            onChange={() => void handleToggle()}
+            onChange={handleToggle}
             label={
               enabled
                 ? "Остановить периодическое сканирование"
@@ -88,6 +98,15 @@ export function ScanningControl({ system }: { system: OperatorSnapshot["system"]
           />
         </>
       )}
+      <ConfirmDialog
+        open={confirmDisableOpen}
+        onOpenChange={setConfirmDisableOpen}
+        title="Выключить сканирование?"
+        description="Авто-стоп перестанет следить за кабинетами до включения."
+        confirmLabel="Выключить сканирование"
+        confirmVariant="warning"
+        onConfirm={() => applyToggle(false)}
+      />
     </div>
   );
 }
