@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowRight,
   CircleHelp,
   CirclePause,
   CirclePlay,
@@ -19,7 +20,11 @@ import {
 import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
-import { severityForDataState } from "@fb/shared/operator/viewModel";
+import {
+  operatorAdsQuerySort,
+  OPERATOR_ADS_STOP_PROXIMITY_SORT,
+} from "@fb/shared/operator/routeFilters";
+import { adsForRealtimeState, severityForDataState } from "@fb/shared/operator/viewModel";
 import type {
   OperatorAdRow,
   OperatorSeverity,
@@ -32,17 +37,19 @@ import {
 } from "@fb/shared/operator/commandIntent";
 import {
   DataStateBadge,
+  DataStateNotice,
   deliveryStatusTextClass,
   Metric,
   StopProximityReadout,
 } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
-import { Button } from "@/components/ui";
+import { Button, EmptyState, ErrorState, Skeleton } from "@/components/ui";
 import {
   fetchOperatorAdForCommand,
   operatorProblemMessage,
   useActivateOperatorAd,
+  useOperatorAdsList,
   usePauseOperatorAd,
 } from "@/lib/operatorApi";
 import { haptic, tgAlert, tgConfirm } from "@/lib/tg";
@@ -344,4 +351,105 @@ function operatorCommandProblemMessage(error: unknown): string {
   return isOperatorCommandIntentStorageError(error)
     ? `Безопасное действие заблокировано. ${error.userMessage}`
     : operatorProblemMessage(error);
+}
+
+const CABINET_ADS_PAGE_SIZE = 20;
+
+/**
+ * Список объявлений одного кабинета на экране /cabinets/$cabinetId
+ * (issue #344). Тот же каталог, что и /ads, с тем же серверным фильтром
+ * `account_id` и той же карточкой команды (`MiniAdCommand` с tgConfirm) —
+ * никакого отдельного списка или отдельной логики команд здесь нет.
+ */
+export function MiniCabinetAdsSection({
+  cabinetId,
+  currency,
+}: {
+  cabinetId: string;
+  currency: string | null;
+}) {
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const query = useOperatorAdsList({
+    account_id: cabinetId,
+    sort: operatorAdsQuerySort(OPERATOR_ADS_STOP_PROXIMITY_SORT),
+    direction: "desc",
+    page_size: CABINET_ADS_PAGE_SIZE,
+  });
+  const projections = query.data?.pages.map((page) =>
+    adsForRealtimeState(page, realtimeStatus === "connected" && !query.isError),
+  );
+  const displayPayload = projections?.at(-1) ?? null;
+  const displayState = displayPayload?.state;
+  const displayRows = projections?.flatMap((page) => page.rows);
+
+  return (
+    <section
+      className="mini-ledger-section mini-ledger-section--cabinet-ads"
+      aria-labelledby="mini-cabinet-ads-title"
+    >
+      <header>
+        <div>
+          <h2 id="mini-cabinet-ads-title">Объявления кабинета</h2>
+          {displayState ? <DataStateBadge state={displayState} compact /> : null}
+        </div>
+        <Link
+          to="/ads"
+          search={{ account_id: cabinetId }}
+          className="mini-ledger__inline-action"
+        >
+          Все фильтры
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      </header>
+      {displayPayload && displayState && displayState !== "ready" ? (
+        <div className="px-4">
+          <DataStateNotice state={displayState} issues={displayPayload.issues} compact />
+        </div>
+      ) : null}
+      <div className="grid gap-3 px-4 py-3">
+        {query.isError && !query.data ? (
+          <ErrorState
+            message={operatorProblemMessage(query.error)}
+            onRetry={() => void query.refetch()}
+          />
+        ) : query.isPending && !query.data ? (
+          <div
+            role="status"
+            aria-label="Загрузка объявлений кабинета"
+            className="grid gap-3"
+          >
+            {Array.from({ length: 3 }, (_, index) => (
+              <Skeleton key={index} className="h-40 w-full" />
+            ))}
+          </div>
+        ) : displayRows?.length ? (
+          displayRows.map((ad) => (
+            <MiniOperatorAdCard key={ad.id} ad={ad} currency={currency} />
+          ))
+        ) : displayState === "empty" ? (
+          <EmptyState
+            title="В кабинете нет объявлений"
+            description="Сервер подтвердил, что в этом кабинете пока нет объявлений."
+          />
+        ) : (
+          <EmptyState
+            title="Список не подтверждён"
+            description="Дождитесь сверки live-снимка. Неподтверждённый результат не считается нулём."
+          />
+        )}
+      </div>
+      {query.hasNextPage ? (
+        <div className="px-4 pb-3">
+          <Button
+            variant="secondary"
+            fullWidth
+            loading={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            Показать ещё
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
 }

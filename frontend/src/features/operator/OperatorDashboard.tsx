@@ -39,6 +39,7 @@ import {
 } from "@fb/shared/operator/ledgerSemantics";
 import {
   buildOperatorPortfolioScale,
+  findOperatorCabinetLedgerRow,
   operatorPortfolioScalePosition,
 } from "@fb/shared/operator/portfolioModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
@@ -82,6 +83,7 @@ import {
   useOperatorSnapshot,
 } from "@/lib/api/operator";
 
+import { OperatorCabinetAdsSection } from "./OperatorAds";
 import { ScanningControl } from "./ScanningControl";
 
 import "./operator-ledger.css";
@@ -109,11 +111,6 @@ export function OperatorDashboard() {
   return <OperatorLedgerScreen snapshotQuery={snapshotQuery} />;
 }
 
-export function OperatorCabinetDashboard({ cabinetId }: { cabinetId: string }) {
-  const snapshotQuery = useOperatorCabinetSnapshot(cabinetId, { window: "today" });
-  return <OperatorLedgerScreen snapshotQuery={snapshotQuery} cabinetId={cabinetId} />;
-}
-
 interface SnapshotQueryLike {
   data?: OperatorSnapshot;
   isLoading: boolean;
@@ -122,13 +119,7 @@ interface SnapshotQueryLike {
   refetch: () => unknown;
 }
 
-function OperatorLedgerScreen({
-  snapshotQuery,
-  cabinetId,
-}: {
-  snapshotQuery: SnapshotQueryLike;
-  cabinetId?: string;
-}) {
+function OperatorLedgerScreen({ snapshotQuery }: { snapshotQuery: SnapshotQueryLike }) {
   const retryScan = useOperatorRetryScan();
   const realtimeStatus = useOperatorRealtimeStatus();
   const [scanReceipt, setScanReceipt] = useState<{
@@ -139,17 +130,17 @@ function OperatorLedgerScreen({
 
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
     return (
-      <OperatorLedgerStateFrame cabinetId={cabinetId}>
+      <OperatorLedgerStateFrame>
         <OperatorDashboardSkeleton />
       </OperatorLedgerStateFrame>
     );
   }
   if (snapshotQuery.isError || !snapshotQuery.data) {
     return (
-      <OperatorLedgerStateFrame cabinetId={cabinetId}>
+      <OperatorLedgerStateFrame>
         <OperatorUnavailableState
-          title={cabinetId ? "Снимок кабинета недоступен" : "Операторский снимок недоступен"}
-          resource={cabinetId ? "снимок кабинета" : "операторский снимок"}
+          title="Операторский снимок недоступен"
+          resource="операторский снимок"
           details={operatorProblemMessage(snapshotQuery.error)}
           onRetry={() => void snapshotQuery.refetch()}
         />
@@ -161,17 +152,9 @@ function OperatorLedgerScreen({
   const overviewState = snapshotOverviewState(snapshot);
   const headline = snapshotHeadline(snapshot);
   const StatusIcon = SEVERITY_ICON[headline.severity];
-  const cabinetTimezone = cabinetId ? operatorCabinetTimezone(snapshot, cabinetId) : null;
-  const displayTimezone = operatorLedgerTimezone(snapshot, cabinetId);
+  const displayTimezone = operatorLedgerTimezone(snapshot);
   const usdScopeConfirmed = confirmedOperatorCurrency(snapshot.meta) === "USD";
-  const pageTitle = cabinetId
-    ? (snapshot.meta.account.name ?? `Кабинет ${operatorCabinetDisplayName(cabinetId)}`)
-    : "Сейчас";
-  const cabinetCurrencyLabel = usdScopeConfirmed ? "USD" : "USD не подтверждён";
-  const pageDescription = cabinetId
-    ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"} · контроль кабинета`
-    : "Деньги, расхождения и выполняемые команды — одна проверяемая картина.";
-  const recovery = cabinetId ? null : operatorReloginRecovery(snapshot);
+  const recovery = operatorReloginRecovery(snapshot);
   const currentReceipt =
     recovery && scanReceipt?.incidentId === recovery.incident.id ? scanReceipt.receipt : null;
   const receiptAction = currentReceipt
@@ -215,18 +198,11 @@ function OperatorLedgerScreen({
     <div className="operator-ledger" aria-labelledby="operator-ledger-title">
       <header className="operator-ledger__header">
         <div>
-          {cabinetId ? (
-            <Link className="operator-ledger__back" to="/">
-              <ArrowLeft size={14} aria-hidden="true" /> Портфель
-            </Link>
-          ) : null}
-          <h1 id="operator-ledger-title">{pageTitle}</h1>
-          <p>{pageDescription}</p>
+          <h1 id="operator-ledger-title">Сейчас</h1>
+          <p>Деньги, расхождения и выполняемые команды — одна проверяемая картина.</p>
         </div>
         <div className="operator-ledger__header-tools">
-          {/* Управление сканированием — только на портфельной главной: карточка
-              кабинета не владеет глобальным тумблером Observer. */}
-          {!cabinetId ? <ScanningControl system={snapshot.system} /> : null}
+          <ScanningControl system={snapshot.system} />
           <Link className="ledger-proof-stamp" to="/system/sources">
             <StatusIcon size={16} aria-hidden="true" />
             <span>{DATA_STATE_LABEL[overviewState]}</span>
@@ -298,33 +274,273 @@ function OperatorLedgerScreen({
   );
 }
 
-function OperatorLedgerStateFrame({
-  cabinetId,
-  children,
-}: {
-  cabinetId?: string;
-  children: ReactNode;
-}) {
-  const title = cabinetId ? `Кабинет ${cabinetId}` : "Сейчас";
-  const description = cabinetId
-    ? "Состояние кабинета будет показано после подтверждения снимка."
-    : "Состояние будет показано после подтверждения операторского снимка.";
-
+function OperatorLedgerStateFrame({ children }: { children: ReactNode }) {
   return (
     <div className="operator-ledger">
       <header className="operator-ledger__header">
         <div>
-          {cabinetId ? (
-            <Link className="operator-ledger__back" to="/">
-              <ArrowLeft size={14} aria-hidden="true" /> Портфель
-            </Link>
-          ) : null}
-          <h1 id="operator-ledger-title">{title}</h1>
-          <p>{description}</p>
+          <h1 id="operator-ledger-title">Сейчас</h1>
+          <p>Состояние будет показано после подтверждения операторского снимка.</p>
         </div>
       </header>
       {children}
     </div>
+  );
+}
+
+/**
+ * Экран кабинета (issue #344): сводка и объявления одного кабинета, а не
+ * уменьшенная копия портфельного дашборда. Портфель (список всех кабинетов) и
+ * воронка сюда не идут — они отвечают за весь аккаунт, а не за этот кабинет;
+ * список объявлений — главный элемент экрана, а не последняя секция.
+ */
+export function OperatorCabinetDashboard({ cabinetId }: { cabinetId: string }) {
+  const snapshotQuery = useOperatorCabinetSnapshot(cabinetId, { window: "today" });
+  return <OperatorCabinetScreen cabinetId={cabinetId} snapshotQuery={snapshotQuery} />;
+}
+
+function OperatorCabinetScreen({
+  cabinetId,
+  snapshotQuery,
+}: {
+  cabinetId: string;
+  snapshotQuery: SnapshotQueryLike;
+}) {
+  const retryScan = useOperatorRetryScan();
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const [scanReceipt, setScanReceipt] = useState<{
+    incidentId: string;
+    receipt: OperatorCommandResponse;
+  } | null>(null);
+  const [failedIncidentId, setFailedIncidentId] = useState<string | null>(null);
+
+  if (snapshotQuery.isLoading && !snapshotQuery.data) {
+    return (
+      <OperatorCabinetStateFrame cabinetId={cabinetId}>
+        <OperatorDashboardSkeleton />
+      </OperatorCabinetStateFrame>
+    );
+  }
+  if (snapshotQuery.isError || !snapshotQuery.data) {
+    return (
+      <OperatorCabinetStateFrame cabinetId={cabinetId}>
+        <OperatorUnavailableState
+          title="Снимок кабинета недоступен"
+          resource="снимок кабинета"
+          details={operatorProblemMessage(snapshotQuery.error)}
+          onRetry={() => void snapshotQuery.refetch()}
+        />
+      </OperatorCabinetStateFrame>
+    );
+  }
+
+  const snapshot = snapshotForRealtimeState(snapshotQuery.data, realtimeStatus === "connected");
+  const overviewState = snapshotOverviewState(snapshot);
+  const cabinetTimezone = operatorCabinetTimezone(snapshot, cabinetId);
+  const displayTimezone = operatorLedgerTimezone(snapshot, cabinetId);
+  const usdScopeConfirmed = confirmedOperatorCurrency(snapshot.meta) === "USD";
+  const pageTitle = snapshot.meta.account.name ?? `Кабинет ${operatorCabinetDisplayName(cabinetId)}`;
+  const cabinetCurrencyLabel = usdScopeConfirmed ? "USD" : "USD не подтверждён";
+  const pageDescription = `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"} · контроль кабинета`;
+  const OverviewIcon =
+    SEVERITY_ICON[
+      overviewState === "ready" || overviewState === "empty"
+        ? "ok"
+        : overviewState === "partial"
+          ? "warning"
+          : "unknown"
+    ];
+
+  // Снимок уже сужен до этого кабинета (account_id=cabinet_id на бэкенде), а
+  // значит инцидент разлогина в attention принадлежит именно ему — баннер
+  // больше не глушится безусловным `cabinetId ? null : ...`.
+  const recovery = operatorReloginRecovery(snapshot);
+  const currentReceipt =
+    recovery && scanReceipt?.incidentId === recovery.incident.id ? scanReceipt.receipt : null;
+  const receiptAction = currentReceipt
+    ? snapshot.actions.data?.items.find((item) => item.id === String(currentReceipt.task_id))
+    : null;
+  const recoveryState = recovery
+    ? reloginRecoveryButtonState({
+        actionState: currentReceipt ? receiptAction?.state : recovery.scanAction?.state,
+        receiptState: currentReceipt?.state,
+        requestPending: retryScan.isPending,
+        requestFailed: failedIncidentId === recovery.incident.id,
+      })
+    : null;
+
+  const retryInterruptedScan = async () => {
+    if (!recovery) return;
+    setFailedIncidentId(null);
+    const incidentId = recovery.incident.id;
+    try {
+      const idempotencyKey = getOrCreateOperatorCommandIntent("retry_scan", incidentId);
+      const receipt = await retryScan.mutateAsync({
+        params: { header: { "Idempotency-Key": idempotencyKey } },
+      });
+      completeOperatorCommandIntent("retry_scan", incidentId, idempotencyKey);
+      setScanReceipt({ incidentId, receipt });
+      if (receipt.state === "queued") {
+        toast.info(
+          "Сканирование поставлено в очередь",
+          "Завершение ещё не подтверждено. Дождитесь обновления снимка.",
+        );
+      } else if (receipt.state === "running") {
+        toast.info("Сканирование уже выполняется", `Задача ${receipt.public_id}`);
+      }
+    } catch (error) {
+      setFailedIncidentId(incidentId);
+      toast.error("Не удалось отправить повторный скан", operatorProblemMessage(error));
+    }
+  };
+
+  return (
+    <div className="operator-ledger" aria-labelledby="operator-cabinet-title">
+      <header className="operator-ledger__header">
+        <div>
+          <Link className="operator-ledger__back" to="/">
+            <ArrowLeft size={14} aria-hidden="true" /> Портфель
+          </Link>
+          <h1 id="operator-cabinet-title">{pageTitle}</h1>
+          <p>{pageDescription}</p>
+        </div>
+        <div className="operator-ledger__header-tools">
+          <Link className="ledger-proof-stamp" to="/system/sources">
+            <OverviewIcon size={16} aria-hidden="true" />
+            <span>{DATA_STATE_LABEL[overviewState]}</span>
+            <span className="ledger-proof-stamp__time">
+              {freshnessLabel(snapshot.portfolio.freshness_seconds)}
+            </span>
+          </Link>
+          {recovery && recoveryState ? (
+            <Button
+              variant={
+                RELOGIN_RECOVERY_BUTTON_TONE[recoveryState] === "warning"
+                  ? "warning"
+                  : "secondary"
+              }
+              size="lg"
+              leftIcon={<RefreshCw size={16} aria-hidden="true" />}
+              loading={retryScan.isPending || recoveryState === "running"}
+              disabled={recoveryState === "sent"}
+              onClick={() => void retryInterruptedScan()}
+              className="min-h-11"
+              data-state={recoveryState}
+              aria-live="polite"
+            >
+              {RELOGIN_RECOVERY_BUTTON_LABEL[recoveryState]}
+            </Button>
+          ) : null}
+        </div>
+      </header>
+
+      <CabinetMoneyStrip
+        section={snapshot.portfolio}
+        cabinetId={cabinetId}
+        usdScopeConfirmed={usdScopeConfirmed}
+      />
+
+      <div className="operator-cabinet__stack">
+        <AttentionLedger
+          section={snapshot.attention}
+          timezone={displayTimezone}
+          usdScopeConfirmed={usdScopeConfirmed}
+        />
+        <OperatorCabinetAdsSection
+          cabinetId={cabinetId}
+          currency={usdScopeConfirmed ? "USD" : null}
+        />
+        <ActionJournal section={snapshot.actions} />
+      </div>
+    </div>
+  );
+}
+
+function OperatorCabinetStateFrame({
+  cabinetId,
+  children,
+}: {
+  cabinetId: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="operator-ledger">
+      <header className="operator-ledger__header">
+        <div>
+          <Link className="operator-ledger__back" to="/">
+            <ArrowLeft size={14} aria-hidden="true" /> Портфель
+          </Link>
+          <h1 id="operator-cabinet-title">{`Кабинет ${cabinetId}`}</h1>
+          <p>Состояние кабинета будет показано после подтверждения снимка.</p>
+        </div>
+      </header>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Компактная шапка кабинета: расход/база/стоп одной строкой и превышение,
+ * если оно подтверждено сервером (`risk_label`/`risk_reason`). Отдельная
+ * секция «Портфель» со шкалой по всем кабинетам сюда не переносится — этот
+ * блок отвечает только за один кабинет.
+ */
+function CabinetMoneyStrip({
+  section,
+  cabinetId,
+  usdScopeConfirmed,
+}: {
+  section: OperatorSnapshot["portfolio"];
+  cabinetId: string;
+  usdScopeConfirmed: boolean;
+}) {
+  const row = findOperatorCabinetLedgerRow(section.data, cabinetId);
+  const usdConfirmed = usdScopeConfirmed && row?.currency === "USD";
+  const totals =
+    row && usdConfirmed
+      ? row.totals
+      : { spend: null, base: null, stop: null, base_delta: null };
+  const Icon = row ? SEVERITY_ICON[row.severity] : SEVERITY_ICON.unknown;
+
+  return (
+    <section
+      className="ledger-section ledger-section--cabinet-money"
+      data-state={section.state}
+      aria-labelledby="cabinet-money-title"
+    >
+      <div className="ledger-section__header">
+        <div className="ledger-section__title">
+          <h2 id="cabinet-money-title">Бюджет кабинета</h2>
+        </div>
+        {row ? (
+          <span className="ledger-cabinet__state" data-severity={row.severity}>
+            <Icon size={14} aria-hidden="true" />
+            {row.risk_label}
+          </span>
+        ) : (
+          <span>{DATA_STATE_LABEL[section.state]}</span>
+        )}
+      </div>
+      <LedgerSectionIssue section={section} />
+      {row?.risk_reason ? (
+        <div className="ledger-section__issue" data-severity={row.severity} role="status">
+          <Icon size={15} aria-hidden="true" />
+          <div>
+            <strong>{row.risk_label}</strong>
+            <span>{row.risk_reason}</span>
+          </div>
+        </div>
+      ) : null}
+      {!row ? (
+        <LedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : (
+        <dl className="ledger-group__totals">
+          <LedgerTotal label="Расход" value={totals.spend} />
+          <LedgerTotal label="База" value={totals.base} />
+          <LedgerTotal label="Стоп" value={totals.stop} stop />
+        </dl>
+      )}
+    </section>
   );
 }
 

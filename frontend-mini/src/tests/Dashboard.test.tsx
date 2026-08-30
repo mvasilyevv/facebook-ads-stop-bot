@@ -51,10 +51,12 @@ vi.mock("@fb/operator-api", async (importOriginal) => ({
 vi.mock("@/lib/tg", () => ({
   haptic: { impact: vi.fn(), notify: mockHapticNotify, selection: vi.fn() },
   tgAlert: vi.fn(),
+  // PullToRefresh (обёртка роута «/») — вне жеста эти вызовы no-op.
+  disableVerticalSwipes: vi.fn(),
+  enableVerticalSwipes: vi.fn(),
 }));
 
 import { Route } from "@/routes/index";
-import { OperatorMiniCabinetDashboard } from "@/features/operator/OperatorMiniDashboard";
 import { readResolvedNavigation } from "@/lib/transientNavigation";
 
 const Dashboard = (Route as unknown as { component: ComponentType }).component;
@@ -347,45 +349,6 @@ describe("TMA operator dashboard", () => {
     expect(screen.getByText("Задача #1844")).toBeInTheDocument();
     expect(screen.queryByText("Задача #1843")).not.toBeInTheDocument();
     expect(screen.queryByText("Задача #1842")).not.toBeInTheDocument();
-  });
-
-  it("uses the selected cabinet timezone on the cabinet route", () => {
-    render(<OperatorMiniCabinetDashboard cabinetId="123" />);
-
-    expect(screen.getAllByText(/USD · Africa\/Accra/).length).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText(/18\.07\.2026, 10:1[45]/).length,
-    ).toBeGreaterThan(0);
-    expect(mockUseOperatorCabinetSnapshot).toHaveBeenCalledWith("123", {
-      window: "today",
-    });
-  });
-
-  it("keeps cabinet timestamps unconfirmed when timezone evidence is missing", () => {
-    const snapshot = makeOperatorSnapshot();
-    snapshot.portfolio.data!.currency_groups[0]!.cabinets[0]!.timezone = null;
-    snapshot.meta.cabinet_timezone = null;
-    snapshot.meta.cabinet_timezone_known = false;
-    snapshot.meta.cabinet_timezone_state = "unknown";
-    mockUseOperatorCabinetSnapshot.mockReturnValue({
-      data: snapshot,
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    render(<OperatorMiniCabinetDashboard cabinetId="123" />);
-
-    expect(
-      screen.getByRole("heading", { level: 1 }).parentElement,
-    ).toHaveTextContent("часовой пояс не подтверждён");
-    expect(
-      screen.getAllByText(/as_of\s+не подтверждено/).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.queryByText(/18\.07\.2026, 12:1[45]/),
-    ).not.toBeInTheDocument();
   });
 
   it("uses typed source links and hides source/action attention internals", () => {

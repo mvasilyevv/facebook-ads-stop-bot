@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowRight,
   CircleHelp,
   CirclePause,
   CirclePlay,
@@ -26,9 +27,19 @@ import {
 import { operatorActionStateReason, operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
-import { ACTION_STATE_LABEL, severityForDataState } from "@fb/shared/operator/viewModel";
+import {
+  operatorAdsQuerySort,
+  OPERATOR_ADS_STOP_PROXIMITY_SORT,
+} from "@fb/shared/operator/routeFilters";
+import {
+  ACTION_STATE_LABEL,
+  adsForRealtimeState,
+  severityForDataState,
+} from "@fb/shared/operator/viewModel";
+import { formatShownOfRussianCount } from "@fb/shared";
 import {
   DataStateBadge,
+  DataStateNotice,
   deliveryStatusTextClass,
   Metric,
   MetricCell,
@@ -38,11 +49,15 @@ import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { toast } from "@/components/ui/Toast";
+import { OperatorUnavailableState } from "@/components/layout/OperatorPageBoundary";
 import {
   fetchOperatorAdForCommand,
   operatorProblemMessage,
   useActivateOperatorAd,
+  useOperatorAdsList,
   usePauseOperatorAd,
 } from "@/lib/api/operator";
 
@@ -393,4 +408,118 @@ function operatorCommandProblemMessage(error: unknown): string {
   return isOperatorCommandIntentStorageError(error)
     ? `Безопасное действие заблокировано. ${error.userMessage}`
     : operatorProblemMessage(error);
+}
+
+const CABINET_ADS_PAGE_SIZE = 20;
+
+/**
+ * Список объявлений одного кабинета для экрана /cabinets/$cabinetId
+ * (issue #344). Переиспользует тот же каталог, что и /ads — тот же серверный
+ * фильтр `account_id`, те же `OperatorAdsTable`/`OperatorAdCards` и те же
+ * команды pause/activate через `AdCommandButtons`, только с предустановленным
+ * кабинетом вместо собственного списка и собственной логики команд.
+ */
+export function OperatorCabinetAdsSection({
+  cabinetId,
+  currency,
+}: {
+  cabinetId: string;
+  currency: string | null;
+}) {
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const query = useOperatorAdsList({
+    account_id: cabinetId,
+    sort: operatorAdsQuerySort(OPERATOR_ADS_STOP_PROXIMITY_SORT),
+    direction: "desc",
+    page_size: CABINET_ADS_PAGE_SIZE,
+  });
+  const projections = query.data?.pages.map((page) =>
+    adsForRealtimeState(page, realtimeStatus === "connected" && !query.isError),
+  );
+  const displayPayload = projections?.at(-1) ?? null;
+  const displayState = displayPayload?.state;
+  const displayRows = projections?.flatMap((page) => page.rows);
+  const hasConfirmedCount = displayState === "ready" || displayState === "empty";
+
+  return (
+    <section
+      className="ledger-section ledger-section--cabinet-ads"
+      aria-labelledby="cabinet-ads-title"
+    >
+      <div className="ledger-section__header">
+        <div className="ledger-section__title">
+          <h2 id="cabinet-ads-title">Объявления кабинета</h2>
+          <span>
+            {displayPayload && hasConfirmedCount
+              ? formatShownOfRussianCount(
+                  displayRows?.length ?? 0,
+                  displayPayload.total,
+                  "строка",
+                  "строки",
+                  "строк",
+                )
+              : displayPayload
+                ? "— строк"
+                : "Загрузка…"}
+          </span>
+        </div>
+        <Link
+          className="ledger-attention-item__action"
+          to="/ads"
+          search={{ account_id: cabinetId }}
+        >
+          Все фильтры
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      </div>
+      {displayPayload && displayState && displayState !== "ready" ? (
+        <div className="p-3">
+          <DataStateNotice state={displayState} issues={displayPayload.issues} compact />
+        </div>
+      ) : null}
+      <div className="p-3 sm:p-4">
+        {query.isError && !query.data ? (
+          <OperatorUnavailableState
+            title="Объявления кабинета недоступны"
+            resource="список объявлений кабинета"
+            details={operatorProblemMessage(query.error)}
+            onRetry={() => void query.refetch()}
+          />
+        ) : query.isPending && !query.data ? (
+          <div role="status" aria-label="Загрузка объявлений кабинета" className="grid gap-3">
+            {Array.from({ length: 4 }, (_, index) => (
+              <Skeleton key={index} className="h-20 w-full" />
+            ))}
+          </div>
+        ) : displayRows?.length ? (
+          <>
+            <OperatorAdsTable rows={displayRows} currency={currency} />
+            <OperatorAdCards rows={displayRows} currency={currency} />
+          </>
+        ) : displayState === "empty" ? (
+          <EmptyState
+            title="В кабинете нет объявлений"
+            description="Сервер подтвердил, что в этом кабинете пока нет объявлений."
+          />
+        ) : (
+          <EmptyState
+            title="Список не подтверждён"
+            description="Дождитесь сверки live-снимка или обновите данные. Неподтверждённый результат не считается нулём."
+          />
+        )}
+      </div>
+      {query.hasNextPage ? (
+        <div className="border-t border-[var(--color-hairline)] p-3">
+          <Button
+            variant="secondary"
+            className="min-h-11 w-full"
+            loading={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            Показать ещё
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
 }

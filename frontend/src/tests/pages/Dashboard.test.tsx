@@ -62,7 +62,6 @@ vi.mock("@/components/ui/toastStore", () => ({
 }));
 
 import { Route } from "@/routes/index";
-import { OperatorCabinetDashboard } from "@/features/operator/OperatorDashboard";
 
 const Dashboard = (Route as unknown as { component: ComponentType }).component;
 
@@ -226,15 +225,6 @@ describe("operator dashboard", () => {
     expect(within(control).queryByRole("switch")).toBeNull();
   });
 
-  it("карточка кабинета не показывает глобальный тумблер сканирования", () => {
-    render(
-      <OperatorRealtimeStatusProvider status="connected">
-        <OperatorCabinetDashboard cabinetId="123" />
-      </OperatorRealtimeStatusProvider>,
-    );
-    expect(screen.queryByRole("group", { name: "Периодическое сканирование" })).toBeNull();
-  });
-
   it("shows the action-first overview and confirmed money", () => {
     renderDashboard();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Сейчас");
@@ -297,47 +287,6 @@ describe("operator dashboard", () => {
     expect(
       screen.queryByText("Команда завершилась ошибкой. Проверьте состояние перед повтором."),
     ).not.toBeInTheDocument();
-  });
-
-  it("uses the selected cabinet timezone on the cabinet route", () => {
-    render(
-      <OperatorRealtimeStatusProvider status="connected">
-        <OperatorCabinetDashboard cabinetId="123" />
-      </OperatorRealtimeStatusProvider>,
-    );
-
-    expect(screen.getByText(/Africa\/Accra · контроль кабинета/)).toBeInTheDocument();
-    expect(screen.getAllByText(/18\.07\.2026, 10:1[45]/).length).toBeGreaterThan(0);
-    expect(mockUseOperatorCabinetSnapshot).toHaveBeenCalledWith("123", {
-      window: "today",
-    });
-  });
-
-  it("keeps cabinet timestamps unconfirmed when timezone evidence is missing", () => {
-    const snapshot = makeOperatorSnapshot();
-    snapshot.portfolio.data!.currency_groups[0]!.cabinets[0]!.timezone = null;
-    snapshot.meta.cabinet_timezone = null;
-    snapshot.meta.cabinet_timezone_known = false;
-    snapshot.meta.cabinet_timezone_state = "unknown";
-    mockUseOperatorCabinetSnapshot.mockReturnValue({
-      data: snapshot,
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    render(
-      <OperatorRealtimeStatusProvider status="connected">
-        <OperatorCabinetDashboard cabinetId="123" />
-      </OperatorRealtimeStatusProvider>,
-    );
-
-    expect(screen.getByRole("heading", { level: 1 }).parentElement).toHaveTextContent(
-      "часовой пояс не подтверждён",
-    );
-    expect(screen.getAllByText("не подтверждено").length).toBeGreaterThan(0);
-    expect(screen.queryByText(/18\.07\.2026, 12:1[45]/)).not.toBeInTheDocument();
   });
 
   it("reads a confirmed empty approaching-stop section as calm, not alarming", () => {

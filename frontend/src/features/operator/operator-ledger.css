@@ -159,6 +159,20 @@
   grid-area: actions;
 }
 
+/* Экран одного кабинета (issue #344): вертикальный стек вместо портфельной
+ * сетки на пять секций — здесь ровно три блока, и объявления кабинета
+ * забирают большую часть высоты как главный элемент экрана. */
+.operator-cabinet__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.ledger-section--cabinet-money {
+  margin-top: 20px;
+}
+
 .ledger-section__header {
   display: flex;
   min-height: 48px;

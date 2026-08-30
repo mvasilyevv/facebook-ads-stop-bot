@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeOperatorSnapshot } from "../testFixture";
 import {
   buildOperatorPortfolioScale,
+  findOperatorCabinetLedgerRow,
   operatorPortfolioScalePosition,
 } from "../portfolioModel";
 
@@ -41,5 +42,24 @@ describe("operator portfolio scale model", () => {
     expect(operatorPortfolioScalePosition(null, scale)).toBeNull();
     expect(operatorPortfolioScalePosition("not-a-number", scale)).toBeNull();
     expect(operatorPortfolioScalePosition("999", scale)).toBe(100);
+  });
+});
+
+describe("findOperatorCabinetLedgerRow", () => {
+  it("finds the requested cabinet across currency groups", () => {
+    const portfolio = makeOperatorSnapshot().portfolio.data!;
+
+    const row = findOperatorCabinetLedgerRow(portfolio, "123");
+
+    expect(row?.id).toBe("123");
+    expect(row?.risk_label).toBe("Stop превышен");
+    expect(row?.risk_reason).toBe("Факт $18.40 ≥ stop $18.00");
+  });
+
+  it("returns null for an unknown cabinet or a missing portfolio", () => {
+    const portfolio = makeOperatorSnapshot().portfolio.data!;
+
+    expect(findOperatorCabinetLedgerRow(portfolio, "does-not-exist")).toBeNull();
+    expect(findOperatorCabinetLedgerRow(null, "123")).toBeNull();
   });
 });
