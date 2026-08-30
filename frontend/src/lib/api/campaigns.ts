@@ -1,5 +1,6 @@
 /** Generated OpenAPI API layer for the campaign creator. */
 import {
+  useInfiniteQuery,
   useMutation,
   useQueries,
   useQuery,
@@ -8,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import type { CampaignWizardCampaign } from "@fb/features/campaigns";
 import type { components } from "@fb/shared/api/generated";
+import { nextCampaignRunsOffset, parseTotalCountHeader } from "@fb/shared";
 import { GeneratedApiError, dataOrThrow, noContentOrThrow } from "@fb/operator-api";
 import { generatedApi, generatedFetchApi } from "./generatedClient";
 
@@ -199,9 +201,44 @@ export function useRuns(params?: { status?: string; limit?: number; offset?: num
       });
       return {
         data: await dataOrThrow(Promise.resolve(result)),
-        total: Number(result.response.headers.get("X-Total-Count")) || null,
+        total: parseTotalCountHeader(result.response.headers.get("X-Total-Count")),
       };
     },
+    staleTime: 15_000,
+  });
+}
+
+const CAMPAIGN_RUNS_HISTORY_PAGE_SIZE = 50;
+
+/**
+ * История заливов как курсорное «Показать ещё» (issue #340), тот же паттерн,
+ * что и в /actions. `/api/tools/campaigns/runs` честно поддерживает
+ * limit/offset и возвращает total заголовком `X-Total-Count` — offset и
+ * играет роль курсора, поэтому расти лимитом (как для ручек без offset)
+ * здесь не нужно.
+ */
+export function useRunsHistory(params?: { status?: string }) {
+  return useInfiniteQuery({
+    queryKey: ["get", "/api/tools/campaigns/runs", "history", params?.status ?? null],
+    queryFn: async ({ pageParam }) => {
+      const result = await generatedFetchApi.GET("/api/tools/campaigns/runs", {
+        params: {
+          query: {
+            status: params?.status,
+            limit: CAMPAIGN_RUNS_HISTORY_PAGE_SIZE,
+            offset: pageParam,
+          },
+        },
+      });
+      return {
+        runs: await dataOrThrow(Promise.resolve(result)),
+        total: parseTotalCountHeader(result.response.headers.get("X-Total-Count")),
+        offset: pageParam,
+        limit: CAMPAIGN_RUNS_HISTORY_PAGE_SIZE,
+      };
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => nextCampaignRunsOffset(lastPage) ?? undefined,
     staleTime: 15_000,
   });
 }

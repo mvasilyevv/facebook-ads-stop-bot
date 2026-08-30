@@ -68,12 +68,23 @@ export function useOperatorIncident(incidentId: string) {
   );
 }
 
-export function useOperatorIncidents(query: OperatorIncidentsQuery = {}) {
-  return operatorApi.useQuery(
+/**
+ * Курсорное «Показать ещё» (issue #340) поверх страничной ручки: `/incidents`
+ * не отдаёт cursor, только `page`/`page_size`/`total`/`pages`, поэтому `page`
+ * играет роль курсора — react-query подставляет его сам через pageParamName,
+ * поэтому он не входит в query (иначе засорял бы ключ и накопление страниц).
+ */
+export function useOperatorIncidents(query: Omit<OperatorIncidentsQuery, "page"> = {}) {
+  return operatorApi.useInfiniteQuery(
     "get",
     "/api/operator/incidents",
     { params: { query } },
-    { staleTime: 5_000 },
+    {
+      pageParamName: "page",
+      initialPageParam: 1,
+      getNextPageParam: (page) => (page.page < page.pages ? page.page + 1 : undefined),
+      staleTime: 5_000,
+    },
   );
 }
 
@@ -197,6 +208,27 @@ export function useOperatorAds(query: OperatorAdsQuery = {}, options: { enabled?
     "/api/operator/ads",
     { params: { query } },
     { staleTime: 10_000, ...options },
+  );
+}
+
+/**
+ * Каталог объявлений как курсорное «Показать ещё» (issue #340): `page` из
+ * `OperatorAdsQuery` подставляет react-query через pageParamName, поэтому
+ * здесь он исключён из входного query — иначе засорял бы ключ запроса.
+ * `useOperatorAds` выше остаётся однострочным чтением (карточка объявления,
+ * командная палитра) — им накопление страниц не нужно.
+ */
+export function useOperatorAdsList(query: Omit<OperatorAdsQuery, "page"> = {}) {
+  return operatorApi.useInfiniteQuery(
+    "get",
+    "/api/operator/ads",
+    { params: { query } },
+    {
+      pageParamName: "page",
+      initialPageParam: 1,
+      getNextPageParam: (page) => (page.page < page.pages ? page.page + 1 : undefined),
+      staleTime: 10_000,
+    },
   );
 }
 

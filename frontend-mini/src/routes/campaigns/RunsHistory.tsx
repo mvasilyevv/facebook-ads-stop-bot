@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 
+import { formatShownOfRussianCount } from "@fb/shared";
 import { Eyebrow } from "@fb/operator-ui";
 import {
   Badge,
@@ -49,7 +50,7 @@ import {
   operatorProblemMessage,
   useAbortCampaignRun,
   useCampaignRun,
-  useCampaignRuns,
+  useRunsHistory,
   useResumeCampaignRun,
 } from "@/lib/operatorApi";
 import { haptic, openLink } from "@/lib/tg";
@@ -679,7 +680,7 @@ function RunCard({
 }
 
 export function RunsHistory({ openRunId = null }: { openRunId?: string | null }) {
-  const query = useCampaignRuns();
+  const query = useRunsHistory();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(openRunId);
 
   // Оператор пришёл по ссылке за конкретным заливом — раскрываем именно его.
@@ -688,7 +689,10 @@ export function RunsHistory({ openRunId = null }: { openRunId?: string | null })
     if (openRunId) setSelectedRunId(openRunId);
   }, [openRunId]);
 
-  const runs = query.data ?? [];
+  // Курсорное «Показать ещё» (issue #340): каждая накопленная порция несёт
+  // свой total — берём последнюю (самую свежую), а не первую.
+  const runs = query.data?.pages.flatMap((page) => page.runs) ?? [];
+  const total = query.data?.pages.at(-1)?.total ?? null;
   return (
     <div className="flex flex-col gap-4 p-4 pb-8">
       <div className="rounded-[var(--radius-3)] border border-accent/25 bg-accent/5 p-4">
@@ -700,7 +704,16 @@ export function RunsHistory({ openRunId = null }: { openRunId?: string | null })
       </div>
 
       <div className="flex min-h-11 items-center justify-between gap-3">
-        <Eyebrow>ЗАПУСКИ</Eyebrow>
+        <div className="flex items-center gap-2">
+          <Eyebrow>ЗАПУСКИ</Eyebrow>
+          <span className="font-numeric text-[12px] text-bg-8" aria-live="polite">
+            {total === 0
+              ? "нет запусков"
+              : total != null
+                ? formatShownOfRussianCount(runs.length, total, "запуск", "запуска", "запусков")
+                : null}
+          </span>
+        </div>
         <button
           type="button"
           aria-label="Обновить запуски"
@@ -750,6 +763,20 @@ export function RunsHistory({ openRunId = null }: { openRunId?: string | null })
           }
         />
       ))}
+
+      {query.hasNextPage ? (
+        <Button
+          variant="secondary"
+          fullWidth
+          loading={query.isFetchingNextPage}
+          onClick={() => {
+            haptic.selection();
+            void query.fetchNextPage();
+          }}
+        >
+          Показать ещё
+        </Button>
+      ) : null}
 
       {selectedRunId ? (
         <RunDetail

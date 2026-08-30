@@ -289,6 +289,105 @@ describe("web actions realtime projection", () => {
     expect(within(rows[2]!).getByText("Задача #1842")).toBeInTheDocument();
   });
 
+  it("accumulates a second cursor page below the first without re-sorting it", () => {
+    const older = confirmedResponse();
+    older.items = [
+      {
+        ...older.items[0]!,
+        id: "1800",
+        public_id: "#1800",
+        target_label: "PL_VIP",
+        updated_at: "2026-07-18T09:00:00Z",
+      },
+    ];
+    const newer = confirmedResponse();
+    newer.items = [
+      {
+        ...newer.items[0]!,
+        id: "1900",
+        public_id: "#1900",
+        target_label: "GH_CR2",
+        updated_at: "2026-07-18T11:00:00Z",
+      },
+    ];
+    useOperatorActions.mockReturnValue({
+      // Курсорная пагинация «Показать предыдущие»: первая страница — самые
+      // новые записи, вторая — более старые, накопленные по клику.
+      data: { pages: [newer, older] },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionsPage />, "connected");
+
+    const actionList = screen.getByRole("list", { name: "Очередь и история действий" });
+    const rows = within(actionList).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]!).getByText("Задача #1900")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("Задача #1800")).toBeInTheDocument();
+  });
+
+  it("offers a show-more control that fetches the next cursor page", async () => {
+    const fetchNextPage = vi.fn();
+    useOperatorActions.mockReturnValue({
+      data: { pages: [confirmedResponse()] },
+      isPending: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage,
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionsPage />, "connected");
+    fireEvent.click(screen.getByRole("button", { name: "Показать предыдущие" }));
+
+    await waitFor(() => expect(fetchNextPage).toHaveBeenCalledOnce());
+  });
+
+  it("shows only the current query's pages once a filter change discards the old accumulation", () => {
+    useOperatorActions.mockReturnValue({
+      data: { pages: [confirmedResponse(), confirmedResponse()] },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    const { rerender } = renderWithRealtime(<ActionsPage />, "connected");
+    const listBefore = screen.getByRole("list", { name: "Очередь и история действий" });
+    expect(within(listBefore).getAllByRole("listitem")).toHaveLength(1);
+
+    // Смена фильтра — новый ключ запроса: react-query отдаёт свежую первую
+    // страницу, а не хвост от предыдущей выборки.
+    const solo = confirmedResponse();
+    solo.items[0] = { ...solo.items[0]!, id: "solo", public_id: "#solo" };
+    useOperatorActions.mockReturnValue({
+      data: { pages: [solo] },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    rerender(
+      <OperatorRealtimeStatusProvider status="connected">
+        <ActionsPage />
+      </OperatorRealtimeStatusProvider>,
+    );
+
+    const listAfter = screen.getByRole("list", { name: "Очередь и история действий" });
+    const rows = within(listAfter).getAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]!).getByText("Задача #solo")).toBeInTheDocument();
+  });
+
   it("marks cached detail stale and cannot render confirmed as success", () => {
     renderWithRealtime(<ActionDetailPage />, "reconnecting");
 

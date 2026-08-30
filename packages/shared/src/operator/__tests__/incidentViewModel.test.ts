@@ -29,38 +29,33 @@ const INCIDENT: OperatorIncidentItem = {
 };
 
 describe("operator incident view-model", () => {
-  it("keeps filters and pagination in bounded URL state", () => {
+  it("keeps filters in bounded URL state; paging is cursor-owned, not URL-owned", () => {
     const parsed = parseOperatorIncidentsRouteSearch({
       account_id: " 123 ",
       severity: "critical",
       status: "acknowledged",
-      page: "3",
     });
 
     expect(parsed).toEqual({
       account_id: "123",
       severity: "critical",
       status: "acknowledged",
-      page: 3,
     });
     expect(operatorIncidentsQuery(parsed, 30)).toEqual({
       account_id: "123",
       severity: ["critical"],
       status: ["acknowledged"],
-      page: 3,
       page_size: 30,
     });
     expect(
       parseOperatorIncidentsRouteSearch({
         severity: "danger",
         status: "done",
-        page: 10_001,
       }),
     ).toEqual({
       account_id: undefined,
       severity: undefined,
       status: undefined,
-      page: undefined,
     });
   });
 

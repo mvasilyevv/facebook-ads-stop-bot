@@ -1,13 +1,8 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import {
-  ArrowRight,
-  ChevronLeft,
-  ChevronRight,
-  Filter,
-  ShieldCheck,
-} from "lucide-react";
+import { ArrowRight, Filter, ShieldCheck } from "lucide-react";
 
+import { formatShownOfRussianCount } from "@fb/shared";
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type {
   OperatorIncidentItem,
@@ -15,7 +10,6 @@ import type {
   OperatorSeverity,
 } from "@fb/shared/operator/contracts";
 import {
-  operatorIncidentCountLabel,
   OPERATOR_INCIDENT_STATUS_LABEL,
   operatorIncidentCopy,
   operatorIncidentDataState,
@@ -85,14 +79,18 @@ function MiniIncidentsPage() {
   const cabinets = operatorCabinetOptions(snapshot.data);
   const incidents = useOperatorIncidents(operatorIncidentsQuery(search, 30));
   const acknowledge = useAcknowledgeOperatorIncident();
-  const payload = incidents.data;
+  // Курсорное «Показать ещё» (issue #340): накопленные страницы держит
+  // инфинит-запрос, а не URL. Последняя загруженная порция даёт самые свежие
+  // total/scope — они относятся ко всей выборке, а не к одной странице.
+  const pages = incidents.data?.pages;
+  const payload = pages?.at(-1) ?? null;
+  const items = pages?.flatMap((page) => page.items) ?? [];
   const displayState = payload
     ? operatorIncidentDataState(
         payload.state,
         realtimeStatus === "connected" && !incidents.isError,
       )
     : undefined;
-  const page = search.page ?? 1;
   const activeFilterCount =
     Number(Boolean(search.account_id)) +
     Number(Boolean(search.severity)) +
@@ -156,7 +154,7 @@ function MiniIncidentsPage() {
           aria-live="polite"
         >
           {payload
-            ? operatorIncidentCountLabel(payload.total)
+            ? formatShownOfRussianCount(items.length, payload.total, "запись", "записи", "записей")
             : incidents.isError
               ? "Не удалось загрузить"
               : "Загрузка…"}
@@ -232,9 +230,9 @@ function MiniIncidentsPage() {
               <Skeleton key={index} className="h-44 w-full rounded-none" />
             ))}
           </div>
-        ) : payload?.items.length ? (
+        ) : payload && items.length ? (
           <ol className="m-0 divide-y divide-[var(--color-hairline)] p-0">
-            {payload.items.map((item) => (
+            {items.map((item) => (
               <MiniIncidentCard
                 key={item.id}
                 item={item}
@@ -272,29 +270,17 @@ function MiniIncidentsPage() {
         )}
       </section>
 
-      {payload && payload.pages > 1 ? (
-        <nav
-          aria-label="Страницы инцидентов"
-          className="mt-4 flex items-center justify-between gap-2 px-4"
-        >
+      {incidents.hasNextPage ? (
+        <div className="mt-4 px-4">
           <Button
             variant="secondary"
-            disabled={page <= 1 || incidents.isFetching}
-            onClick={() => patchSearch({ page: page - 1 })}
+            fullWidth
+            loading={incidents.isFetchingNextPage}
+            onClick={() => void incidents.fetchNextPage()}
           >
-            <ChevronLeft size={16} aria-hidden="true" /> Назад
+            Показать ещё
           </Button>
-          <span className="text-[14px] text-bg-9" aria-live="polite">
-            {page} / {payload.pages}
-          </span>
-          <Button
-            variant="secondary"
-            disabled={page >= payload.pages || incidents.isFetching}
-            onClick={() => patchSearch({ page: page + 1 })}
-          >
-            Далее <ChevronRight size={16} aria-hidden="true" />
-          </Button>
-        </nav>
+        </div>
       ) : null}
     </div>
   );
@@ -377,7 +363,7 @@ function IncidentFilterFields({
         label="Кабинет"
         value={search.account_id ?? ""}
         onChange={(value) =>
-          onChange({ account_id: value || undefined, page: undefined })
+          onChange({ account_id: value || undefined })
         }
       >
         <option value="">Все кабинеты</option>
@@ -393,7 +379,6 @@ function IncidentFilterFields({
         onChange={(value) =>
           onChange({
             severity: (value || undefined) as OperatorSeverity | undefined,
-            page: undefined,
           })
         }
       >
@@ -409,7 +394,6 @@ function IncidentFilterFields({
         onChange={(value) =>
           onChange({
             status: (value || undefined) as OperatorIncidentStatus | undefined,
-            page: undefined,
           })
         }
       >

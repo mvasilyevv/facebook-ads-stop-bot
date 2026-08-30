@@ -18,23 +18,35 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/operatorApi", () => ({
   operatorProblemMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Ошибка",
-  useCampaignRuns: () => ({
-    data: [
-      {
-        id: "11111111-2222-3333-4444-555555555555",
-        preset_id: null,
-        status: mocks.summaryStatus,
-        offer_code: "GH_CR2",
-        idempotency_key: "run-key",
-        error: mocks.summaryError,
-        created_at: "2026-07-21T10:00:00Z",
-        updated_at: "2026-07-21T10:01:00Z",
-      },
-    ],
+  useRunsHistory: () => ({
+    data: {
+      pages: [
+        {
+          runs: [
+            {
+              id: "11111111-2222-3333-4444-555555555555",
+              preset_id: null,
+              status: mocks.summaryStatus,
+              offer_code: "GH_CR2",
+              idempotency_key: "run-key",
+              error: mocks.summaryError,
+              created_at: "2026-07-21T10:00:00Z",
+              updated_at: "2026-07-21T10:01:00Z",
+            },
+          ],
+          total: 1,
+          offset: 0,
+          limit: 50,
+        },
+      ],
+    },
     error: null,
     isError: false,
     isFetching: false,
     isLoading: false,
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
     refetch: mocks.refetchRuns,
   }),
   useCampaignRun: () => ({

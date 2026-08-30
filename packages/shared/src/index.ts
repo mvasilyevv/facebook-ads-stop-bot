@@ -32,3 +32,4 @@ export * from "./format/russianCount";
 // ─── Доменные хелперы ────────────────────────────────────────────────────────
 export * from "./domain/geo";
 export * from "./domain/campaignRunReview";
+export * from "./domain/campaignRunsPage";

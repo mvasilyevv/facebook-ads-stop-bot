@@ -24,7 +24,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children: ReactNode }) => <a href="#detail">{children}</a>,
 }));
 
-const useOperatorAds = vi.fn();
+const useOperatorAdsList = vi.fn();
 const useOperatorSnapshot = vi.fn();
 const fetchOperatorAdForCommand = vi.fn();
 const pauseMutate = vi.fn();
@@ -33,7 +33,7 @@ let pausePending = false;
 let activatePending = false;
 
 vi.mock("@/lib/api/operator", () => ({
-  useOperatorAds: (...args: unknown[]) => useOperatorAds(...args),
+  useOperatorAdsList: (...args: unknown[]) => useOperatorAdsList(...args),
   useOperatorSnapshot: (...args: unknown[]) => useOperatorSnapshot(...args),
   fetchOperatorAdForCommand: (...args: unknown[]) => fetchOperatorAdForCommand(...args),
   usePauseOperatorAd: () => ({ mutateAsync: pauseMutate, isPending: pausePending }),
@@ -116,21 +116,33 @@ function response(rows: OperatorAdRow[] = [makeAd("111"), makeAd("222")]): Opera
 }
 
 function setQuery(
-  data: OperatorAdsResponse | undefined,
-  options: { isPending?: boolean; error?: Error } = {},
+  pages: OperatorAdsResponse | OperatorAdsResponse[] | undefined,
+  options: {
+    isPending?: boolean;
+    error?: Error;
+    hasNextPage?: boolean;
+    isFetchingNextPage?: boolean;
+    fetchNextPage?: () => void;
+  } = {},
 ) {
-  currentAdsResponse = data;
-  useOperatorAds.mockReturnValue({
-    data,
+  const pageArray = pages === undefined ? undefined : Array.isArray(pages) ? pages : [pages];
+  // Курсорное «Показать ещё» (issue #340): fetchOperatorAdForCommand ищет
+  // строку по всем накопленным страницам, а не только по последней.
+  currentAdsRows = pageArray?.flatMap((page) => page.rows) ?? [];
+  useOperatorAdsList.mockReturnValue({
+    data: pageArray ? { pages: pageArray } : undefined,
     isPending: options.isPending ?? false,
     isFetching: false,
     isError: Boolean(options.error),
     error: options.error ?? null,
+    hasNextPage: options.hasNextPage ?? false,
+    isFetchingNextPage: options.isFetchingNextPage ?? false,
+    fetchNextPage: options.fetchNextPage ?? vi.fn(),
     refetch: vi.fn(),
   });
 }
 
-let currentAdsResponse: OperatorAdsResponse | undefined;
+let currentAdsRows: OperatorAdRow[] = [];
 
 function renderPage(status: OperatorRealtimeStatus = "connected") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -171,7 +183,7 @@ describe("typed operator ads page", () => {
       state: "queued",
     });
     fetchOperatorAdForCommand.mockImplementation(async (_client: unknown, id: string) => {
-      const row = currentAdsResponse?.rows.find((candidate) => candidate.fb_ad_id === id);
+      const row = currentAdsRows.find((candidate) => candidate.fb_ad_id === id);
       if (!row || !row.as_of || !row.delivery_status) throw new Error("row unavailable");
       return row;
     });
@@ -182,40 +194,92 @@ describe("typed operator ads page", () => {
     });
   });
 
-  it("passes server search, severity, sort and page without client-side overfetch", () => {
+  it("passes server search, severity and sort without client-side overfetch", () => {
     routeSearch = {
       q: "CR2",
       account_id: "123",
       severity: "critical",
       sort: "spend",
       direction: "asc",
-      page: 3,
     };
-    setQuery({ ...response(), page: 3, pages: 5, total: 202 });
+    setQuery({ ...response(), total: 202, pages: 5 });
     renderPage();
 
-    expect(useOperatorAds).toHaveBeenCalledWith({
+    expect(useOperatorAdsList).toHaveBeenCalledWith({
       search: "CR2",
       account_id: "123",
       severity: "critical",
       sort: "spend",
       direction: "asc",
-      page: 3,
       page_size: 50,
-    } satisfies OperatorAdsQuery);
-    expect(screen.getByText("Страница 3 из 5")).toBeInTheDocument();
+    } satisfies Omit<OperatorAdsQuery, "page">);
+  });
+
+  it("shows an honest shown-of-total count that never claims more than what is loaded", () => {
+    setQuery({ ...response(), total: 202, pages: 5 });
+    renderPage();
+
+    expect(screen.getByText("2 из 202 строки")).toBeInTheDocument();
   });
 
   it("prioritizes the ads closest to stop on the unfiltered landing", () => {
     renderPage();
 
-    expect(useOperatorAds).toHaveBeenCalledWith(
+    expect(useOperatorAdsList).toHaveBeenCalledWith(
       expect.objectContaining({
         sort: "percent_to_stop",
         direction: "desc",
       }) as unknown as OperatorAdsQuery,
     );
     expect(screen.getByLabelText("Сортировка")).toHaveValue("stop_proximity");
+  });
+
+  it("accumulates a second page below the first without re-sorting it client-side", () => {
+    const page1 = response([makeAd("111"), makeAd("222")]);
+    const page2 = { ...response([makeAd("333"), makeAd("444")]), page: 2, total: 4, pages: 2 };
+    setQuery([page1, page2], { hasNextPage: false });
+    renderPage();
+
+    const names = within(screen.getByRole("table"))
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getByText(/Объявление \d+/).textContent);
+    // Порядок — конкатенация страниц как их вернул сервер, без переупорядочивания.
+    expect(names).toEqual(["Объявление 111", "Объявление 222", "Объявление 333", "Объявление 444"]);
+  });
+
+  it("offers a show-more control that fetches the next page without touching the URL", async () => {
+    const fetchNextPage = vi.fn();
+    setQuery(response(), { hasNextPage: true, fetchNextPage });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Показать ещё" }));
+
+    expect(fetchNextPage).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("shows only the current query's pages after a filter change discards the old accumulation", () => {
+    setQuery([response(), { ...response([makeAd("333")]), page: 2 }]);
+    const { rerender } = renderPage();
+    expect(screen.getAllByText(/Объявление \d+/).length).toBeGreaterThanOrEqual(3);
+
+    // Смена фильтра — это новый ключ запроса: react-query отдаёт свежую первую
+    // страницу, а не хвост от предыдущей выборки. Компонент не должен держать
+    // собственный накопительный стейт поверх этого.
+    setQuery(response([makeAd("555")]));
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <OperatorRealtimeStatusProvider status="connected">
+          <AdsPage />
+        </OperatorRealtimeStatusProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getAllByText("Объявление 555").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Объявление 111")).not.toBeInTheDocument();
+    expect(screen.queryByText("Объявление 333")).not.toBeInTheDocument();
   });
 
   it("shows the rule, its threshold and the distance to stop in the list", () => {
@@ -341,7 +405,7 @@ describe("typed operator ads page", () => {
 
     // Порядок считает БД: клиент видит только текущую страницу, и самое
     // опасное объявление может лежать на следующей.
-    expect(useOperatorAds).toHaveBeenCalledWith(
+    expect(useOperatorAdsList).toHaveBeenCalledWith(
       expect.objectContaining({ sort: "percent_to_stop" }) as unknown as OperatorAdsQuery,
     );
     const names = within(screen.getByRole("table"))
@@ -398,7 +462,10 @@ describe("typed operator ads page", () => {
       replace: boolean;
     };
     expect(navigation.replace).toBe(true);
-    expect(navigation.search({ page: 4 })).toEqual({ page: undefined, q: "new ad" });
+    expect(navigation.search({ account_id: "123" })).toEqual({
+      account_id: "123",
+      q: "new ad",
+    });
   });
 
   it("queues pause once with an idempotency key and opens the exact task", async () => {
@@ -657,7 +724,7 @@ describe("typed operator ads page", () => {
   });
 
   it("offers one-step recovery from an empty filtered result", async () => {
-    routeSearch = { q: "missing", severity: "critical", page: 3 };
+    routeSearch = { q: "missing", severity: "critical" };
     setQuery(response([]));
     renderPage();
 

@@ -41,25 +41,34 @@ vi.mock("@/lib/api/campaigns", () => ({
     isLoading: false,
     refetch: mocks.detailRefetch,
   }),
-  useRuns: () => ({
+  useRunsHistory: () => ({
     data: {
-      data: [
+      pages: [
         {
-          id: "11111111-2222-3333-4444-555555555555",
-          preset_id: null,
-          status: mocks.summaryStatus,
-          offer_code: "GH_CR2",
-          idempotency_key: "campaign-run",
-          error: mocks.summaryError,
-          created_at: "2026-07-29T10:00:00Z",
-          updated_at: "2026-07-29T10:01:00Z",
+          runs: [
+            {
+              id: "11111111-2222-3333-4444-555555555555",
+              preset_id: null,
+              status: mocks.summaryStatus,
+              offer_code: "GH_CR2",
+              idempotency_key: "campaign-run",
+              error: mocks.summaryError,
+              created_at: "2026-07-29T10:00:00Z",
+              updated_at: "2026-07-29T10:01:00Z",
+            },
+          ],
+          total: 1,
+          offset: 0,
+          limit: 50,
         },
       ],
-      total: 1,
     },
     error: null,
     isError: false,
     isLoading: false,
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
     refetch: mocks.listRefetch,
   }),
 }));

@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, type QueryClient } from "@tanstack/react-query";
 import type {
   OperatorActionsQuery,
   OperatorAdRow,
@@ -7,14 +7,16 @@ import type {
   OperatorSnapshotQuery,
 } from "@fb/shared/operator/contracts";
 import { actionProjectionFromResponse } from "@fb/shared/operator/viewModel";
+import { nextCampaignRunsOffset, parseTotalCountHeader } from "@fb/shared";
 import {
+  dataOrThrow,
   isApiProblem,
   reconcileOperatorReadModels,
   reconcileOperatorSnapshots,
   safeApiProblemMessage,
 } from "@fb/operator-api";
 
-import { refreshTmaSession, tmaApi, tmaAuthenticatedFetch } from "./auth";
+import { refreshTmaSession, tmaApi, tmaAuthenticatedFetch, tmaFetchApi } from "./auth";
 
 const operatorApi = tmaApi;
 
@@ -75,12 +77,23 @@ export function useOperatorIncident(incidentId: string) {
   );
 }
 
-export function useOperatorIncidents(query: OperatorIncidentsQuery = {}) {
-  return operatorApi.useQuery(
+/**
+ * Курсорное «Показать ещё» (issue #340) поверх страничной ручки: `/incidents`
+ * не отдаёт cursor, только `page`/`page_size`/`total`/`pages`, поэтому `page`
+ * играет роль курсора — react-query подставляет его сам через pageParamName,
+ * поэтому он не входит в query (иначе засорял бы ключ и накопление страниц).
+ */
+export function useOperatorIncidents(query: Omit<OperatorIncidentsQuery, "page"> = {}) {
+  return operatorApi.useInfiniteQuery(
     "get",
     "/api/operator/incidents",
     { params: { query } },
-    { staleTime: 5_000 },
+    {
+      pageParamName: "page",
+      initialPageParam: 1,
+      getNextPageParam: (page) => (page.page < page.pages ? page.page + 1 : undefined),
+      staleTime: 5_000,
+    },
   );
 }
 
@@ -212,6 +225,26 @@ export function useOperatorAds(query: OperatorAdsQuery = {}) {
   );
 }
 
+/**
+ * Каталог объявлений как курсорное «Показать ещё» (issue #340): `page` из
+ * `OperatorAdsQuery` подставляет react-query через pageParamName, поэтому
+ * здесь он исключён из входного query. `useOperatorAds` выше остаётся
+ * однострочным чтением (карточка объявления) — накопление ей не нужно.
+ */
+export function useOperatorAdsList(query: Omit<OperatorAdsQuery, "page"> = {}) {
+  return operatorApi.useInfiniteQuery(
+    "get",
+    "/api/operator/ads",
+    { params: { query } },
+    {
+      pageParamName: "page",
+      initialPageParam: 1,
+      getNextPageParam: (page) => (page.page < page.pages ? page.page + 1 : undefined),
+      staleTime: 10_000,
+    },
+  );
+}
+
 /** Force a post-confirmation network read before any TMA money command. */
 export async function fetchOperatorAdForCommand(
   queryClient: QueryClient,
@@ -262,6 +295,41 @@ export function useResolveTmaNavigation() {
 export function useCampaignRuns() {
   return operatorApi.useQuery("get", "/api/tools/campaigns/runs", {
     params: { query: { limit: 50, offset: 0 } },
+  });
+}
+
+const CAMPAIGN_RUNS_HISTORY_PAGE_SIZE = 50;
+
+/**
+ * История заливов как курсорное «Показать ещё» (issue #340), тот же паттерн,
+ * что и в /actions. `/api/tools/campaigns/runs` честно поддерживает
+ * limit/offset и возвращает total заголовком `X-Total-Count`; типизированный
+ * `operatorApi.useQuery` заголовков не отдаёт, поэтому здесь используется
+ * `tmaFetchApi` напрямую — так же, как web использует `generatedFetchApi`.
+ */
+export function useRunsHistory(params?: { status?: string }) {
+  return useInfiniteQuery({
+    queryKey: ["get", "/api/tools/campaigns/runs", "history", params?.status ?? null],
+    queryFn: async ({ pageParam }) => {
+      const result = await tmaFetchApi.GET("/api/tools/campaigns/runs", {
+        params: {
+          query: {
+            status: params?.status,
+            limit: CAMPAIGN_RUNS_HISTORY_PAGE_SIZE,
+            offset: pageParam,
+          },
+        },
+      });
+      return {
+        runs: await dataOrThrow(Promise.resolve(result)),
+        total: parseTotalCountHeader(result.response.headers.get("X-Total-Count")),
+        offset: pageParam,
+        limit: CAMPAIGN_RUNS_HISTORY_PAGE_SIZE,
+      };
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => nextCampaignRunsOffset(lastPage) ?? undefined,
+    staleTime: 15_000,
   });
 }
 

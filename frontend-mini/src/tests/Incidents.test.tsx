@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { OperatorIncidentsResponse } from "@fb/shared/operator/contracts";
 import {
   makeOperatorScopeEvidence,
   makeOperatorSnapshot,
@@ -21,7 +22,7 @@ vi.mock("@fb/operator-api", () => ({
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => ({
     ...options,
-    useSearch: () => ({ account_id: "123", status: "open", page: 1 }),
+    useSearch: () => ({ account_id: "123", status: "open" }),
   }),
   useNavigate: () => navigate,
 }));
@@ -51,7 +52,7 @@ import { Route } from "@/routes/incidents/index";
 const IncidentsPage = (Route as unknown as { component: ComponentType })
   .component;
 
-function payload() {
+function payload(): OperatorIncidentsResponse {
   return {
     state: "partial",
     as_of: "2026-08-08T12:00:00Z",
@@ -98,6 +99,30 @@ function payload() {
   };
 }
 
+function setIncidents(
+  pages: ReturnType<typeof payload>[] | ReturnType<typeof payload>,
+  options: {
+    isError?: boolean;
+    error?: Error;
+    hasNextPage?: boolean;
+    isFetchingNextPage?: boolean;
+    fetchNextPage?: () => void;
+  } = {},
+) {
+  const pageArray = Array.isArray(pages) ? pages : [pages];
+  useOperatorIncidents.mockReturnValue({
+    data: { pages: pageArray },
+    isError: options.error !== undefined || (options.isError ?? false),
+    error: options.error ?? null,
+    isPending: false,
+    isFetching: false,
+    hasNextPage: options.hasNextPage ?? false,
+    isFetchingNextPage: options.isFetchingNextPage ?? false,
+    fetchNextPage: options.fetchNextPage ?? vi.fn(),
+    refetch,
+  });
+}
+
 describe("TMA incident journal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,13 +130,7 @@ describe("TMA incident journal", () => {
     acknowledge.mockResolvedValue({});
     refetch.mockResolvedValue({});
     navigate.mockResolvedValue(undefined);
-    useOperatorIncidents.mockReturnValue({
-      data: payload(),
-      isError: false,
-      isPending: false,
-      isFetching: false,
-      refetch,
-    });
+    setIncidents(payload());
   });
 
   it("uses the same URL/query evidence and keeps opaque IDs out of navigation URLs", async () => {
@@ -121,7 +140,6 @@ describe("TMA incident journal", () => {
       account_id: "123",
       severity: [],
       status: ["open"],
-      page: 1,
       page_size: 30,
     });
     expect(
@@ -142,17 +160,11 @@ describe("TMA incident journal", () => {
 
   it("does not show ready or confirmed empty while realtime reconnects", () => {
     useOperatorRealtimeStatus.mockReturnValue("reconnecting");
-    useOperatorIncidents.mockReturnValue({
-      data: {
-        ...payload(),
-        state: "ready",
-        issues: [],
-        scope: makeOperatorScopeEvidence(),
-      },
-      isError: false,
-      isPending: false,
-      isFetching: false,
-      refetch,
+    setIncidents({
+      ...payload(),
+      state: "ready",
+      issues: [],
+      scope: makeOperatorScopeEvidence(),
     });
 
     render(<IncidentsPage />);
@@ -182,6 +194,9 @@ describe("TMA incident journal", () => {
       isError: true,
       isPending: false,
       isFetching: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
       error: new Error("boom"),
       refetch,
     });
@@ -194,25 +209,45 @@ describe("TMA incident journal", () => {
   });
 
   it("offers one-step recovery from an empty filtered journal", () => {
-    useOperatorIncidents.mockReturnValue({
-      data: {
-        ...payload(),
-        state: "empty",
-        issues: [],
-        scope: makeOperatorScopeEvidence(),
-        items: [],
-        total: 0,
-        pages: 0,
-      },
-      isError: false,
-      isPending: false,
-      isFetching: false,
-      refetch,
+    setIncidents({
+      ...payload(),
+      state: "empty",
+      issues: [],
+      scope: makeOperatorScopeEvidence(),
+      items: [],
+      total: 0,
+      pages: 0,
     });
 
     render(<IncidentsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
 
     expect(navigate).toHaveBeenCalledWith({ search: {}, replace: true });
+  });
+
+  it("accumulates a second page below the first, in server order", () => {
+    const secondItem = {
+      ...payload().items[0]!,
+      id: "00000000-0000-0000-0000-000000000052",
+      target: { kind: "ad" as const, id: "120002", label: "PL_VIP" },
+    };
+    setIncidents([payload(), { ...payload(), page: 2, items: [secondItem] }]);
+
+    render(<IncidentsPage />);
+
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("GH_CR2");
+    expect(rows[1]).toHaveTextContent("PL_VIP");
+  });
+
+  it("offers a show-more control that fetches the next page", async () => {
+    const fetchNextPage = vi.fn();
+    setIncidents(payload(), { hasNextPage: true, fetchNextPage });
+
+    render(<IncidentsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Показать ещё" }));
+
+    await waitFor(() => expect(fetchNextPage).toHaveBeenCalledOnce());
   });
 });

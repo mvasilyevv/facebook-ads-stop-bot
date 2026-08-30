@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { OperatorIncidentsResponse } from "@fb/shared/operator/contracts";
 import { makeOperatorScopeEvidence, makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
 
 const navigate = vi.fn();
@@ -17,7 +18,7 @@ vi.mock("@fb/operator-api", () => ({
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => ({
     ...options,
-    useSearch: () => ({ severity: "critical", status: "open", page: 2 }),
+    useSearch: () => ({ severity: "critical", status: "open" }),
   }),
   useNavigate: () => navigate,
   Link: ({ children, params }: { children: ReactNode; params?: { incidentId?: string } }) => (
@@ -36,7 +37,7 @@ import { Route } from "@/routes/incidents/index";
 
 const IncidentsPage = (Route as unknown as { component: ComponentType }).component;
 
-function payload() {
+function payload(): OperatorIncidentsResponse {
   return {
     state: "partial",
     as_of: "2026-08-08T12:00:00Z",
@@ -83,19 +84,37 @@ function payload() {
   };
 }
 
+function setIncidents(
+  pages: ReturnType<typeof payload>[] | ReturnType<typeof payload>,
+  options: {
+    isError?: boolean;
+    error?: Error;
+    hasNextPage?: boolean;
+    isFetchingNextPage?: boolean;
+    fetchNextPage?: () => void;
+  } = {},
+) {
+  const pageArray = Array.isArray(pages) ? pages : [pages];
+  useOperatorIncidents.mockReturnValue({
+    data: { pages: pageArray },
+    isError: options.error !== undefined || (options.isError ?? false),
+    error: options.error ?? null,
+    isPending: false,
+    isFetching: false,
+    hasNextPage: options.hasNextPage ?? false,
+    isFetchingNextPage: options.isFetchingNextPage ?? false,
+    fetchNextPage: options.fetchNextPage ?? vi.fn(),
+    refetch,
+  });
+}
+
 describe("operator incident journal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useOperatorRealtimeStatus.mockReturnValue("connected");
     acknowledge.mockResolvedValue({});
     refetch.mockResolvedValue({});
-    useOperatorIncidents.mockReturnValue({
-      data: payload(),
-      isError: false,
-      isPending: false,
-      isFetching: false,
-      refetch,
-    });
+    setIncidents(payload());
   });
 
   it("keeps URL filters in the typed API query and hides unproven money", () => {
@@ -105,7 +124,6 @@ describe("operator incident journal", () => {
       account_id: undefined,
       severity: ["critical"],
       status: ["open"],
-      page: 2,
       page_size: 30,
     });
     expect(
@@ -116,22 +134,18 @@ describe("operator incident journal", () => {
       "href",
       "/incidents/00000000-0000-0000-0000-000000000051",
     );
-    expect(screen.getByText("31 запись")).toBeInTheDocument();
+    // Честный счётчик «показано X из total»: на странице одна запись, а
+    // total (31) сервер подтвердил заранее.
+    expect(screen.getByText("1 из 31 запись")).toBeInTheDocument();
   });
 
   it("downgrades a ready HTTP journal while live reconciliation is pending", () => {
     useOperatorRealtimeStatus.mockReturnValue("reconnecting");
-    useOperatorIncidents.mockReturnValue({
-      data: {
-        ...payload(),
-        state: "ready",
-        issues: [],
-        scope: makeOperatorScopeEvidence(),
-      },
-      isError: false,
-      isPending: false,
-      isFetching: false,
-      refetch,
+    setIncidents({
+      ...payload(),
+      state: "ready",
+      issues: [],
+      scope: makeOperatorScopeEvidence(),
     });
 
     render(<IncidentsPage />);
@@ -146,6 +160,9 @@ describe("operator incident journal", () => {
       isError: true,
       isPending: false,
       isFetching: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
       error: new Error("Журнал инцидентов недоступен"),
       refetch,
     });
@@ -172,25 +189,66 @@ describe("operator incident journal", () => {
   });
 
   it("offers one-step recovery from an empty filtered journal", () => {
-    useOperatorIncidents.mockReturnValue({
-      data: {
-        ...payload(),
-        state: "empty",
-        issues: [],
-        scope: makeOperatorScopeEvidence(),
-        items: [],
-        total: 0,
-        pages: 0,
-      },
-      isError: false,
-      isPending: false,
-      isFetching: false,
-      refetch,
+    setIncidents({
+      ...payload(),
+      state: "empty",
+      issues: [],
+      scope: makeOperatorScopeEvidence(),
+      items: [],
+      total: 0,
+      pages: 0,
     });
 
     render(<IncidentsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
 
     expect(navigate).toHaveBeenCalledWith({ search: {}, replace: true });
+  });
+
+  it("accumulates a second page below the first, in server order", () => {
+    const secondItem = {
+      ...payload().items[0]!,
+      id: "00000000-0000-0000-0000-000000000052",
+      target: { kind: "ad" as const, id: "120002", label: "PL_VIP" },
+    };
+    setIncidents([payload(), { ...payload(), page: 3, items: [secondItem] }]);
+
+    render(<IncidentsPage />);
+
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("GH_CR2");
+    expect(rows[1]).toHaveTextContent("PL_VIP");
+  });
+
+  it("offers a show-more control that fetches the next page", async () => {
+    const fetchNextPage = vi.fn();
+    setIncidents(payload(), { hasNextPage: true, fetchNextPage });
+
+    render(<IncidentsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Показать ещё" }));
+
+    await waitFor(() => expect(fetchNextPage).toHaveBeenCalledOnce());
+  });
+
+  it("shows only the current query's page after a filter change discards the old accumulation", () => {
+    const secondItem = {
+      ...payload().items[0]!,
+      id: "00000000-0000-0000-0000-000000000052",
+      target: { kind: "ad" as const, id: "120002", label: "PL_VIP" },
+    };
+    setIncidents([payload(), { ...payload(), page: 3, items: [secondItem] }]);
+    const { rerender } = render(<IncidentsPage />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+
+    // Смена фильтра — новый ключ запроса: react-query отдаёт свежую первую
+    // страницу этой выборки, а не хвост от предыдущей. Компонент не должен
+    // держать собственный накопительный стейт поверх этого.
+    setIncidents({ ...payload(), items: [{ ...payload().items[0]!, id: "solo" }] });
+    rerender(<IncidentsPage />);
+
+    const remainingRows = screen.getAllByRole("listitem");
+    expect(remainingRows).toHaveLength(1);
+    expect(remainingRows[0]).not.toHaveTextContent("PL_VIP");
   });
 });

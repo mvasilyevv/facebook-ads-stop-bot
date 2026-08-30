@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, ChevronLeft, ChevronRight, Filter, ShieldCheck } from "lucide-react";
+import { ArrowRight, Filter, ShieldCheck } from "lucide-react";
 
+import { formatShownOfRussianCount } from "@fb/shared";
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type {
   OperatorIncidentItem,
@@ -9,7 +10,6 @@ import type {
   OperatorSeverity,
 } from "@fb/shared/operator/contracts";
 import {
-  operatorIncidentCountLabel,
   OPERATOR_INCIDENT_STATUS_LABEL,
   operatorIncidentCopy,
   operatorIncidentDataState,
@@ -73,11 +73,15 @@ function OperatorIncidentsPage() {
   const cabinets = operatorCabinetOptions(snapshot.data);
   const incidents = useOperatorIncidents(operatorIncidentsQuery(search, 30));
   const acknowledge = useAcknowledgeOperatorIncident();
-  const payload = incidents.data;
+  // Курсорное «Показать ещё» (issue #340): накопленные страницы держит
+  // инфинит-запрос, а не URL. Последняя загруженная порция даёт самые свежие
+  // total/scope — они относятся ко всей выборке, а не к одной странице.
+  const pages = incidents.data?.pages;
+  const payload = pages?.at(-1) ?? null;
+  const items = pages?.flatMap((page) => page.items) ?? [];
   const displayState = payload
     ? operatorIncidentDataState(payload.state, realtimeStatus === "connected" && !incidents.isError)
     : undefined;
-  const page = search.page ?? 1;
   const activeFilterCount =
     Number(Boolean(search.account_id)) +
     Number(Boolean(search.severity)) +
@@ -112,7 +116,7 @@ function OperatorIncidentsPage() {
     }
   }
 
-  if (incidents.isError && !payload) {
+  if (incidents.isError && !incidents.data) {
     return (
       <OperatorPageBoundary
         title="Инциденты"
@@ -143,7 +147,9 @@ function OperatorIncidentsPage() {
         <div className="flex items-center gap-3">
           {displayState ? <DataStateBadge state={displayState} /> : null}
           <span className="font-numeric text-[14px] text-bg-9">
-            {payload ? operatorIncidentCountLabel(payload.total) : "Загрузка…"}
+            {payload
+              ? formatShownOfRussianCount(items.length, payload.total, "запись", "записи", "записей")
+              : "Загрузка…"}
           </span>
         </div>
       </header>
@@ -204,9 +210,9 @@ function OperatorIncidentsPage() {
               <Skeleton key={index} className="h-32 w-full rounded-none" />
             ))}
           </div>
-        ) : payload?.items.length ? (
+        ) : payload && items.length ? (
           <ol className="m-0 divide-y divide-[var(--color-hairline)] p-0">
-            {payload.items.map((item) => (
+            {items.map((item) => (
               <IncidentLedgerRow
                 key={item.id}
                 item={item}
@@ -241,31 +247,15 @@ function OperatorIncidentsPage() {
         )}
       </section>
 
-      {payload && payload.pages > 1 ? (
-        <nav
-          aria-label="Страницы инцидентов"
-          className="mt-4 flex items-center justify-between gap-3"
+      {incidents.hasNextPage ? (
+        <Button
+          variant="secondary"
+          className="mt-4 min-h-11 w-full"
+          loading={incidents.isFetchingNextPage}
+          onClick={() => void incidents.fetchNextPage()}
         >
-          <Button
-            variant="secondary"
-            leftIcon={<ChevronLeft aria-hidden="true" />}
-            disabled={page <= 1 || incidents.isFetching}
-            onClick={() => patchSearch({ page: page - 1 })}
-          >
-            Назад
-          </Button>
-          <span className="text-[14px] text-bg-9" aria-live="polite">
-            Страница {page} из {payload.pages}
-          </span>
-          <Button
-            variant="secondary"
-            rightIcon={<ChevronRight aria-hidden="true" />}
-            disabled={page >= payload.pages || incidents.isFetching}
-            onClick={() => patchSearch({ page: page + 1 })}
-          >
-            Далее
-          </Button>
-        </nav>
+          Показать ещё
+        </Button>
       ) : null}
     </div>
   );
@@ -344,7 +334,7 @@ function IncidentFilterFields({
       <FilterSelect
         label="Кабинет"
         value={search.account_id ?? ""}
-        onChange={(value) => onChange({ account_id: value || undefined, page: undefined })}
+        onChange={(value) => onChange({ account_id: value || undefined })}
       >
         <option value="">Все кабинеты</option>
         {cabinets.map((cabinet) => (
@@ -359,7 +349,6 @@ function IncidentFilterFields({
         onChange={(value) =>
           onChange({
             severity: (value || undefined) as OperatorSeverity | undefined,
-            page: undefined,
           })
         }
       >
@@ -375,7 +364,6 @@ function IncidentFilterFields({
         onChange={(value) =>
           onChange({
             status: (value || undefined) as OperatorIncidentStatus | undefined,
-            page: undefined,
           })
         }
       >

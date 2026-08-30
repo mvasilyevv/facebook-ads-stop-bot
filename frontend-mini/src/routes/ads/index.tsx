@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
+import { Filter, Search } from "lucide-react";
 
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
@@ -30,10 +30,12 @@ import { Sheet } from "@/components/ui/Sheet";
 import { MiniOperatorAdCard } from "@/features/operator/OperatorAds";
 import {
   operatorProblemMessage,
-  useOperatorAds,
+  useOperatorAdsList,
   useOperatorSnapshot,
 } from "@/lib/operatorApi";
 import { haptic } from "@/lib/tg";
+
+const ADS_PAGE_SIZE = 30;
 
 export const Route = createFileRoute("/ads/")({
   component: AdsPage,
@@ -67,26 +69,27 @@ function AdsPage() {
   const filterTriggerRef = useRef<HTMLButtonElement>(null);
   const snapshot = useOperatorSnapshot({ window: "today" });
   const cabinets = operatorCabinetOptions(snapshot.data);
-  const page = search.page ?? 1;
-  const query = useOperatorAds({
+  const query = useOperatorAdsList({
     search: search.q,
     account_id: search.account_id,
     severity: search.severity,
     sort: operatorAdsQuerySort(search.sort),
     direction: search.direction ?? "desc",
-    page,
-    page_size: 30,
+    page_size: ADS_PAGE_SIZE,
   });
-  const payload = query.data;
-  const displayPayload = payload
-    ? adsForRealtimeState(
-        payload,
-        realtimeStatus === "connected" && !query.isError,
-      )
-    : null;
+  // Курсорное «Показать ещё» (issue #340): каждая накопленная страница
+  // проецируется отдельно, как в /actions. Самая свежая порция даёт честные
+  // total/pages/scope — они относятся ко всей выборке, а не к одной странице.
+  const projections = query.data?.pages.map((page) =>
+    adsForRealtimeState(
+      page,
+      realtimeStatus === "connected" && !query.isError,
+    ),
+  );
+  const displayPayload = projections?.at(-1) ?? null;
   const displayState = displayPayload?.state;
   // Порядок задаёт сервер, включая сортировку по близости к стопу.
-  const displayRows = displayPayload?.rows;
+  const displayRows = projections?.flatMap((page) => page.rows);
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const confirmedEmpty =
     realtimeStatus === "connected" &&
@@ -113,7 +116,7 @@ function AdsPage() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    patchSearch({ q: draftSearch.trim() || undefined, page: undefined });
+    patchSearch({ q: draftSearch.trim() || undefined });
     setFiltersOpen(false);
   }
 
@@ -170,7 +173,7 @@ function AdsPage() {
         />
       </Sheet>
 
-      {payload && displayState && displayState !== "ready" ? (
+      {query.data && displayState && displayState !== "ready" ? (
         <div className="px-4 pt-3">
           <DataStateNotice
             state={displayState}
@@ -181,12 +184,12 @@ function AdsPage() {
       ) : null}
 
       <section className="grid gap-3 px-4 pt-4" aria-label="Объявления">
-        {query.isError && !payload ? (
+        {query.isError && !query.data ? (
           <ErrorState
             message={operatorProblemMessage(query.error)}
             onRetry={() => void query.refetch()}
           />
-        ) : query.isPending && !payload ? (
+        ) : query.isPending && !query.data ? (
           <div
             role="status"
             aria-label="Загрузка объявлений"
@@ -222,29 +225,17 @@ function AdsPage() {
         )}
       </section>
 
-      {displayPayload && displayPayload.pages > 1 ? (
-        <nav
-          aria-label="Страницы объявлений"
-          className="mt-4 flex items-center justify-between gap-2 px-4"
-        >
+      {query.hasNextPage ? (
+        <div className="mt-4 px-4">
           <Button
             variant="secondary"
-            disabled={page <= 1 || query.isFetching}
-            onClick={() => patchSearch({ page: page - 1 })}
+            fullWidth
+            loading={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
           >
-            <ChevronLeft aria-hidden="true" size={16} /> Назад
+            Показать ещё
           </Button>
-          <span className="text-[14px] text-bg-9" aria-live="polite">
-            {page} / {displayPayload.pages}
-          </span>
-          <Button
-            variant="secondary"
-            disabled={page >= displayPayload.pages || query.isFetching}
-            onClick={() => patchSearch({ page: page + 1 })}
-          >
-            Далее <ChevronRight aria-hidden="true" size={16} />
-          </Button>
-        </nav>
+        </div>
       ) : null}
     </div>
   );
@@ -289,7 +280,7 @@ function AdsFilterFields({
         label="Кабинет"
         value={search.account_id ?? ""}
         onChange={(value) =>
-          onChange({ account_id: value || undefined, page: undefined })
+          onChange({ account_id: value || undefined })
         }
       >
         <option value="">Все кабинеты</option>
@@ -305,7 +296,6 @@ function AdsFilterFields({
         onChange={(value) =>
           onChange({
             severity: (value || undefined) as OperatorSeverity | undefined,
-            page: undefined,
           })
         }
       >
@@ -319,7 +309,7 @@ function AdsFilterFields({
         label="Сортировка"
         value={search.sort ?? OPERATOR_ADS_STOP_PROXIMITY_SORT}
         onChange={(value) =>
-          onChange({ sort: value as OperatorAdsRouteSort, page: undefined })
+          onChange({ sort: value as OperatorAdsRouteSort })
         }
       >
         {SORTS.map((sort) => (
@@ -334,7 +324,6 @@ function AdsFilterFields({
         onChange={(value) =>
           onChange({
             direction: value as OperatorAdsDirection,
-            page: undefined,
           })
         }
       >

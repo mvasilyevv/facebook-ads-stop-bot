@@ -25,7 +25,6 @@ export interface OperatorAdsRouteSearch {
   severity?: OperatorSeverity;
   sort?: OperatorAdsRouteSort;
   direction?: OperatorAdsDirection;
-  page?: number;
 }
 
 export interface OperatorActionsRouteSearch {
@@ -108,7 +107,6 @@ export function parseOperatorAdsRouteSearch(
       raw.direction === "asc" || raw.direction === "desc"
         ? raw.direction
         : undefined,
-    page: positiveInteger(raw.page),
   };
 }
 
@@ -147,11 +145,6 @@ function boundedText(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized ? normalized.slice(0, maxLength) : undefined;
-}
-
-function positiveInteger(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function setMember<T extends string>(

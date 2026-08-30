@@ -18,7 +18,6 @@ describe("operator route filters", () => {
         severity: "critical",
         sort: "spend",
         direction: "asc",
-        page: "3",
       }),
     ).toEqual({
       q: "campaign",
@@ -26,14 +25,12 @@ describe("operator route filters", () => {
       severity: "critical",
       sort: "spend",
       direction: "asc",
-      page: 3,
     });
     expect(
       parseOperatorAdsRouteSearch({
         severity: "danger",
         sort: "profit",
         direction: "sideways",
-        page: 0,
       }),
     ).toEqual({
       q: undefined,
@@ -41,7 +38,6 @@ describe("operator route filters", () => {
       severity: undefined,
       sort: undefined,
       direction: undefined,
-      page: undefined,
     });
   });
 

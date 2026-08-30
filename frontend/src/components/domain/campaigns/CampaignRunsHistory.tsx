@@ -42,7 +42,7 @@ import { OperatorUnavailableState } from "@/components/layout/OperatorPageBounda
 import { Select } from "@/components/ui/Select";
 import { toast } from "@/components/ui/Toast";
 import {
-  useRuns,
+  useRunsHistory,
   useRunDetail,
   useAbortCampaignRun,
   useResumeCampaignRun,
@@ -51,7 +51,7 @@ import {
   type RunStatus,
 } from "@/lib/api/campaigns";
 import { CampaignRunManualReview } from "./CampaignRunManualReview";
-import { formatRussianCount } from "@fb/shared";
+import { formatRussianCount, formatShownOfRussianCount } from "@fb/shared";
 
 // ─── Цвета статуса ────────────────────────────────────────────────────────────
 
@@ -93,13 +93,13 @@ interface CampaignRunsHistoryProps {
 export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ openRunId = null }) => {
   const [statusFilter, setStatusFilter] = useState("");
 
-  const { data, isLoading, isError, error, refetch } = useRuns({
-    status: statusFilter || undefined,
-    limit: 50,
-  });
+  const { data, isLoading, isError, error, refetch, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    useRunsHistory({ status: statusFilter || undefined });
 
-  const runs = data?.data ?? [];
-  const total = data?.total ?? 0;
+  // Курсорное «Показать ещё» (issue #340): каждая накопленная порция несёт
+  // свой total — берём последнюю (самую свежую), а не первую.
+  const runs = data?.pages.flatMap((page) => page.runs) ?? [];
+  const total = data?.pages.at(-1)?.total ?? null;
 
   const handleRefresh = () => void refetch();
 
@@ -140,9 +140,13 @@ export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ openRunId = 
             />
           </div>
           <span className="shrink-0 text-[12px] text-bg-8">
-            {total > 0
-              ? formatRussianCount(total, "запуск", "запуска", "запусков")
-              : "нет запусков"}
+            {total === 0
+              ? "нет запусков"
+              : total != null
+                ? formatShownOfRussianCount(runs.length, total, "запуск", "запуска", "запусков")
+                : runs.length > 0
+                  ? formatRussianCount(runs.length, "запуск", "запуска", "запусков")
+                  : "нет запусков"}
           </span>
         </div>
         <Button
@@ -196,6 +200,17 @@ export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ openRunId = 
           </div>
         </div>
       )}
+
+      {hasNextPage ? (
+        <Button
+          variant="secondary"
+          fullWidth
+          loading={isFetchingNextPage}
+          onClick={() => void fetchNextPage()}
+        >
+          Показать ещё
+        </Button>
+      ) : null}
     </div>
   );
 };

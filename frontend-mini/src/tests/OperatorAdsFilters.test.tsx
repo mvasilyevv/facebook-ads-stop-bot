@@ -52,11 +52,11 @@ vi.mock("@/lib/tg", () => ({
   haptic: { selection: vi.fn(), impact: vi.fn(), notify: vi.fn() },
 }));
 
-const useOperatorAds = vi.fn();
+const useOperatorAdsList = vi.fn();
 const useOperatorSnapshot = vi.fn();
 
 vi.mock("@/lib/operatorApi", () => ({
-  useOperatorAds: (...args: unknown[]) => useOperatorAds(...args),
+  useOperatorAdsList: (...args: unknown[]) => useOperatorAdsList(...args),
   useOperatorSnapshot: (...args: unknown[]) => useOperatorSnapshot(...args),
   usePauseOperatorAd: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useActivateOperatorAd: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -151,18 +151,35 @@ function renderPage() {
   );
 }
 
+function setAdsQuery(
+  pages: OperatorAdsResponse | OperatorAdsResponse[],
+  options: {
+    isPending?: boolean;
+    error?: Error;
+    hasNextPage?: boolean;
+    isFetchingNextPage?: boolean;
+    fetchNextPage?: () => void;
+  } = {},
+) {
+  const pageArray = Array.isArray(pages) ? pages : [pages];
+  useOperatorAdsList.mockReturnValue({
+    data: { pages: pageArray },
+    isPending: options.isPending ?? false,
+    isFetching: false,
+    isError: Boolean(options.error),
+    error: options.error ?? null,
+    hasNextPage: options.hasNextPage ?? false,
+    isFetchingNextPage: options.isFetchingNextPage ?? false,
+    fetchNextPage: options.fetchNextPage ?? vi.fn(),
+    refetch: vi.fn(),
+  });
+}
+
 describe("TMA operator ads URL filters", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     routeSearch = {};
-    useOperatorAds.mockReturnValue({
-      data: emptyResponse(),
-      isPending: false,
-      isFetching: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+    setAdsQuery(emptyResponse());
     useOperatorSnapshot.mockReturnValue({
       data: makeOperatorSnapshot(),
       isError: false,
@@ -176,26 +193,24 @@ describe("TMA operator ads URL filters", () => {
       severity: "critical",
       sort: "spend",
       direction: "asc",
-      page: 3,
     };
 
     renderPage();
 
-    expect(useOperatorAds).toHaveBeenCalledWith({
+    expect(useOperatorAdsList).toHaveBeenCalledWith({
       search: "CR2",
       account_id: "123",
       severity: "critical",
       sort: "spend",
       direction: "asc",
-      page: 3,
       page_size: 30,
-    } satisfies OperatorAdsQuery);
+    } satisfies Omit<OperatorAdsQuery, "page">);
   });
 
   it("prioritizes the ads closest to stop on the unfiltered landing", () => {
     renderPage();
 
-    expect(useOperatorAds).toHaveBeenCalledWith(
+    expect(useOperatorAdsList).toHaveBeenCalledWith(
       expect.objectContaining({
         sort: "percent_to_stop",
         direction: "desc",
@@ -210,30 +225,23 @@ describe("TMA operator ads URL filters", () => {
 
   it("delegates stop proximity ranking to the server", () => {
     routeSearch = { sort: "stop_proximity" };
-    useOperatorAds.mockReturnValue({
-      data: {
-        ...emptyResponse(),
-        state: "ready",
-        rows: [
-          adRow("far", "12.00"),
-          adRow("unknown", null),
-          adRow("near", "96.50"),
-        ],
-        total: 3,
-        pages: 1,
-      },
-      isPending: false,
-      isFetching: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
+    setAdsQuery({
+      ...emptyResponse(),
+      state: "ready",
+      rows: [
+        adRow("far", "12.00"),
+        adRow("unknown", null),
+        adRow("near", "96.50"),
+      ],
+      total: 3,
+      pages: 1,
     });
 
     renderPage();
 
     // Порядок считает БД: клиент видит только текущую страницу, и самое
     // опасное объявление может лежать на следующей.
-    expect(useOperatorAds).toHaveBeenCalledWith(
+    expect(useOperatorAdsList).toHaveBeenCalledWith(
       expect.objectContaining({
         sort: "percent_to_stop",
       }) as unknown as OperatorAdsQuery,
@@ -249,7 +257,42 @@ describe("TMA operator ads URL filters", () => {
     ]);
   });
 
-  it("uses a focus-managed sheet with typed cabinet options and resets page on filter changes", async () => {
+  it("accumulates a second page below the first, in server order", () => {
+    setAdsQuery([
+      { ...emptyResponse(), state: "ready", rows: [adRow("111", "40.00")], total: 2, pages: 2 },
+      {
+        ...emptyResponse(),
+        state: "ready",
+        page: 2,
+        rows: [adRow("222", "80.00")],
+        total: 2,
+        pages: 2,
+      },
+    ]);
+
+    renderPage();
+
+    const names = screen
+      .getAllByText(/Объявление (111|222)/)
+      .map((node) => node.textContent);
+    expect(names).toEqual(["Объявление 111", "Объявление 222"]);
+  });
+
+  it("offers a show-more control that fetches the next page without touching the URL", async () => {
+    const fetchNextPage = vi.fn();
+    setAdsQuery(
+      { ...emptyResponse(), state: "ready", rows: [adRow("111", "40.00")], total: 2, pages: 2 },
+      { hasNextPage: true, fetchNextPage },
+    );
+
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Показать ещё" }));
+
+    await waitFor(() => expect(fetchNextPage).toHaveBeenCalledOnce());
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("uses a focus-managed sheet with typed cabinet options and resets to a fresh query on filter changes", async () => {
     const trigger = renderPage().getByRole("button", {
       name: "Открыть фильтры объявлений",
     });
@@ -272,8 +315,10 @@ describe("TMA operator ads URL filters", () => {
       search: (previous: Record<string, unknown>) => Record<string, unknown>;
       replace: boolean;
     };
-    expect(navigation.search({ page: 8, q: "old" })).toEqual({
-      page: undefined,
+    // Смена фильтра — не «страница», а новый ключ запроса: URL больше не
+    // хранит номер страницы (issue #340), react-query сам отдаёт первую
+    // порцию свежей выборки.
+    expect(navigation.search({ q: "old" })).toEqual({
       q: "old",
       account_id: "456",
     });
@@ -283,7 +328,7 @@ describe("TMA operator ads URL filters", () => {
   });
 
   it("offers one-step recovery from an empty filtered result", () => {
-    routeSearch = { q: "missing", severity: "critical", page: 3 };
+    routeSearch = { q: "missing", severity: "critical" };
     renderPage();
 
     fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));

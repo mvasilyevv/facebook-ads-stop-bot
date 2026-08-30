@@ -11,7 +11,6 @@ export interface OperatorIncidentsRouteSearch {
   account_id?: string;
   severity?: OperatorSeverity;
   status?: OperatorIncidentStatus;
-  page?: number;
 }
 
 const INCIDENT_SEVERITIES = new Set<OperatorSeverity>([
@@ -47,19 +46,22 @@ export function parseOperatorIncidentsRouteSearch(
     account_id: boundedText(raw.account_id, 64),
     severity: setMember(raw.severity, INCIDENT_SEVERITIES),
     status: setMember(raw.status, INCIDENT_STATUSES),
-    page: boundedPositiveInteger(raw.page, 10_000),
   };
 }
 
+/**
+ * `page` не входит в результат: журнал листается курсорным «Показать ещё»
+ * (issue #340), а не URL-номером страницы — накопленные порции держит
+ * инфинит-запрос, а не адресная строка.
+ */
 export function operatorIncidentsQuery(
   search: OperatorIncidentsRouteSearch,
   pageSize: number,
-): OperatorIncidentsQuery {
+): Omit<OperatorIncidentsQuery, "page"> {
   return {
     account_id: search.account_id,
     severity: search.severity ? [search.severity] : [],
     status: search.status ? [search.status] : [],
-    page: search.page ?? 1,
     page_size: pageSize,
   };
 }
@@ -125,16 +127,6 @@ function boundedText(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized ? normalized.slice(0, maxLength) : undefined;
-}
-
-function boundedPositiveInteger(
-  value: unknown,
-  maximum: number,
-): number | undefined {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(parsed) && parsed > 0 && parsed <= maximum
-    ? parsed
-    : undefined;
 }
 
 function setMember<T extends string>(

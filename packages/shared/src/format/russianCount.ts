@@ -35,3 +35,23 @@ export function russianCountIsOne(count: number): boolean {
   const absolute = Math.abs(count);
   return absolute % 10 === 1 && absolute % 100 !== 11;
 }
+
+/**
+ * Честный счётчик для журналов с накопительной пагинацией («Показать ещё»):
+ * `total` — подтверждённый сервером размер всей выборки, `shown` — сколько
+ * строк уже накоплено на клиенте. Вызывающий обязан передавать сюда только
+ * подтверждённый total (не null) — при неизвестном total нужен отдельный
+ * текст на месте вызова, а не 0 или искажённая надпись отсюда.
+ */
+export function formatShownOfRussianCount(
+  shown: number,
+  total: number,
+  one: string,
+  few: string,
+  many: string,
+): string {
+  if (shown >= total) {
+    return formatRussianCount(total, one, few, many);
+  }
+  return `${shown.toLocaleString("ru-RU")} из ${formatRussianCount(total, one, few, many)}`;
+}
