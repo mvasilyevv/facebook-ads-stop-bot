@@ -6,13 +6,13 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 
 // ─── Моки ─────────────────────────────────────────────────────────────────────
 
-const mockObserverData = {
+const baseObserverData = {
   is_scanning_enabled: true,
   default_interval_seconds: 60,
   owner_campaign_tag: "MV",
@@ -29,6 +29,9 @@ const mockObserverData = {
   cpl_warning_percent: null,
   cpr_warning_percent: null,
 };
+
+/** Настройки, которые видит компонент; тест меняет их до render. */
+let mockObserverData = baseObserverData;
 
 const mockToggleScanning = vi.fn().mockResolvedValue(mockObserverData);
 const mockUpdateObserverInterval = vi.fn().mockResolvedValue(mockObserverData);
@@ -248,6 +251,11 @@ describe("Settings — переключение табов", () => {
 // ─── ObserverTab ──────────────────────────────────────────────────────────────
 
 describe("ObserverTab", () => {
+  beforeEach(() => {
+    mockObserverData = baseObserverData;
+    mockToggleScanning.mockClear();
+  });
+
   // Отображает switch сканирования
   it("рендерит switch сканирования", () => {
     render(wrap(<ObserverTab />));
@@ -264,12 +272,47 @@ describe("ObserverTab", () => {
     ).toHaveAttribute("aria-checked", "true");
   });
 
-  // Клик на switch вызывает точечный PATCH useToggleScanning (не partial PUT — фикс бага 422)
-  it("клик toggle вызывает useToggleScanning с новым значением", async () => {
+  // Выключение сканирования ослепляет авто-стоп: одного клика недостаточно,
+  // PATCH уходит только после подтверждения в диалоге.
+  it("выключение сканирования требует подтверждения", async () => {
     const user = userEvent.setup();
     render(wrap(<ObserverTab />));
+
     await user.click(screen.getByRole("switch", { name: "Остановить периодическое сканирование" }));
+    expect(mockToggleScanning).not.toHaveBeenCalled();
+
+    expect(await screen.findByText("Выключить сканирование?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Авто-стоп перестанет следить за кабинетами до включения."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Выключить" }));
     expect(mockToggleScanning).toHaveBeenCalledWith(false);
+  });
+
+  it("отмена в диалоге оставляет сканирование включённым", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ObserverTab />));
+
+    await user.click(screen.getByRole("switch", { name: "Остановить периодическое сканирование" }));
+    await user.click(await screen.findByRole("button", { name: "Отмена" }));
+
+    expect(mockToggleScanning).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByText("Выключить сканирование?")).not.toBeInTheDocument();
+    });
+  });
+
+  // Включение возвращает наблюдение — подтверждать нечего, работает одним кликом.
+  it("включение сканирования идёт без диалога", async () => {
+    mockObserverData = { ...baseObserverData, is_scanning_enabled: false };
+    const user = userEvent.setup();
+    render(wrap(<ObserverTab />));
+
+    await user.click(screen.getByRole("switch", { name: "Включить периодическое сканирование" }));
+
+    expect(mockToggleScanning).toHaveBeenCalledWith(true);
+    expect(screen.queryByText("Выключить сканирование?")).not.toBeInTheDocument();
   });
 
   it("валидирует интервал и показывает честный queued scan lifecycle", async () => {

@@ -9,6 +9,7 @@ import { safeApiProblemMessage } from "@fb/operator-api";
 import { RefreshCw, RotateCcw, ScanSearch } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/Input";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Switch } from "@/components/ui/Switch";
@@ -60,6 +61,7 @@ export const ObserverTab: FC = () => {
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [selectedAmColumns, setSelectedAmColumns] = useState<string[]>([]);
   const [intervalError, setIntervalError] = useState<string | null>(null);
+  const [stopScanningConfirmOpen, setStopScanningConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!settingsQuery.data) return;
@@ -135,17 +137,34 @@ export const ObserverTab: FC = () => {
     }
   }
 
-  async function handleToggleScanning() {
-    const next = !settings.is_scanning_enabled;
+  /** false — состояние не изменилось; причина уже показана тостом. */
+  async function applyScanning(next: boolean): Promise<boolean> {
     try {
       await toggleScanning.mutateAsync(next);
       toast.success(next ? "Сканирование включено" : "Сканирование остановлено");
+      return true;
     } catch (error) {
       toast.error(
         "Состояние сканирования не изменено",
         safeApiProblemMessage(error, "Проверьте готовность Observer"),
       );
+      return false;
     }
+  }
+
+  async function confirmStopScanning() {
+    // ConfirmDialog закрывается только при успехе: неудача оставляет диалог открытым.
+    if (!(await applyScanning(false))) throw new Error("scanning-not-stopped");
+  }
+
+  function handleToggleScanning() {
+    // Выключение ослепляет авто-стоп, поэтому проходит через подтверждение;
+    // включение возвращает наблюдение и подтверждения не требует.
+    if (settings.is_scanning_enabled) {
+      setStopScanningConfirmOpen(true);
+      return;
+    }
+    void applyScanning(true);
   }
 
   async function handleScanNow() {
@@ -224,7 +243,7 @@ export const ObserverTab: FC = () => {
           >
             <Switch
               checked={settings.is_scanning_enabled}
-              onChange={() => void handleToggleScanning()}
+              onChange={handleToggleScanning}
               disabled={toggleScanning.isPending}
               label={
                 settings.is_scanning_enabled
@@ -483,6 +502,16 @@ export const ObserverTab: FC = () => {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={stopScanningConfirmOpen}
+        onOpenChange={setStopScanningConfirmOpen}
+        title="Выключить сканирование?"
+        description="Авто-стоп перестанет следить за кабинетами до включения."
+        confirmLabel="Выключить"
+        confirmVariant="warning"
+        onConfirm={confirmStopScanning}
+      />
     </div>
   );
 };
