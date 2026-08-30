@@ -315,6 +315,25 @@ describe("TMA actions realtime projection", () => {
     expect(screen.getByText("Проверить объявление")).toBeInTheDocument();
   });
 
+  it("shows an honest error with retry instead of hanging on 'Загрузка…' when the request fails", () => {
+    const refetch = vi.fn();
+    useOperatorAction.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new Error("Сеть недоступна"),
+      refetch,
+    });
+
+    renderWithRealtime(<MiniActionDetail actionId="1842" />, "connected");
+
+    expect(screen.queryByText("Загрузка действия…")).not.toBeInTheDocument();
+    expect(screen.getByText("Сеть недоступна")).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Повторить" });
+    fireEvent.click(retry);
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
   it("does not expose diagnostic correlation UUIDs", () => {
     const response = confirmedResponse();
     response.items[0]!.correlation_id = "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f";

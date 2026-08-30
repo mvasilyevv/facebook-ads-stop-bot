@@ -155,7 +155,11 @@ function MiniIncidentsPage() {
           className="mb-3 font-numeric text-[13px] text-bg-8"
           aria-live="polite"
         >
-          {payload ? operatorIncidentCountLabel(payload.total) : "Загрузка…"}
+          {payload
+            ? operatorIncidentCountLabel(payload.total)
+            : incidents.isError
+              ? "Не удалось загрузить"
+              : "Загрузка…"}
         </p>
         <Button
           type="button"

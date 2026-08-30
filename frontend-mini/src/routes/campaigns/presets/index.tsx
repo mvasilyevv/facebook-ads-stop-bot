@@ -50,7 +50,7 @@ function CampaignPresetsPage() {
   return (
     <div className="flex min-h-full flex-col pb-24">
       <MiniHeader
-        eyebrowNum="05"
+        eyebrowNum="02"
         eyebrow="РЕКЛАМА · ШАБЛОНЫ"
         title="Пресеты"
         right={

@@ -126,7 +126,7 @@ function AdsPage() {
   return (
     <div className="flex flex-col pb-5">
       <MiniHeader
-        eyebrowNum="04"
+        eyebrowNum="02"
         eyebrow="УПРАВЛЕНИЕ"
         title="Объявления"
         right={

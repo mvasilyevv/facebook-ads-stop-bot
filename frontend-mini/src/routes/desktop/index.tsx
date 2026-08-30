@@ -61,7 +61,7 @@ function RemoteDesktopPage() {
   return (
     <div className="flex min-h-full flex-col pb-6">
       <MiniHeader
-        eyebrowNum="05"
+        eyebrowNum="04"
         eyebrow="СИСТЕМА · УДАЛЁННЫЙ ДОСТУП"
         title="Рабочий стол"
       />

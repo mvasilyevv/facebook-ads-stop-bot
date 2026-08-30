@@ -24,6 +24,23 @@ vi.mock("@/lib/tg", () => ({
   hideBackButton: vi.fn(),
 }));
 
+// TabBar рендерится на каждом экране: бейдж читает уже загруженный снимок
+// пассивно (enabled: false), поэтому в тестах достаточно замокать эти два
+// хука, не поднимая ни QueryClientProvider, ни реальный сокет.
+const mockRealtimeStatus = vi.fn(() => "connected");
+const mockPeekOperatorSnapshot = vi.fn(
+  (..._args: unknown[]): { data: unknown } => ({ data: undefined }),
+);
+
+vi.mock("@fb/operator-api", () => ({
+  useOperatorRealtimeStatus: () => mockRealtimeStatus(),
+}));
+
+vi.mock("@/lib/operatorApi", () => ({
+  usePeekOperatorSnapshot: (...args: unknown[]) =>
+    mockPeekOperatorSnapshot(...args),
+}));
+
 import { TabBar } from "@/components/layout/TabBar";
 
 describe("TabBar", () => {
@@ -91,5 +108,63 @@ describe("TabBar", () => {
     render(<TabBar />);
 
     expect(screen.getByLabelText("Ещё")).toHaveAttribute("aria-current", "page");
+  });
+
+  // Бейдж открытых инцидентов на «Действия» — источник: уже загруженный снимок.
+  it("не показывает бейдж, пока снимок ещё не загружен нигде (unknown ≠ 0)", () => {
+    mockLocation.pathname = "/";
+    mockPeekOperatorSnapshot.mockReturnValue({ data: undefined });
+    render(<TabBar />);
+    expect(screen.getByLabelText("Действия")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/открытых инцидентов/)).not.toBeInTheDocument();
+  });
+
+  it("показывает число открытых инцидентов из attention-секции снимка", () => {
+    mockLocation.pathname = "/";
+    mockPeekOperatorSnapshot.mockReturnValue({
+      data: {
+        attention: {
+          state: "ready",
+          data: {
+            items: [
+              { kind: "incident", severity: "warning" },
+              { kind: "incident", severity: "warning" },
+              { kind: "action", severity: "critical" },
+            ],
+          },
+        },
+      },
+    });
+    render(<TabBar />);
+    expect(
+      screen.getByLabelText("Действия, открытых инцидентов: 2"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+  });
+
+  it("не заводит собственный запрос — вызывает peek с enabled: false внутри хука", () => {
+    mockLocation.pathname = "/";
+    mockPeekOperatorSnapshot.mockClear();
+    render(<TabBar />);
+    // Компонент читает кэш через usePeekOperatorSnapshot, а не через
+    // отдельный fetch/useOperatorSnapshot — сам хук уже enabled: false.
+    expect(mockPeekOperatorSnapshot).toHaveBeenCalledWith({ window: "today" });
+  });
+
+  it("красит бейдж в danger, если среди инцидентов есть critical", () => {
+    mockLocation.pathname = "/";
+    mockPeekOperatorSnapshot.mockReturnValue({
+      data: {
+        attention: {
+          state: "ready",
+          data: {
+            items: [{ kind: "incident", severity: "critical" }],
+          },
+        },
+      },
+    });
+    render(<TabBar />);
+    const badge = screen.getByText("1");
+    expect(badge).toHaveStyle({ backgroundColor: "var(--color-danger)" });
   });
 });

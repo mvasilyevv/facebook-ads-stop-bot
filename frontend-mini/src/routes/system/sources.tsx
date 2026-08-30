@@ -39,7 +39,7 @@ function SystemSourcesPage() {
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
     return (
       <div className="flex flex-col">
-        <MiniHeader eyebrow="СИСТЕМА" title="Источники и воркеры" />
+        <MiniHeader eyebrowNum="04" eyebrow="СИСТЕМА" title="Источники и воркеры" />
         <div className="flex flex-col gap-3 p-4" aria-busy="true">
           <Skeleton className="h-24 w-full rounded-[var(--radius-3)]" />
           <Skeleton className="h-48 w-full rounded-[var(--radius-3)]" />
@@ -51,7 +51,7 @@ function SystemSourcesPage() {
   if (snapshotQuery.isError || !snapshotQuery.data) {
     return (
       <div className="flex flex-col">
-        <MiniHeader eyebrow="СИСТЕМА" title="Источники и воркеры" />
+        <MiniHeader eyebrowNum="04" eyebrow="СИСТЕМА" title="Источники и воркеры" />
         <div
           role="alert"
           className="m-4 rounded-[var(--radius-3)] border border-danger/40 bg-danger-bg p-4"
@@ -81,6 +81,7 @@ function SystemSourcesPage() {
   return (
     <div className="flex min-w-0 flex-col pb-20">
       <MiniHeader
+        eyebrowNum="04"
         eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК"
         title="Источники и воркеры"
         right={

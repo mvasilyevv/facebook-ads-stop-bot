@@ -213,7 +213,7 @@ function AnalyticsPage() {
     return (
       <div className="flex min-h-full flex-col pb-20">
         <MiniHeader
-          eyebrowNum="10"
+          eyebrowNum="03"
           eyebrow="META × TRACKER"
           title="Аналитика"
         />
@@ -232,7 +232,7 @@ function AnalyticsPage() {
     return (
       <div className="flex min-h-full flex-col pb-20">
         <MiniHeader
-          eyebrowNum="10"
+          eyebrowNum="03"
           eyebrow="META × TRACKER"
           title="Аналитика"
         />
@@ -256,7 +256,7 @@ function AnalyticsPage() {
   return (
     <div className="flex min-h-full flex-col pb-20">
       <MiniHeader
-        eyebrowNum="10"
+        eyebrowNum="03"
         eyebrow="META × TRACKER"
         title="Аналитика"
         right={

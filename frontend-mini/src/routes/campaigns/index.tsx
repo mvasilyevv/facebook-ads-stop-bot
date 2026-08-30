@@ -21,7 +21,7 @@ function CampaignRunsPage() {
   return (
     <div className="flex min-h-full flex-col pb-20">
       <MiniHeader
-        eyebrowNum="05"
+        eyebrowNum="02"
         eyebrow="РЕКЛАМА · КАМПАНИИ"
         title="Кампании"
         right={

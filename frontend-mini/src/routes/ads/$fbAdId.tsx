@@ -130,7 +130,15 @@ export function MiniAdDetail({ fbAdId }: { fbAdId: string }) {
         </p>
       </header>
 
-      <div className="grid gap-4 px-4 pt-4">
+      <div
+        className="grid gap-4 px-4 pt-4"
+        style={{
+          // Резерв под sticky-кнопку «Отключить»/«Включить»: без него последние
+          // строки «Экономики и воронки» не докручиваются из-под неё.
+          paddingBottom:
+            "calc(84px + var(--tg-content-safe-bottom, env(safe-area-inset-bottom, 0px)))",
+        }}
+      >
         {ad.data_state !== "ready" ? (
           <DataStateNotice state={ad.data_state} compact />
         ) : null}

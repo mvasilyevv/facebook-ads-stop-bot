@@ -33,6 +33,23 @@ export function useOperatorSnapshot(query: OperatorSnapshotQuery = {}) {
   );
 }
 
+/**
+ * Читает уже загруженный снимок из кэша react-query по тому же ключу, что
+ * и `useOperatorSnapshot`, но никогда не инициирует собственный запрос
+ * (`enabled: false`). TabBar рендерится на каждом экране и не должен плодить
+ * сетевой трафик — бейдж просто отражает то, что уже загрузили другие экраны.
+ * Если снимок ещё не загружен нигде, `data` останется `undefined` (unknown,
+ * не подтверждённый ноль).
+ */
+export function usePeekOperatorSnapshot(query: OperatorSnapshotQuery = {}) {
+  return operatorApi.useQuery(
+    "get",
+    "/api/operator/snapshot",
+    { params: { query } },
+    { enabled: false, staleTime: 10_000 },
+  );
+}
+
 export function useOperatorCabinetSnapshot(
   cabinetId: string,
   query: Omit<OperatorSnapshotQuery, "account_id"> = {},

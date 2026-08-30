@@ -119,7 +119,7 @@ function SettingsPage() {
   return (
     <div className="flex min-h-full flex-col pb-[max(96px,var(--tg-content-safe-bottom,0px),env(safe-area-inset-bottom))]">
       <MiniHeader
-        eyebrowNum="05"
+        eyebrowNum="04"
         eyebrow="СИСТЕМА · КОНФИГУРАЦИЯ"
         title="Ещё"
       />

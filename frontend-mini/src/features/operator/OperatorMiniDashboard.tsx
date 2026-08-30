@@ -790,6 +790,10 @@ function MiniActionJournal({
           })}
         </ol>
       )}
+      <Link to="/actions" className="mini-ledger__inline-action mx-4 min-h-11">
+        Все действия
+        <ArrowRight size={14} aria-hidden="true" />
+      </Link>
     </MiniLedgerSection>
   );
 }

@@ -17,7 +17,8 @@ import {
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
-import { useOperatorAction } from "@/lib/operatorApi";
+import { ErrorState } from "@/components/ui";
+import { operatorProblemMessage, useOperatorAction } from "@/lib/operatorApi";
 
 export const Route = createFileRoute("/actions/$actionId")({
   component: MiniActionDetailRoute,
@@ -45,7 +46,16 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
         Загрузка действия…
       </div>
     );
-  if ((query.isError && !projection) || !action)
+  if (query.isError && !projection)
+    return (
+      <div className="p-4">
+        <ErrorState
+          message={operatorProblemMessage(query.error)}
+          onRetry={() => void query.refetch()}
+        />
+      </div>
+    );
+  if (!action)
     return (
       <div
         role="alert"

@@ -176,6 +176,23 @@ describe("TMA incident journal", () => {
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not show 'Загрузка…' together with the error banner (QW8)", () => {
+    useOperatorIncidents.mockReturnValue({
+      data: undefined,
+      isError: true,
+      isPending: false,
+      isFetching: false,
+      error: new Error("boom"),
+      refetch,
+    });
+
+    render(<IncidentsPage />);
+
+    expect(screen.queryByText("Загрузка…")).not.toBeInTheDocument();
+    expect(screen.getByText("Не удалось загрузить")).toBeInTheDocument();
+    expect(screen.getByText("Журнал временно недоступен")).toBeInTheDocument();
+  });
+
   it("offers one-step recovery from an empty filtered journal", () => {
     useOperatorIncidents.mockReturnValue({
       data: {

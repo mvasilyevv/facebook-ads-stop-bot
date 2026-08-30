@@ -14,7 +14,7 @@ function CampaignCreatePage() {
   return (
     <div className="flex min-h-full min-w-0 flex-col">
       <MiniHeader
-        eyebrowNum="05"
+        eyebrowNum="02"
         eyebrow="РЕКЛАМА · СОЗДАНИЕ"
         title="Новая кампания"
         right={
