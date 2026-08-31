@@ -260,6 +260,12 @@ export function applyCampaignPreset(
       placements: [...preset.placements],
       budget_level: preset.budget_level,
       daily_budget: preset.daily_budget ?? state.goal.daily_budget,
+      // Ставка и отображаемая ссылка — не enum-списки вроде genders/placements,
+      // а необязательные значения самого пресета: пустая строка в пресете не
+      // должна затирать то, что оператор уже ввёл вручную для этого запуска.
+      bid_strategy: preset.bid_strategy,
+      bid_amount: preset.bid_amount || state.goal.bid_amount,
+      display_link: preset.display_link || state.goal.display_link,
       naming_template: preset.naming_template ?? "",
       url_tags_template: preset.url_tags_template ?? "",
     },
@@ -718,6 +724,13 @@ export function createCampaignPresetDraft(
   };
 }
 
+/** Совпадает с логикой шага 3 визарда: ставка обязательна только там, где стратегия её требует. */
+function presetBidStrategyNeedsAmount(bidStrategy: CampaignBidStrategy): boolean {
+  return (
+    CAMPAIGN_BID_STRATEGY_OPTIONS.find((option) => option.value === bidStrategy)?.needsBid ?? false
+  );
+}
+
 export function validateCampaignPresetDraft(
   draft: CampaignPresetDraft,
 ): Partial<Record<keyof CampaignPresetDraft, string>> {
@@ -733,7 +746,30 @@ export function validateCampaignPresetDraft(
     maxWhole: 100_000n,
   });
   if (budgetError) errors.daily_budget = budgetError;
+  if (presetBidStrategyNeedsAmount(draft.bid_strategy)) {
+    const bidError = validateMajorAmount(draft.bid_amount, {
+      exponent: 2,
+      label: "целевую ставку",
+    });
+    if (bidError) errors.bid_amount = bidError;
+  }
   return errors;
+}
+
+/**
+ * Пресет без бюджета, гео или обязательной для стратегии ставки не доводит
+ * COST_CAP-залив до готового плана — bid_amount обязателен для COST_CAP так
+ * же, как daily_budget обязателен для любой стратегии (см. validateCampaignGoal).
+ * Работает и на сохранённом PresetOut (бейдж в списке), и на черновике формы.
+ */
+export function campaignPresetIsIncomplete(preset: {
+  daily_budget: string | null;
+  countries: string[];
+  bid_strategy: CampaignBidStrategy;
+  bid_amount: string;
+}): boolean {
+  if (!preset.daily_budget || preset.countries.length === 0) return true;
+  return presetBidStrategyNeedsAmount(preset.bid_strategy) && !preset.bid_amount;
 }
 
 export function campaignPresetPayload(draft: CampaignPresetDraft): CampaignPresetInput {

@@ -1,6 +1,8 @@
 import {
+  CAMPAIGN_BID_STRATEGY_OPTIONS,
   CAMPAIGN_GENDER_OPTIONS,
   CAMPAIGN_PLACEMENT_OPTIONS,
+  campaignPresetIsIncomplete,
   campaignPresetPayload,
   campaignPresetsDataState,
   createCampaignPresetDraft,
@@ -219,7 +221,15 @@ function PresetCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const legacyIncomplete = preset.daily_budget === null;
+  const incomplete = campaignPresetIsIncomplete(preset);
+  const bidStrategyOption = CAMPAIGN_BID_STRATEGY_OPTIONS.find(
+    (option) => option.value === preset.bid_strategy,
+  );
+  const bidValue = bidStrategyOption?.needsBid
+    ? preset.bid_amount
+      ? `${bidStrategyOption.label} · $${preset.bid_amount}`
+      : `${bidStrategyOption.label} · не задана`
+    : (bidStrategyOption?.label ?? "—");
   return (
     <Card>
       <div className="flex items-start justify-between gap-3">
@@ -231,9 +241,9 @@ function PresetCard({
             {preset.daily_budget ?? "не задан"}
           </p>
         </div>
-        {legacyIncomplete ? (
+        {incomplete ? (
           <span className="rounded-[var(--radius-1)] bg-warning/10 px-2 py-1 text-[12px] text-warning">
-            Требует суммы
+            Требует заполнения
           </span>
         ) : null}
       </div>
@@ -243,7 +253,9 @@ function PresetCard({
           label="Плейсменты"
           value={preset.placements.length ? preset.placements.join(", ") : "Авто"}
         />
+        <PresetFact label="Ставка" value={bidValue} />
         <PresetFact label="Оптимизация" value="Purchase" />
+        <PresetFact label="Ссылка" value={preset.display_link || "домен трекинга"} />
         <PresetFact label="URL tags" value={preset.url_tags_template || "Не заданы"} />
       </dl>
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -289,6 +301,9 @@ function PresetEditorSheet({
 
   const patch = (value: Partial<CampaignPresetDraft>) =>
     setDraft((current) => ({ ...current, ...value }));
+  const bidStrategyOption = CAMPAIGN_BID_STRATEGY_OPTIONS.find(
+    (option) => option.value === draft.bid_strategy,
+  );
 
   const submit = async () => {
     const nextErrors = validateCampaignPresetDraft(draft);
@@ -398,6 +413,24 @@ function PresetEditorSheet({
           errorMessage={errors.daily_budget}
           onChange={(event) => patch({ daily_budget: event.target.value })}
         />
+        <Select
+          label="Стратегия ставок"
+          value={draft.bid_strategy}
+          options={CAMPAIGN_BID_STRATEGY_OPTIONS.map(({ value, label }) => ({ value, label }))}
+          onChange={(event) =>
+            patch({ bid_strategy: event.target.value as CampaignPresetDraft["bid_strategy"] })
+          }
+        />
+        {bidStrategyOption?.needsBid ? (
+          <Input
+            label={`${bidStrategyOption.label}, USD`}
+            inputMode="decimal"
+            value={draft.bid_amount}
+            errorMessage={errors.bid_amount}
+            placeholder="5.00"
+            onChange={(event) => patch({ bid_amount: event.target.value })}
+          />
+        ) : null}
         <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 p-3">
           <p className="text-[12px] uppercase tracking-[0.08em] text-bg-9">
             Событие оптимизации пикселя
@@ -407,6 +440,14 @@ function PresetEditorSheet({
             Зафиксировано правилом проекта и не редактируется.
           </p>
         </div>
+        <Input
+          label="Отображаемая ссылка"
+          placeholder="play.ghana.com"
+          value={draft.display_link}
+          errorMessage={errors.display_link}
+          helpText="Пусто — Meta покажет домен трекинг-ссылки"
+          onChange={(event) => patch({ display_link: event.target.value })}
+        />
         <Input
           label="Шаблон нейминга"
           value={draft.naming_template}

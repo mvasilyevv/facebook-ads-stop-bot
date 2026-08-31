@@ -76,6 +76,9 @@ const PRESET = {
   custom_event_type: "PURCHASE" as const,
   budget_level: "campaign" as const,
   daily_budget: "200.00",
+  bid_strategy: "COST_CAP" as const,
+  bid_amount: "5.00",
+  display_link: "play.example.com",
   naming_template: null,
   url_tags_template: null,
   created_at: "2026-08-15T08:00:00Z",
@@ -129,12 +132,17 @@ describe("CampaignPresetsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Женщины" }));
     fireEvent.click(screen.getByRole("button", { name: "Сохранить изменения" }));
 
+    // #347 — ставка и отображаемая ссылка пресета должны доехать до payload
+    // нетронутыми, а не потеряться при открытии/сохранении редактора.
     await waitFor(() =>
       expect(api.update).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "US scale",
           genders: ["female"],
           custom_event_type: "PURCHASE",
+          bid_strategy: "COST_CAP",
+          bid_amount: "5.00",
+          display_link: "play.example.com",
         }),
       ),
     );
@@ -151,8 +159,16 @@ describe("CampaignPresetsPage", () => {
     fireEvent.change(screen.getByLabelText("Дневной бюджет, USD"), {
       target: { value: "150.00" },
     });
+    // Стратегия по умолчанию — COST_CAP, ей нужна ставка (issue #347): без неё
+    // форма не соберётся, как и визард не соберёт COST_CAP-конфиг без bid_amount.
+    fireEvent.change(screen.getByLabelText("Цель по цене за результат, USD"), {
+      target: { value: "5.00" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Создать пресет" }));
     await waitFor(() => expect(api.create).toHaveBeenCalledOnce());
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({ bid_strategy: "COST_CAP", bid_amount: "5.00" }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Удалить US broad" }));
     fireEvent.click(screen.getByRole("button", { name: "Удалить пресет" }));

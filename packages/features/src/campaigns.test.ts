@@ -6,6 +6,7 @@ import {
   aggregateCampaignLaunchState,
   applyCampaignPreset,
   buildCampaignConfig,
+  campaignPresetIsIncomplete,
   campaignPresetPayload,
   campaignLaunchUnits,
   campaignPresetsDataState,
@@ -304,6 +305,9 @@ describe("campaign feature model", () => {
       budget_level: "adset",
       daily_budget: "400.00",
       custom_event_type: "PURCHASE",
+      bid_strategy: "COST_CAP",
+      bid_amount: "5.00",
+      display_link: "play.ghana.com",
     });
     expect(buildCampaignConfig(applied)).toMatchObject({
       daily_budget: "400.00",
@@ -311,7 +315,43 @@ describe("campaign feature model", () => {
       placements: ["facebook", "instagram"],
       naming_template: preset.naming_template,
       url_tags: preset.url_tags_template,
+      bid_strategy: "COST_CAP",
+      bid_amount: "5.00",
+      display_link: "play.ghana.com",
     });
+  });
+
+  it("не затирает уже введённые ставку и отображаемую ссылку пустым значением пресета", () => {
+    let state = readyState();
+    state = campaignWizardReducer(state, {
+      type: "patchGoal",
+      value: { bid_amount: "9.00", display_link: "existing.example.com" },
+    });
+    const preset: CampaignPreset = {
+      id: "preset-2",
+      name: "GH broad",
+      countries: ["GH"],
+      age_min: 21,
+      age_max: 65,
+      genders: [],
+      placements: [],
+      custom_event_type: "PURCHASE",
+      budget_level: "campaign",
+      daily_budget: "150.00",
+      bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+      bid_amount: "",
+      display_link: "",
+      naming_template: null,
+      url_tags_template: null,
+      created_at: "2026-08-15T10:00:00Z",
+      updated_at: "2026-08-15T10:00:00Z",
+    };
+
+    const applied = applyCampaignPreset(state, preset);
+
+    expect(applied.goal.bid_strategy).toBe("LOWEST_COST_WITHOUT_CAP");
+    expect(applied.goal.bid_amount).toBe("9.00");
+    expect(applied.goal.display_link).toBe("existing.example.com");
   });
 
   it("builds a create payload from current wizard values", () => {
@@ -332,6 +372,37 @@ describe("campaign feature model", () => {
     draft.daily_budget = "100000.01";
 
     expect(validateCampaignPresetDraft(draft).daily_budget).toMatch(/Максимум/);
+  });
+
+  it("requires bid_amount only for bid strategies that need a cap", () => {
+    const draft = createCampaignPresetDraft(readyState());
+    draft.name = "Scale";
+    draft.bid_strategy = "COST_CAP";
+    draft.bid_amount = "";
+    expect(validateCampaignPresetDraft(draft).bid_amount).toBeTruthy();
+
+    draft.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+    expect(validateCampaignPresetDraft(draft).bid_amount).toBeUndefined();
+  });
+
+  it("помечает пресет COST_CAP без ставки неполным, а не только по бюджету и гео", () => {
+    const base = {
+      daily_budget: "200.00",
+      countries: ["BR"],
+      bid_strategy: "COST_CAP" as const,
+      bid_amount: "",
+    };
+    expect(campaignPresetIsIncomplete(base)).toBe(true);
+    expect(campaignPresetIsIncomplete({ ...base, bid_amount: "5.00" })).toBe(false);
+    expect(
+      campaignPresetIsIncomplete({ ...base, bid_strategy: "LOWEST_COST_WITHOUT_CAP" }),
+    ).toBe(false);
+    expect(campaignPresetIsIncomplete({ ...base, bid_amount: "5.00", daily_budget: null })).toBe(
+      true,
+    );
+    expect(
+      campaignPresetIsIncomplete({ ...base, bid_amount: "5.00", countries: [] }),
+    ).toBe(true);
   });
 
   it("keeps empty and unavailable preset collections distinct", () => {
