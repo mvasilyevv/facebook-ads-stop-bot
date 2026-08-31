@@ -63,7 +63,7 @@ vi.mock("@/lib/operatorApi", () => ({
   operatorProblemMessage: (error: unknown) => (error instanceof Error ? error.message : "Ошибка"),
 }));
 
-import { OperatorMiniCabinetDashboard } from "@/features/operator/OperatorMiniDashboard";
+import { OperatorMiniCabinetDashboard } from "@/features/operator/OperatorMiniCabinetDashboard";
 
 function makeAd(id: string, overrides: Partial<OperatorAdRow> = {}): OperatorAdRow {
   return {

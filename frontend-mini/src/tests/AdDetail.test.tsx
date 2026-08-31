@@ -66,10 +66,10 @@ vi.mock("@/lib/operatorApi", () => ({
     error instanceof Error ? error.message : "Неизвестная ошибка",
 }));
 
-import { Route } from "@/routes/ads/$fbAdId";
+import { MiniAdDetail } from "@/features/operator/OperatorAdDetail";
 import { MiniOperatorAdCard } from "@/features/operator/OperatorAds";
 
-const AdDetail = (Route as unknown as { component: ComponentType }).component;
+const AdDetail = () => <MiniAdDetail fbAdId={mockFbAdId} />;
 
 function makeAd(overrides: Partial<OperatorAdRow> = {}): OperatorAdRow {
   return {

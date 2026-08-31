@@ -30,15 +30,15 @@ vi.mock("@/lib/tg", () => ({
   getTgStartParam: () => null,
   tgAlert,
 }));
-vi.mock("@/routes/actions/ActionDetailView", () => ({
+vi.mock("@/features/operator/OperatorActionDetail", () => ({
   MiniActionDetail: ({ actionId }: { actionId: string }) => (
     <div>action:{actionId}</div>
   ),
 }));
-vi.mock("@/routes/ads/$fbAdId", () => ({
+vi.mock("@/features/operator/OperatorAdDetail", () => ({
   MiniAdDetail: ({ fbAdId }: { fbAdId: string }) => <div>ad:{fbAdId}</div>,
 }));
-vi.mock("@/routes/incidents/$incidentId", () => ({
+vi.mock("@/features/operator/OperatorIncidentDetail", () => ({
   MiniIncidentDetail: ({ incidentId }: { incidentId: string }) => (
     <div>incident:{incidentId}</div>
   ),
@@ -93,6 +93,28 @@ describe("opaque TMA navigation", () => {
     });
   });
 
+  it.each([
+    ["ad", "ad_stop_001", "ad:ad_stop_001"],
+    ["action", "1842", "action:1842"],
+    ["incident", "incident-51", "incident:incident-51"],
+  ])(
+    "открывает экран цели %s, догрузив его отдельным чанком",
+    async (targetKind, targetId, expected) => {
+      storeResolvedNavigation({
+        target_kind: targetKind as "ad" | "action" | "incident",
+        target_id: targetId,
+      });
+
+      render(<OpaqueTargetPage />);
+
+      // Экран приезжает ленивым чанком: до его загрузки виден скелет, а не пустота.
+      expect(
+        screen.getByRole("status", { name: "Загрузка" }),
+      ).toBeInTheDocument();
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+    },
+  );
+
   it("clears target A while token B resolves and keeps it cleared when B expires", async () => {
     const expiredToken = "zyxwvutsrqponmlkjihgfe";
     let rejectResolution: (reason?: unknown) => void = () => {};
@@ -133,19 +155,5 @@ describe("opaque TMA navigation", () => {
     );
     expect(screen.queryByText("ad:previous-ad-A")).not.toBeInTheDocument();
     expect(tgAlert).toHaveBeenCalledOnce();
-  });
-
-  it("lazily renders the resolved target's detail view behind a Suspense boundary", async () => {
-    storeResolvedNavigation({ target_kind: "action", target_id: "act-9001" });
-
-    render(<OpaqueTargetPage />);
-
-    // Компонент детали грузится динамическим import() (см. open.tsx) —
-    // сразу после рендера доступен только fallback-скелет.
-    expect(screen.getByRole("status", { name: "Загрузка" })).toBeInTheDocument();
-
-    await waitFor(() =>
-      expect(screen.getByText("action:act-9001")).toBeInTheDocument(),
-    );
   });
 });

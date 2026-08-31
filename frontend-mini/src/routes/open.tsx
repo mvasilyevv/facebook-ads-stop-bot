@@ -6,25 +6,23 @@ import {
   readResolvedNavigationState,
   subscribeResolvedNavigation,
 } from "@/lib/transientNavigation";
-import { MiniAdDetail } from "@/routes/ads/$fbAdId";
-import { MiniIncidentDetail } from "@/routes/incidents/$incidentId";
 
-// MiniAdDetail/MiniIncidentDetail — статический импорт: оба тянут
-// @/features/operator/OperatorAds, который и так статически нужен главному
-// экрану (OperatorMiniDashboard). Ленивый chunk для них выходит ДОРОЖЕ по
-// сумме gzip, чем общий поток с уже нужным дашборду кодом (см. отчёт по
-// issue #349) — Rollup вынужден дробить общий код на отдельный чанк со
-// своим сжатием, а не переиспользовать поток entry/дашборда.
-//
-// MiniActionDetail детали не зависит от OperatorAds вообще (только от
-// actionLabels/viewModel), поэтому вынесен в отдельный не-route файл
-// ActionDetailView.tsx (см. routeFileIgnorePattern в vite.config.ts) и
-// грузится по-настоящему лениво — это чистая экономия на первом экране.
-const MiniActionDetail = lazy(() =>
-  import("@/routes/actions/ActionDetailView").then((module) => ({
-    default: module.MiniActionDetail,
-  })),
-);
+// Экран цели грузится по факту разрешения ссылки: до него неизвестно, какой из
+// трёх нужен, а статический импорт всех трёх держал их — вместе с путём команды
+// объявления — в стартовом чанке мини-приложения (issue #349). Сами экраны
+// живут вне `routes/`: пока они лежали в route-файлах, routeTree.gen.ts
+// статически импортировал те же модули, и вынести их не получалось.
+const MiniAdDetail = lazy(async () => ({
+  default: (await import("@/features/operator/OperatorAdDetail")).MiniAdDetail,
+}));
+const MiniActionDetail = lazy(async () => ({
+  default: (await import("@/features/operator/OperatorActionDetail"))
+    .MiniActionDetail,
+}));
+const MiniIncidentDetail = lazy(async () => ({
+  default: (await import("@/features/operator/OperatorIncidentDetail"))
+    .MiniIncidentDetail,
+}));
 
 export const Route = createFileRoute("/open")({ component: OpaqueTargetPage });
 
@@ -56,16 +54,17 @@ export function OpaqueTargetPage() {
     );
   }
   const target = resolution.target;
-  if (target.target_kind === "ad")
-    return <MiniAdDetail fbAdId={target.target_id} />;
-  if (target.target_kind === "action") {
-    return (
-      <Suspense fallback={<OpenTargetSkeleton />}>
+  return (
+    <Suspense fallback={<OpenTargetSkeleton />}>
+      {target.target_kind === "ad" ? (
+        <MiniAdDetail fbAdId={target.target_id} />
+      ) : target.target_kind === "action" ? (
         <MiniActionDetail actionId={target.target_id} />
-      </Suspense>
-    );
-  }
-  return <MiniIncidentDetail incidentId={target.target_id} />;
+      ) : (
+        <MiniIncidentDetail incidentId={target.target_id} />
+      )}
+    </Suspense>
+  );
 }
 
 function OpenTargetSkeleton() {

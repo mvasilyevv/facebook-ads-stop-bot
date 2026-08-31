@@ -12,12 +12,6 @@ const startChunks = findStartChunks(
   options.feature,
 );
 
-if (startChunks.length < 3) {
-  throw new Error(
-    `Could not resolve the entry, index route and ${options.feature} chunks in ${assetsDirectory}`,
-  );
-}
-
 const initialChunks = collectStaticImports(startChunks, assetsDirectory);
 const initialJsBytes = [...initialChunks].reduce(
   (total, filename) => total + gzipSize(path.join(assetsDirectory, filename)),
@@ -56,21 +50,36 @@ if (fontBytes > options.fontBudget) {
 }
 
 function findStartChunks(names, directory, feature) {
+  // Стартовый экран собирается из трёх точек входа. Сколько чанков их несёт —
+  // дело бандлера: он вправе слить их в один, а стартовый маршрут может быть
+  // не вынесен в ленивый чанк вовсе. Проверяется наличие каждой точки, а не
+  // количество файлов, иначе объединение чанков ломает гард.
+  const markers = [
+    "/src/main.tsx",
+    "/src/routes/index.tsx",
+    `/src/features/operator/${feature}`,
+  ];
   const startChunks = new Set();
+  const found = new Set();
   for (const filename of names.filter((name) => name.endsWith(".js.map"))) {
     const map = JSON.parse(
       fs.readFileSync(path.join(directory, filename), "utf8"),
     );
-    if (
-      map.sources.some(
-        (source) =>
-          source.endsWith("/src/main.tsx") ||
-          source.endsWith("/src/routes/index.tsx?tsr-split=component") ||
-          source.endsWith(`/src/features/operator/${feature}`),
-      )
-    ) {
-      startChunks.add(filename.slice(0, -4));
-    }
+    // `?tsr-split=component` — виртуальный модуль TanStack Router для
+    // вынесенного компонента маршрута; для поиска точки входа суффикс не важен.
+    const sources = map.sources.map((source) => source.split("?")[0]);
+    const matched = markers.filter((marker) =>
+      sources.some((source) => source.endsWith(marker)),
+    );
+    if (matched.length === 0) continue;
+    matched.forEach((marker) => found.add(marker));
+    startChunks.add(filename.slice(0, -4));
+  }
+  const missing = markers.filter((marker) => !found.has(marker));
+  if (missing.length > 0) {
+    throw new Error(
+      `Could not resolve start chunks for ${missing.join(", ")} in ${directory}`,
+    );
   }
   return [...startChunks];
 }

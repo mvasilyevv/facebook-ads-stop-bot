@@ -20,8 +20,10 @@ export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) 
     <label
       htmlFor={inputId}
       className={cn(
-        "flex items-center justify-between gap-3 min-h-[44px] cursor-pointer",
-        disabled && "opacity-40 cursor-not-allowed",
+        "flex items-center justify-between gap-3 min-h-[44px]",
+        // Курсор задаётся одним классом: `cursor-pointer` поверх
+        // `cursor-not-allowed` выигрывал бы по порядку правил в CSS.
+        disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
       )}
     >
       {label && (

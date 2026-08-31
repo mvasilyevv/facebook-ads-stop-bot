@@ -54,13 +54,17 @@ export function Input({
         {...rest}
         className={cn(
           "min-h-[44px] px-3 w-full rounded-[var(--radius-2)]",
-          "bg-[var(--color-bg-2)] border border-[var(--color-hairline)]",
+          "bg-[var(--color-bg-2)] border",
           "text-[14px] text-[var(--color-bg-11)] font-body",
           "placeholder:text-[var(--color-bg-8)]",
           "focus:outline-none focus:border-[var(--color-accent)]",
           "disabled:opacity-40 disabled:cursor-not-allowed",
           "transition-colors duration-[var(--dur-base)]",
-          errorMessage && "border-[var(--color-danger)]",
+          // Один класс цвета рамки на состояние: два конкурирующих решались бы
+          // порядком правил в CSS, и ошибка проиграла бы обычной рамке.
+          errorMessage
+            ? "border-[var(--color-danger)]"
+            : "border-[var(--color-hairline)]",
           className,
         )}
       />

@@ -1,7 +1,3 @@
-// Не route-файл: исключён из генерации маршрутов через
-// routeFileIgnorePattern в vite.config.ts (см. AdDetailView.tsx рядом).
-// Вынесен из $actionId.tsx, чтобы /open (routes/open.tsx) мог лениво
-// импортировать именно этот модуль отдельно от route-регистрации.
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 
@@ -25,6 +21,10 @@ import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { ErrorState } from "@/components/ui";
 import { operatorProblemMessage, useOperatorAction } from "@/lib/operatorApi";
 
+/**
+ * Экран действия: маршрут `/actions/$actionId` и deep-link `/open` открывают
+ * один и тот же компонент, поэтому он живёт вне `routes/` (issue #349).
+ */
 export function MiniActionDetail({ actionId }: { actionId: string }) {
   const realtimeStatus = useOperatorRealtimeStatus();
   const query = useOperatorAction(actionId);

@@ -17,16 +17,15 @@ export default defineConfig({
       generatedRouteTree: "./src/routeTree.gen.ts",
       // Code-splitting только для прод-сборки (см. frontend/vite.config.ts).
       autoCodeSplitting: !process.env.VITEST,
-      // Компоненты шагов визарда и вспомогательные файлы — не роуты.
-      // ActionDetailView колокирован с $actionId, чтобы /open мог лениво
-      // импортировать его напрямую (см. open.tsx) — иначе Rollup не может
-      // вынести компонент в отдельный чанк, если тот же файл уже статически
-      // импортирован routeTree.gen.ts как route. MiniAdDetail/MiniIncidentDetail
-      // остались внутри $fbAdId.tsx/$incidentId.tsx и импортируются в /open
-      // статически: они всё равно тянут OperatorAds, уже нужный дашборду, и
-      // отдельный ленивый чанк для них обходится бюджету дороже, чем общий
-      // поток (см. комментарий в open.tsx).
-      routeFileIgnorePattern: "^(Step|RunsHistory|ActionDetailView)",
+      // Компоненты шагов визарда и вспомогательные файлы — не роуты
+      routeFileIgnorePattern: "^(Step|RunsHistory)",
+      codeSplittingOptions: {
+        // Стартовый экран «/» не выносится в ленивый чанк: он нужен всегда, а
+        // отдельным файлом стоил лишнего запроса вдогонку к entry и хуже жался
+        // gzip-ом (issue #349). Вход по deep-link `/open` из-за этого забирает
+        // код дашборда, которым не пользуется, — около 4 КБ gzip.
+        splitBehavior: ({ routeId }) => (routeId === "/" ? [] : undefined),
+      },
     }),
     react(),
     tailwindcss(),

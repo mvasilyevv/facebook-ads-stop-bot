@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { MiniActionDetail } from "@/routes/actions/ActionDetailView";
+import { MiniActionDetail } from "@/features/operator/OperatorActionDetail";
 
 export const Route = createFileRoute("/actions/$actionId")({
   component: MiniActionDetailRoute,
