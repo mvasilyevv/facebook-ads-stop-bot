@@ -183,14 +183,25 @@ function EventRow({
         {ruleCodes.length > 0 ? <RulePill code={ruleCodes[0]!} /> : null}
       </div>
       {alert && onAlertClick ? (
-        <button
-          type="button"
-          onClick={() => onAlertClick(alert)}
-          className="inline-flex min-h-11 items-center rounded-[var(--radius-1)] px-3 font-display text-[12px] text-accent transition-colors hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
-          aria-label={`Подробнее о событии ${title}`}
-        >
-          Подробнее
-        </button>
+        alert.fb_ad_id ? (
+          <button
+            type="button"
+            onClick={() => onAlertClick(alert)}
+            className="inline-flex min-h-11 items-center rounded-[var(--radius-1)] px-3 font-display text-[12px] text-accent transition-colors hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            aria-label={`Открыть карточку объявления: ${title}`}
+          >
+            Открыть объявление
+          </button>
+        ) : (
+          // Событие не привязано к объявлению — переход на карточку невозможен.
+          // Явный неактивный статус вместо тихого no-op на клик.
+          <span
+            className="inline-flex min-h-11 items-center px-3 font-display text-[12px] text-bg-9"
+            title="Событие не связано с объявлением"
+          >
+            Без объявления
+          </span>
+        )
       ) : (
         <ChevronRight size={14} className="shrink-0 text-bg-9" aria-hidden="true" />
       )}

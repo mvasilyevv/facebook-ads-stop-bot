@@ -1,14 +1,19 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Suspense, lazy } from "react";
 import {
   safeApiProblemMessage,
   useOperatorRealtimeStatus,
 } from "@fb/operator-api";
 import type { AnalyticsPerformance } from "@fb/shared";
-import { ANALYTICS_PRESETS } from "@fb/shared/analytics/presentation";
+import {
+  ANALYTICS_PRESETS,
+  ANALYTICS_SECTIONS,
+} from "@fb/shared/analytics/presentation";
 import {
   parseAnalyticsRouteSearch,
   type AnalyticsPreset,
   type AnalyticsRouteSearch,
+  type AnalyticsSection,
   type AnalyticsSort,
 } from "@fb/shared/analytics/routeState";
 import type { components } from "@fb/shared/api/generated";
@@ -45,15 +50,7 @@ import {
   useTmaAnalyticsPerformance,
 } from "@/features/analytics/api";
 import { useOperatorDisplayPreference } from "@/lib/settingsApi";
-import {
-  FunnelSummary,
-  LiveBudgetChart,
-} from "@/features/analytics/AnalyticsMiniCharts";
-import {
-  AnalyticsStateNotice,
-  DaypartDayChart,
-} from "@/features/analytics/DaypartDayChart";
-import { PerformanceCards } from "@/features/analytics/PerformanceCards";
+import { AnalyticsStateNotice } from "@/features/analytics/AnalyticsStateNotice";
 import {
   ANALYTICS_PERIODS,
   formatFreshness,
@@ -62,10 +59,39 @@ import {
   type AnalyticsPeriod,
 } from "@/features/analytics/viewModel";
 
+// Каждый блок тяжёлый (SVG-график + собственная интерактивная логика) и
+// нужен только тогда, когда оператор реально смотрит соответствующий раздел
+// — до этого момента чанк не грузится вовсе. Это также снижает основной
+// JS-бандл мини-приложения, у которого почти не осталось запаса бюджета.
+const LiveBudgetChart = lazy(() =>
+  import("@/features/analytics/AnalyticsMiniCharts").then((mod) => ({
+    default: mod.LiveBudgetChart,
+  })),
+);
+const FunnelSummary = lazy(() =>
+  import("@/features/analytics/AnalyticsMiniCharts").then((mod) => ({
+    default: mod.FunnelSummary,
+  })),
+);
+const DaypartDayChart = lazy(() =>
+  import("@/features/analytics/DaypartDayChart").then((mod) => ({
+    default: mod.DaypartDayChart,
+  })),
+);
+const PerformanceCards = lazy(() =>
+  import("@/features/analytics/PerformanceCards").then((mod) => ({
+    default: mod.PerformanceCards,
+  })),
+);
+
 export const Route = createFileRoute("/analytics/")({
   component: AnalyticsPage,
   validateSearch: parseAnalyticsRouteSearch,
 });
+
+function ChartFallback({ className = "h-56" }: { className?: string }) {
+  return <Skeleton className={cn("w-full", className)} />;
+}
 
 const ANALYTICS_SORT_OPTIONS: Array<{
   value: AnalyticsSort;
@@ -187,6 +213,14 @@ function AnalyticsPage() {
       search: (previous) => ({ ...previous, ...patch }),
       replace: true,
     });
+  };
+
+  // Раздел живёт в URL как ?section= (тот же ключ, что и на вебе), так что
+  // ссылка на конкретный график открывает тот же раздел, а переключение не
+  // трогает период и фильтры.
+  const selectSection = (section: AnalyticsSection) => {
+    haptic.selection();
+    patchSearch({ section });
   };
 
   const selectPeriod = (next: AnalyticsPeriod) => {
@@ -338,138 +372,183 @@ function AnalyticsPage() {
               state={overallState}
               period={search.period}
             />
+            <StickyTotalsBar data={performanceData} state={overallState} />
 
-            {search.period === "today" ? (
-              <section aria-labelledby="live-budget-title">
+            <AnalyticsSectionNav
+              value={search.section}
+              onChange={selectSection}
+            />
+
+            {search.section === "summary" ? (
+              <div
+                id="analytics-section-panel-summary"
+                role="region"
+                aria-labelledby="analytics-section-summary"
+                className="rounded-[var(--radius-2)] border border-dashed border-[var(--color-hairline)] px-4 py-6 text-center text-[13px] leading-5 text-bg-8"
+              >
+                Общая сводка периода — выше. Переключитесь на «Динамику»,
+                «Воронку» или «Результаты», чтобы увидеть график.
+              </div>
+            ) : null}
+
+            {search.section === "dynamics" ? (
+              <div
+                id="analytics-section-panel-dynamics"
+                role="region"
+                aria-labelledby="analytics-section-dynamics"
+                className="grid gap-4"
+              >
+                {search.period === "today" ? (
+                  <section aria-labelledby="live-budget-title">
+                    <h2
+                      id="live-budget-title"
+                      className="m-0 mb-3 font-display text-[18px] font-semibold text-bg-11"
+                    >
+                      Факт / база / stop
+                    </h2>
+                    {liveBudgetQ.isPending && !liveBudgetData ? (
+                      <Skeleton className="h-80 w-full" />
+                    ) : liveBudgetData ? (
+                      <Suspense fallback={<ChartFallback className="h-80" />}>
+                        <LiveBudgetChart
+                          performance={performanceData}
+                          series={liveBudgetData}
+                          completeness={liveBudgetState}
+                          timezone={displayTimeZone}
+                          currency={commonCurrency(
+                            performanceData.scope,
+                            liveBudgetData.scope,
+                          )}
+                        />
+                      </Suspense>
+                    ) : (
+                      <Card padding="sm" data-state="unavailable">
+                        <AnalyticsStateNotice
+                          state="unavailable"
+                          issue={`${operatorProblemMessage(liveBudgetQ.error)}. Линии расхода и порогов скрыты.`}
+                          testId="live-budget-state"
+                        />
+                      </Card>
+                    )}
+                  </section>
+                ) : null}
+
+                <section aria-labelledby="daypart-title">
+                  <div className="mb-3">
+                    <p className="m-0 font-display text-[12px] uppercase tracking-[0.08em] text-bg-8">
+                      Выбранный день × 24 часа
+                    </p>
+                    <h2
+                      id="daypart-title"
+                      className="m-0 mt-1 font-display text-[18px] font-semibold text-bg-11"
+                    >
+                      Когда трафик конвертит
+                    </h2>
+                  </div>
+                  <Card padding="sm">
+                    {daypartQ.isPending && !daypartData ? (
+                      <div
+                        role="status"
+                        aria-label="Загрузка почасовых данных"
+                        className="grid gap-3 p-1"
+                      >
+                        <Skeleton className="h-11" />
+                        <Skeleton className="h-52" />
+                      </div>
+                    ) : daypartQ.isError ? (
+                      <div data-state="unavailable">
+                        <AnalyticsStateNotice
+                          state="unavailable"
+                          issue={`${operatorProblemMessage(daypartQ.error)}. Почасовые значения скрыты.`}
+                          testId="daypart-state"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          fullWidth
+                          className="mt-3"
+                          onClick={() => void daypartQ.refetch()}
+                        >
+                          Повторить
+                        </Button>
+                      </div>
+                    ) : daypartData ? (
+                      <Suspense fallback={<ChartFallback className="h-64" />}>
+                        <DaypartDayChart data={daypartData} state={daypartState} />
+                      </Suspense>
+                    ) : (
+                      <AnalyticsStateNotice
+                        state="unavailable"
+                        issue="Почасовой источник не подтвердил данные для выбранного окна."
+                        testId="daypart-state"
+                      />
+                    )}
+                  </Card>
+                </section>
+              </div>
+            ) : null}
+
+            {search.section === "funnel" ? (
+              <section
+                id="analytics-section-panel-funnel"
+                aria-labelledby="funnel-title"
+              >
                 <h2
-                  id="live-budget-title"
+                  id="funnel-title"
                   className="m-0 mb-3 font-display text-[18px] font-semibold text-bg-11"
                 >
-                  Факт / база / stop
+                  Воронка
                 </h2>
-                {liveBudgetQ.isPending && !liveBudgetData ? (
-                  <Skeleton className="h-80 w-full" />
-                ) : liveBudgetData ? (
-                  <LiveBudgetChart
+                <Suspense fallback={<ChartFallback />}>
+                  <FunnelSummary
                     performance={performanceData}
-                    series={liveBudgetData}
-                    completeness={liveBudgetState}
+                    completeness={overallState}
                     timezone={displayTimeZone}
-                    currency={commonCurrency(
-                      performanceData.scope,
-                      liveBudgetData.scope,
-                    )}
+                    currency={confirmedCurrency(performanceData.scope)}
                   />
-                ) : (
-                  <Card padding="sm" data-state="unavailable">
-                    <AnalyticsStateNotice
-                      state="unavailable"
-                      issue={`${operatorProblemMessage(liveBudgetQ.error)}. Линии расхода и порогов скрыты.`}
-                      testId="live-budget-state"
-                    />
-                  </Card>
-                )}
+                </Suspense>
               </section>
             ) : null}
 
-            <section aria-labelledby="funnel-title">
-              <h2
-                id="funnel-title"
-                className="m-0 mb-3 font-display text-[18px] font-semibold text-bg-11"
+            {search.section === "results" ? (
+              <section
+                id="analytics-section-panel-results"
+                aria-labelledby="campaign-performance-title"
               >
-                Воронка
-              </h2>
-              <FunnelSummary
-                performance={performanceData}
-                completeness={overallState}
-                timezone={displayTimeZone}
-                currency={confirmedCurrency(performanceData.scope)}
-              />
-            </section>
-
-            <section aria-labelledby="campaign-performance-title">
-              <div className="mb-3 flex items-end justify-between gap-3">
-                <h2
-                  id="campaign-performance-title"
-                  className="m-0 font-display text-[18px] font-semibold text-bg-11"
-                >
-                  Кампании
-                </h2>
-                <span className="text-[12px] text-bg-8">
-                  {overallState === "ready" || overallState === "empty"
-                    ? `${performanceData.pagination.total} строк`
-                    : "Количество не подтверждено"}
-                </span>
-              </div>
-              <AnalyticsPresetControl
-                value={search.preset}
-                onChange={(preset) => patchSearch({ preset, page: 1 })}
-              />
-              <PerformanceCards
-                rows={performanceData.rows}
-                parentState={overallState}
-                period={search.period}
-                preset={search.preset}
-                currency={confirmedCurrency(performanceData.scope)}
-                onFocusCampaign={focusCampaign}
-              />
-              <Pagination
-                page={performanceData.pagination.page}
-                pages={performanceData.pagination.pages}
-                onPage={(page) => patchSearch({ page })}
-              />
-            </section>
-
-            <section aria-labelledby="daypart-title">
-              <div className="mb-3">
-                <p className="m-0 font-display text-[12px] uppercase tracking-[0.08em] text-bg-8">
-                  Выбранный день × 24 часа
-                </p>
-                <h2
-                  id="daypart-title"
-                  className="m-0 mt-1 font-display text-[18px] font-semibold text-bg-11"
-                >
-                  Когда трафик конвертит
-                </h2>
-              </div>
-              <Card padding="sm">
-                {daypartQ.isPending && !daypartData ? (
-                  <div
-                    role="status"
-                    aria-label="Загрузка почасовых данных"
-                    className="grid gap-3 p-1"
+                <div className="mb-3 flex items-end justify-between gap-3">
+                  <h2
+                    id="campaign-performance-title"
+                    className="m-0 font-display text-[18px] font-semibold text-bg-11"
                   >
-                    <Skeleton className="h-11" />
-                    <Skeleton className="h-52" />
-                  </div>
-                ) : daypartQ.isError ? (
-                  <div data-state="unavailable">
-                    <AnalyticsStateNotice
-                      state="unavailable"
-                      issue={`${operatorProblemMessage(daypartQ.error)}. Почасовые значения скрыты.`}
-                      testId="daypart-state"
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      fullWidth
-                      className="mt-3"
-                      onClick={() => void daypartQ.refetch()}
-                    >
-                      Повторить
-                    </Button>
-                  </div>
-                ) : daypartData ? (
-                  <DaypartDayChart data={daypartData} state={daypartState} />
-                ) : (
-                  <AnalyticsStateNotice
-                    state="unavailable"
-                    issue="Почасовой источник не подтвердил данные для выбранного окна."
-                    testId="daypart-state"
+                    Кампании
+                  </h2>
+                  <span className="text-[12px] text-bg-8">
+                    {overallState === "ready" || overallState === "empty"
+                      ? `${performanceData.pagination.total} строк`
+                      : "Количество не подтверждено"}
+                  </span>
+                </div>
+                <AnalyticsPresetControl
+                  value={search.preset}
+                  onChange={(preset) => patchSearch({ preset, page: 1 })}
+                />
+                <Suspense fallback={<ChartFallback className="h-96" />}>
+                  <PerformanceCards
+                    rows={performanceData.rows}
+                    parentState={overallState}
+                    period={search.period}
+                    preset={search.preset}
+                    currency={confirmedCurrency(performanceData.scope)}
+                    onFocusCampaign={focusCampaign}
                   />
-                )}
-              </Card>
-            </section>
+                </Suspense>
+                <Pagination
+                  page={performanceData.pagination.page}
+                  pages={performanceData.pagination.pages}
+                  onPage={(page) => patchSearch({ page })}
+                />
+              </section>
+            ) : null}
 
             <AnalyticsEvents
               items={eventsQ.data}
@@ -655,6 +734,98 @@ function AnalyticsFiltersPanel({
         </div>
       </details>
     </Card>
+  );
+}
+
+function AnalyticsSectionNav({
+  value,
+  onChange,
+}: {
+  value: AnalyticsSection;
+  onChange: (section: AnalyticsSection) => void;
+}) {
+  return (
+    <div
+      className="grid grid-cols-4 gap-2"
+      role="group"
+      aria-label="Раздел заливов"
+    >
+      {ANALYTICS_SECTIONS.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          id={`analytics-section-${item.value}`}
+          aria-label={`Раздел: ${item.label}`}
+          aria-pressed={value === item.value}
+          aria-controls={`analytics-section-panel-${item.value}`}
+          onClick={() => onChange(item.value)}
+          className={cn(
+            "min-h-11 rounded-[var(--radius-2)] border px-2 text-[13px] font-semibold",
+            value === item.value
+              ? "border-accent bg-accent text-bg-0"
+              : "border-[var(--color-hairline-strong)] bg-bg-2 text-bg-9",
+          )}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Компактная закреплённая полоска «Итога окна». Полная карточка остаётся в
+ * потоке страницы; эта — залипает под верхним safe-area отступом, пока
+ * оператор листает «Динамику»/«Воронку»/«Результаты»/«События», и не
+ * перекрывает нижний TabBar (он зафиксирован снизу, эта полоска — сверху).
+ */
+function StickyTotalsBar({
+  data,
+  state,
+}: {
+  data: AnalyticsPerformance;
+  state: DataState;
+}) {
+  const visible = state !== "unavailable";
+  const currency = confirmedCurrency(data.scope);
+  return (
+    <div
+      role="status"
+      aria-label="Итог окна, закреплено при прокрутке"
+      data-testid="analytics-sticky-totals"
+      data-state={state}
+      className="sticky z-20 flex items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1/95 px-3 py-2 backdrop-blur"
+      style={{
+        top: "var(--tg-content-safe-top, env(safe-area-inset-top, 0px))",
+      }}
+    >
+      <StickyMetric
+        label="Расход"
+        value={visible ? formatSpend(data.totals.spend, currency) : "—"}
+      />
+      <StickyMetric
+        label="Клики"
+        value={visible ? formatInt(data.totals.clicks) : "—"}
+      />
+      <StickyMetric
+        label="CPA"
+        value={visible ? formatSpend(data.totals.cost_per_ftd, currency) : "—"}
+      />
+      <DataStateBadge state={state} compact />
+    </div>
+  );
+}
+
+function StickyMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-[12px] uppercase tracking-[0.04em] text-bg-8">
+        {label}
+      </div>
+      <div className="truncate font-display text-[13px] tabular-nums text-bg-11">
+        {value}
+      </div>
+    </div>
   );
 }
 

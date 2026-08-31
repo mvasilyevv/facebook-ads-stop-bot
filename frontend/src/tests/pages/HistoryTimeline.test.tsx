@@ -57,7 +57,33 @@ describe("HistoryTimeline", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /подробнее/i }));
+    await userEvent.click(screen.getByRole("button", { name: /открыть карточку объявления/i }));
     expect(onAlertClick).toHaveBeenCalledWith(timeline[0]);
+  });
+
+  it("явно помечает алерт без fb_ad_id как несвязанный вместо тихого no-op", () => {
+    const onAlertClick = vi.fn();
+    const orphanAlert: HistoryTimelineItem = {
+      event_type: "alert",
+      ts: "2026-05-15T14:32:00Z",
+      fb_ad_id: null,
+      ad_name: null,
+      campaign_name: "Test Campaign",
+      stage: "warning",
+      rule_codes: ["cpl_warning"],
+      task_type: null,
+      task_status: null,
+    };
+    render(
+      <HistoryTimeline
+        items={[orphanAlert]}
+        isLoading={false}
+        error={null}
+        onAlertClick={onAlertClick}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /открыть карточку объявления/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Без объявления")).toBeInTheDocument();
   });
 });

@@ -16,6 +16,7 @@ const useOperatorDisplayPreference = vi.fn();
 const routeSearch = {
   tab: "uploads" as "uploads" | "events",
   period: "today" as const,
+  section: "summary" as "summary" | "dynamics" | "funnel" | "results",
   preset: "economy" as const,
   sort: "spend" as const,
   direction: "desc" as const,
@@ -58,6 +59,7 @@ describe("analytics route fail-closed state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     routeSearch.tab = "uploads";
+    routeSearch.section = "summary";
     useOperatorRealtimeStatus.mockReturnValue("connected");
     useOperatorEvents.mockReturnValue({
       data: [],
@@ -103,7 +105,7 @@ describe("analytics route fail-closed state", () => {
 
     render(<AnalyticsPage />);
 
-    expect(screen.getAllByText("Устарело").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-tone="stale"]').length).toBeGreaterThan(0);
     expect(screen.getAllByText("снимок устарел")).toHaveLength(2);
     expect(screen.getByText(/снимок устарел · Europe\/Kaliningrad/)).toBeInTheDocument();
     expect(document.querySelectorAll('[data-source-status="good"]')).toHaveLength(0);
@@ -169,6 +171,111 @@ describe("analytics route fail-closed state", () => {
     expect(periodGroup).toContainElement(screen.getByRole("button", { name: "Сегодня" }));
   });
 
+  it("restores the selected analytics section from the URL and mounts only its chart group", () => {
+    routeSearch.section = "results";
+    useAnalyticsPerformance.mockReturnValue({
+      data: makeAnalyticsPerformanceFixture(),
+      isLoading: false,
+      isFetching: false,
+      isPlaceholderData: false,
+      isError: false,
+      error: null,
+      refetch,
+    });
+
+    render(<AnalyticsPage />);
+
+    expect(screen.getByRole("button", { name: "Раздел: Результаты" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("Результат по заливам")).toBeInTheDocument();
+    expect(screen.queryByText("Факт / база / stop")).not.toBeInTheDocument();
+  });
+
+  it("keeps every other section's heavy chart unmounted until an operator selects it", () => {
+    useAnalyticsPerformance.mockReturnValue({
+      data: makeAnalyticsPerformanceFixture(),
+      isLoading: false,
+      isFetching: false,
+      isPlaceholderData: false,
+      isError: false,
+      error: null,
+      refetch,
+    });
+
+    render(<AnalyticsPage />);
+
+    // Раздел по умолчанию — «Сводка»: ни один тяжёлый график не смонтирован.
+    expect(screen.getByRole("button", { name: "Раздел: Сводка" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByText("Факт / база / stop")).not.toBeInTheDocument();
+    expect(screen.queryByText("Результат по заливам")).not.toBeInTheDocument();
+    expect(screen.queryByText("Meta → AdSet.pro")).not.toBeInTheDocument();
+  });
+
+  it("switching the analytics section keeps filters and period untouched", async () => {
+    useAnalyticsPerformance.mockReturnValue({
+      data: makeAnalyticsPerformanceFixture(),
+      isLoading: false,
+      isFetching: false,
+      isPlaceholderData: false,
+      isError: false,
+      error: null,
+      refetch,
+    });
+
+    render(<AnalyticsPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Раздел: Результаты" }));
+
+    const call = navigate.mock.calls.find(
+      (args: unknown[]) => typeof (args[0] as { search?: unknown })?.search === "function",
+    );
+    expect(call).toBeDefined();
+    const previous = { ...routeSearch, account_id: "act_9", page: 3 };
+    const next = (call![0] as { search: (prev: typeof previous) => unknown }).search(previous);
+    expect(next).toEqual(
+      expect.objectContaining({ account_id: "act_9", page: 3, section: "results" }),
+    );
+  });
+
+  it("opens the ad detail route when an alert event has a linked ad, preserving back navigation", async () => {
+    routeSearch.tab = "events";
+    useOperatorEvents.mockReturnValue({
+      data: [
+        {
+          event_type: "alert",
+          ts: "2026-08-09T10:00:00Z",
+          fb_ad_id: "120001",
+          ad_name: "Campaign Alpha Ad",
+          campaign_name: "Campaign Alpha",
+          stage: "stop",
+          rule_codes: ["cpl_stop"],
+          task_type: null,
+          task_status: null,
+        },
+      ],
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<AnalyticsPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /открыть карточку объявления/i }));
+
+    // Обычный push (не replace/setSearch): назад возвращает на аналитику
+    // с прежним состоянием фильтров, как и на остальных экранах.
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/ads/$fbAdId",
+      params: { fbAdId: "120001" },
+    });
+  });
+
   it("keeps a mounted analytics refetch stale even after the socket is connected", () => {
     useAnalyticsPerformance.mockReturnValue({
       data: makeAnalyticsPerformanceFixture(),
@@ -182,7 +289,7 @@ describe("analytics route fail-closed state", () => {
 
     render(<AnalyticsPage />);
 
-    expect(screen.getAllByText("Устарело").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-tone="stale"]').length).toBeGreaterThan(0);
     expect(document.querySelectorAll('[data-source-status="good"]')).toHaveLength(0);
   });
 
@@ -274,7 +381,7 @@ describe("analytics route fail-closed state", () => {
 
     render(<AnalyticsPage />);
 
-    expect(screen.getAllByText("Устарело").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-tone="stale"]').length).toBeGreaterThan(0);
     expect(document.querySelectorAll('[data-source-status="good"]')).toHaveLength(0);
     expect(document.querySelectorAll('[data-source-status="unknown"]')).toHaveLength(5);
   });
