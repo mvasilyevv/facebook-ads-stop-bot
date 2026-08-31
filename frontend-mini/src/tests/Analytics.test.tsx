@@ -173,8 +173,10 @@ describe("mobile performance analytics", () => {
     );
   });
 
-  it("renders live thresholds in the Динамика section", async () => {
-    routeSearch.section = "dynamics";
+  it("renders live thresholds in the Сводка section", async () => {
+    // Money-график виден сразу на дефолтном разделе — ради него аналитику и
+    // открывают, поэтому он не спрятан за переключением на «Динамику».
+    routeSearch.section = "summary";
     render(<AnalyticsPage />);
 
     expect(
@@ -231,15 +233,17 @@ describe("mobile performance analytics", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("mounts no heavy chart for the default Сводка section", () => {
+  it("shows only the money chart on the default Сводка section, others stay unmounted", async () => {
     render(<AnalyticsPage />);
 
     expect(
       screen.getByRole("button", { name: "Раздел: Сводка" }),
     ).toHaveAttribute("aria-pressed", "true");
+    // Money-график (расход/база/stop) виден сразу — ради него аналитику и
+    // открывают. Воронка и результаты остаются несмонтированными.
     expect(
-      screen.queryByRole("heading", { name: "Накопительный расход" }),
-    ).not.toBeInTheDocument();
+      await screen.findByRole("heading", { name: "Накопительный расход" }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Воронка", level: 2 }),
     ).not.toBeInTheDocument();
@@ -497,7 +501,7 @@ describe("mobile performance analytics", () => {
       "валюта не USD · денежные итоги скрыты",
     );
 
-    routeSearch.section = "dynamics";
+    routeSearch.section = "summary";
     rerender(<AnalyticsPage />);
     const liveBudget = (
       await screen.findByRole("heading", { name: "Накопительный расход" })
@@ -704,7 +708,7 @@ describe("mobile performance analytics", () => {
       queryResult(unavailable, liveBudgetRefetch),
     );
 
-    routeSearch.section = "dynamics";
+    routeSearch.section = "summary";
     render(<AnalyticsPage />);
 
     const heading = await screen.findByRole("heading", {

@@ -494,20 +494,11 @@ function UploadsView({
           id="analytics-section-panel-summary"
           role="region"
           aria-labelledby="analytics-section-summary"
-          className="rounded-[var(--radius-3)] border border-dashed border-[var(--color-hairline)] px-5 py-6 text-center text-[14px] text-bg-8"
         >
-          Общая сводка периода — выше. Переключитесь на «Динамику», «Воронку» или «Результаты»,
-          чтобы увидеть соответствующий график.
-        </div>
-      ) : null}
-
-      {section === "dynamics" ? (
-        <div
-          id="analytics-section-panel-dynamics"
-          role="region"
-          aria-labelledby="analytics-section-dynamics"
-          className="flex flex-col gap-5"
-        >
+          {/* Расход/база/stop — главный money-график: ради него аналитику и
+              открывают, поэтому он виден сразу на «Сводке», а не спрятан за
+              переключением раздела. Остальные графики (когда трафик
+              конвертит, воронка, результаты) остаются ленивыми. */}
           <Card padded className="min-w-0 p-5">
             <SectionHeader
               title={period === "today" ? "Факт / база / stop" : "Экономика периода"}
@@ -544,8 +535,21 @@ function UploadsView({
               </div>
             )}
           </Card>
+        </div>
+      ) : null}
 
-          {period !== "today" && daypartQ.isError ? (
+      {section === "dynamics" ? (
+        <div
+          id="analytics-section-panel-dynamics"
+          role="region"
+          aria-labelledby="analytics-section-dynamics"
+          className="flex flex-col gap-5"
+        >
+          {period === "today" ? (
+            <div className="rounded-[var(--radius-3)] border border-dashed border-[var(--color-hairline)] px-5 py-6 text-center text-[14px] text-bg-8">
+              Почасовое распределение доступно для периода от 7 дней и не строится за «Сегодня».
+            </div>
+          ) : daypartQ.isError ? (
             <Card padded className="p-5">
               <ErrorState
                 title="Почасовое распределение недоступно. Неподтверждённые ячейки скрыты."
@@ -556,7 +560,7 @@ function UploadsView({
                 onRetry={() => void daypartQ.refetch()}
               />
             </Card>
-          ) : period !== "today" && daypartQ.data ? (
+          ) : daypartQ.data ? (
             <Card padded className="p-5">
               <SectionHeader
                 title="Когда трафик конвертит"
@@ -566,7 +570,13 @@ function UploadsView({
                 <DaypartHeatmap data={daypartQ.data} parentState={daypartParentState} />
               </Suspense>
             </Card>
-          ) : null}
+          ) : (
+            // Запрос ещё не подтвердил данные (загрузка или период короче
+            // 7 дней) — честный скелет вместо пустой панели.
+            <Card padded className="p-5">
+              <ChartFallback height={320} />
+            </Card>
+          )}
         </div>
       ) : null}
 

@@ -384,20 +384,10 @@ function AnalyticsPage() {
                 id="analytics-section-panel-summary"
                 role="region"
                 aria-labelledby="analytics-section-summary"
-                className="rounded-[var(--radius-2)] border border-dashed border-[var(--color-hairline)] px-4 py-6 text-center text-[13px] leading-5 text-bg-8"
               >
-                Общая сводка периода — выше. Переключитесь на «Динамику»,
-                «Воронку» или «Результаты», чтобы увидеть график.
-              </div>
-            ) : null}
-
-            {search.section === "dynamics" ? (
-              <div
-                id="analytics-section-panel-dynamics"
-                role="region"
-                aria-labelledby="analytics-section-dynamics"
-                className="grid gap-4"
-              >
+                {/* Факт/база/stop — главный money-график: ради него
+                    аналитику и открывают, поэтому он на «Сводке» сразу, а не
+                    спрятан за переключением раздела. */}
                 {search.period === "today" ? (
                   <section aria-labelledby="live-budget-title">
                     <h2
@@ -431,8 +421,23 @@ function AnalyticsPage() {
                       </Card>
                     )}
                   </section>
-                ) : null}
+                ) : (
+                  <div className="rounded-[var(--radius-2)] border border-dashed border-[var(--color-hairline)] px-4 py-6 text-center text-[13px] leading-5 text-bg-8">
+                    Исторический budget delta скрыт: правила оффера не
+                    версионируются, поэтому пересчёт задним числом был бы
+                    недостоверным.
+                  </div>
+                )}
+              </div>
+            ) : null}
 
+            {search.section === "dynamics" ? (
+              <div
+                id="analytics-section-panel-dynamics"
+                role="region"
+                aria-labelledby="analytics-section-dynamics"
+                className="grid gap-4"
+              >
                 <section aria-labelledby="daypart-title">
                   <div className="mb-3">
                     <p className="m-0 font-display text-[12px] uppercase tracking-[0.08em] text-bg-8">

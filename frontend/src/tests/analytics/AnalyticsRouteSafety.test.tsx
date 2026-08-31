@@ -206,12 +206,14 @@ describe("analytics route fail-closed state", () => {
 
     render(<AnalyticsPage />);
 
-    // Раздел по умолчанию — «Сводка»: ни один тяжёлый график не смонтирован.
+    // Раздел по умолчанию — «Сводка»: money-график (расход/база/stop) виден
+    // сразу — ради него аналитику и открывают. Остальные тяжёлые графики
+    // (воронка, таблица результатов) остаются несмонтированными.
     expect(screen.getByRole("button", { name: "Раздел: Сводка" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.queryByText("Факт / база / stop")).not.toBeInTheDocument();
+    expect(screen.getByText("Факт / база / stop")).toBeInTheDocument();
     expect(screen.queryByText("Результат по заливам")).not.toBeInTheDocument();
     expect(screen.queryByText("Meta → AdSet.pro")).not.toBeInTheDocument();
   });
