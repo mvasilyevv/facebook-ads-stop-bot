@@ -19,6 +19,13 @@ export default defineConfig({
       autoCodeSplitting: !process.env.VITEST,
       // Компоненты шагов визарда и вспомогательные файлы — не роуты
       routeFileIgnorePattern: "^(Step|RunsHistory)",
+      codeSplittingOptions: {
+        // Стартовый экран «/» не выносится в ленивый чанк: он нужен всегда, а
+        // отдельным файлом стоил лишнего запроса вдогонку к entry и хуже жался
+        // gzip-ом (issue #349). Вход по deep-link `/open` из-за этого забирает
+        // код дашборда, которым не пользуется, — около 4 КБ gzip.
+        splitBehavior: ({ routeId }) => (routeId === "/" ? [] : undefined),
+      },
     }),
     react(),
     tailwindcss(),

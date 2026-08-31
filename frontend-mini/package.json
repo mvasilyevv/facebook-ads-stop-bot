@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && node ../packages/shared/scripts/check-frontend-budget.mjs --dist ./dist --feature OperatorMiniDashboard.tsx --js-budget 160000 --font-budget 100000",
+    "build": "tsc -b && vite build && node ../packages/shared/scripts/check-frontend-budget.mjs --dist ./dist --feature OperatorMiniDashboard.tsx --js-budget 160000 --js-headroom 15000 --font-budget 100000",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -26,8 +26,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.469.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "tailwind-merge": "^3.5.0"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { OperatorMiniCabinetDashboard } from "@/features/operator/OperatorMiniDashboard";
+import { OperatorMiniCabinetDashboard } from "@/features/operator/OperatorMiniCabinetDashboard";
 
 export const Route = createFileRoute("/cabinets/$cabinetId")({
   component: CabinetRoute,

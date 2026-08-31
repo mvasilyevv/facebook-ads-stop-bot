@@ -35,14 +35,13 @@ vi.mock("@/lib/operatorApi", () => ({
   operatorProblemMessage: () => "Инцидент недоступен",
 }));
 
-import { Route } from "@/routes/incidents/$incidentId";
+import { MiniIncidentDetail } from "@/features/operator/OperatorIncidentDetail";
 import {
   clearResolvedNavigation,
   readResolvedNavigation,
 } from "@/lib/transientNavigation";
 
-const IncidentDetail = (Route as unknown as { component: ComponentType })
-  .component;
+const IncidentDetail = () => <MiniIncidentDetail incidentId="incident-51" />;
 
 describe("TMA typed incident detail", () => {
   beforeEach(() => {

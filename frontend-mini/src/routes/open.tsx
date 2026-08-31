@@ -1,13 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useSyncExternalStore } from "react";
+import { lazy, Suspense, useSyncExternalStore } from "react";
 
 import {
   readResolvedNavigationState,
   subscribeResolvedNavigation,
 } from "@/lib/transientNavigation";
-import { MiniActionDetail } from "@/routes/actions/$actionId";
-import { MiniAdDetail } from "@/routes/ads/$fbAdId";
-import { MiniIncidentDetail } from "@/routes/incidents/$incidentId";
+
+// Экраны цели грузятся по факту разрешения ссылки: до него неизвестно, какой
+// из трёх нужен, а статический импорт всех трёх тянул их в стартовый чанк
+// мини-приложения (issue #349).
+const MiniAdDetail = lazy(async () => ({
+  default: (await import("@/features/operator/OperatorAdDetail")).MiniAdDetail,
+}));
+const MiniActionDetail = lazy(async () => ({
+  default: (await import("@/features/operator/OperatorActionDetail"))
+    .MiniActionDetail,
+}));
+const MiniIncidentDetail = lazy(async () => ({
+  default: (await import("@/features/operator/OperatorIncidentDetail"))
+    .MiniIncidentDetail,
+}));
 
 export const Route = createFileRoute("/open")({ component: OpaqueTargetPage });
 
@@ -18,15 +30,7 @@ export function OpaqueTargetPage() {
     readResolvedNavigationState,
   );
   if (resolution.status === "resolving") {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="m-4 rounded-[var(--radius-2)] border border-warning/30 bg-warning-bg p-4 text-[14px] text-bg-11"
-      >
-        Проверяем ссылку и право доступа…
-      </div>
-    );
+    return <OpaqueTargetPending />;
   }
   if (resolution.status !== "resolved") {
     return (
@@ -39,10 +43,31 @@ export function OpaqueTargetPage() {
     );
   }
   const target = resolution.target;
-  if (target.target_kind === "ad")
-    return <MiniAdDetail fbAdId={target.target_id} />;
-  if (target.target_kind === "action") {
-    return <MiniActionDetail actionId={target.target_id} />;
-  }
-  return <MiniIncidentDetail incidentId={target.target_id} />;
+  return (
+    <Suspense fallback={<OpaqueTargetPending text="Открываем экран…" />}>
+      {target.target_kind === "ad" ? (
+        <MiniAdDetail fbAdId={target.target_id} />
+      ) : target.target_kind === "action" ? (
+        <MiniActionDetail actionId={target.target_id} />
+      ) : (
+        <MiniIncidentDetail incidentId={target.target_id} />
+      )}
+    </Suspense>
+  );
+}
+
+function OpaqueTargetPending({
+  text = "Проверяем ссылку и право доступа…",
+}: {
+  text?: string;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="m-4 rounded-[var(--radius-2)] border border-warning/30 bg-warning-bg p-4 text-[14px] text-bg-11"
+    >
+      {text}
+    </div>
+  );
 }

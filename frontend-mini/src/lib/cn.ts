@@ -1,10 +1,18 @@
 /**
- * cn — объединение className со слиянием Tailwind-классов.
- * Комбинирует clsx (условные строки) + tailwind-merge (дедуп конфликтующих утилит).
+ * cn — объединение className.
+ *
+ * Мини-приложение обходится одним clsx: tailwind-merge стоил 27 КБ несжатых
+ * (~9 КБ gzip) в стартовом чанке и решал ровно одну задачу — снимать
+ * конфликтующие утилиты (issue #349). Набор классов здесь фиксированный, и с
+ * тем же результатом справляется порядок правил в стилях Tailwind.
+ *
+ * Правило для компонентов: не выдавать две конкурирующие утилиты одной группы.
+ * Если состояние меняет рамку, курсор или цвет — выбирается один класс
+ * (`error ? "border-danger" : "border-hairline"`), а не добавляется поверх
+ * базового.
  */
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]): string {
-  return twMerge(clsx(inputs));
+  return clsx(inputs);
 }

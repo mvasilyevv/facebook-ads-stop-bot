@@ -15,7 +15,7 @@ import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 
 import { Button } from "@/components/ui/Button";
 import { Sheet } from "@/components/ui/Sheet";
-import { MiniActions } from "@/features/operator/OperatorMiniDashboard";
+import { MiniActions } from "@/features/operator/OperatorMiniActions";
 import {
   operatorProblemMessage,
   useOperatorActions,

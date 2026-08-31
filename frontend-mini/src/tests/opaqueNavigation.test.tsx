@@ -30,15 +30,15 @@ vi.mock("@/lib/tg", () => ({
   getTgStartParam: () => null,
   tgAlert,
 }));
-vi.mock("@/routes/actions/$actionId", () => ({
+vi.mock("@/features/operator/OperatorActionDetail", () => ({
   MiniActionDetail: ({ actionId }: { actionId: string }) => (
     <div>action:{actionId}</div>
   ),
 }));
-vi.mock("@/routes/ads/$fbAdId", () => ({
+vi.mock("@/features/operator/OperatorAdDetail", () => ({
   MiniAdDetail: ({ fbAdId }: { fbAdId: string }) => <div>ad:{fbAdId}</div>,
 }));
-vi.mock("@/routes/incidents/$incidentId", () => ({
+vi.mock("@/features/operator/OperatorIncidentDetail", () => ({
   MiniIncidentDetail: ({ incidentId }: { incidentId: string }) => (
     <div>incident:{incidentId}</div>
   ),
@@ -92,6 +92,26 @@ describe("opaque TMA navigation", () => {
       target_id: targetId,
     });
   });
+
+  it.each([
+    ["ad", "ad_stop_001", "ad:ad_stop_001"],
+    ["action", "1842", "action:1842"],
+    ["incident", "incident-51", "incident:incident-51"],
+  ])(
+    "открывает экран цели %s, догрузив его отдельным чанком",
+    async (targetKind, targetId, expected) => {
+      storeResolvedNavigation({
+        target_kind: targetKind as "ad" | "action" | "incident",
+        target_id: targetId,
+      });
+
+      render(<OpaqueTargetPage />);
+
+      // Экран приезжает ленивым чанком: до его загрузки виден статус, а не пустота.
+      expect(screen.getByRole("status")).toHaveTextContent("Открываем экран");
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+    },
+  );
 
   it("clears target A while token B resolves and keeps it cleared when B expires", async () => {
     const expiredToken = "zyxwvutsrqponmlkjihgfe";
