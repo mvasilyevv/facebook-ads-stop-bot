@@ -433,17 +433,27 @@ describe("typed operator ad detail", () => {
     expect(pauseMutate).not.toHaveBeenCalled();
   });
 
-  it("does not issue a money command when the post-confirmation row changed", async () => {
+  it("does not open a pointless dialog when the ad drifted before confirmation", async () => {
+    // Сверка происходит ДО диалога (issue-аудит, пункт про рассинхрон):
+    // оператор не должен подтверждать команду, чтобы затем получить отказ.
     fetchOperatorAdForCommand.mockResolvedValue(
       makeAd({ delivery_status: "PAUSED", as_of: "2026-07-19T10:00:01Z" }),
     );
     const user = userEvent.setup();
     renderDetail();
 
-    await confirmAdCommand(user);
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
 
     await waitFor(() => expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("dialog", { name: "Отключить объявление?" }),
+    ).not.toBeInTheDocument();
     expect(pauseMutate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      const message = useToastStore.getState().toasts.at(-1);
+      expect(message).toMatchObject({ title: "Отключить недоступно" });
+      expect(String(message?.description)).toContain("Обновите данные перед действием");
+    });
   });
 
   it("shows an existing task instead of a second command", () => {

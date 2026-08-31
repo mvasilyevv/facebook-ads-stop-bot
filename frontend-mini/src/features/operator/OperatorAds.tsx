@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -17,7 +17,10 @@ import {
   operatorActiveActionLabel,
   operatorDeliveryLabel,
 } from "@fb/shared/operator/adsViewModel";
-import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
+import {
+  OPERATOR_COMMAND_QUEUED_NOTICE,
+  operatorCommandTone,
+} from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import {
@@ -169,6 +172,7 @@ export function MiniAdCommand({
     realtimeStatusRef.current = realtimeStatus;
   }, [realtimeStatus]);
   const queryClient = useQueryClient();
+  const [checkingFreshness, setCheckingFreshness] = useState(false);
   const delivery = classifyOperatorDelivery(ad.delivery_status);
 
   if (ad.active_action) {
@@ -268,27 +272,42 @@ export function MiniAdCommand({
   const Icon = isPause ? CirclePause : CirclePlay;
   const actionKind: OperatorCommandKind = isPause ? "pause_ad" : "activate_ad";
 
+  // Сверка «объявление не разошлось с тем, что видел оператор» происходит
+  // ДО tgConfirm — оператор не подтверждает команду впустую, чтобы затем
+  // получить отказ. Команда всё равно уходит с expected_delivery_status/
+  // expected_as_of из этого же свежего чтения, и сервер
+  // (core/commands/service.py) держит собственную, независимую проверку
+  // precondition — это последнее слово, а не клиентская сверка.
   async function run() {
+    if (realtimeStatusRef.current !== "connected") {
+      await tgAlert("Действие недоступно до сверки live-снимка.");
+      return;
+    }
+    let current: OperatorAdRow & { as_of: string; delivery_status: string };
+    setCheckingFreshness(true);
+    try {
+      current = await fetchOperatorAdForCommand(queryClient, ad.fb_ad_id);
+    } catch (error) {
+      await tgAlert(operatorCommandProblemMessage(error));
+      return;
+    } finally {
+      setCheckingFreshness(false);
+    }
+    if (
+      realtimeStatusRef.current !== "connected" ||
+      current.as_of !== ad.as_of ||
+      current.delivery_status !== ad.delivery_status ||
+      classifyOperatorDelivery(current.delivery_status) !== delivery
+    ) {
+      await tgAlert("Обновите данные перед действием.");
+      return;
+    }
     haptic.impact(isPause ? "heavy" : "medium");
     const accepted = await tgConfirm(
-      `${label} объявление «${ad.name}»? Результат будет подтверждён отдельной задачей.`,
+      `${label} объявление «${ad.name}»? ${OPERATOR_COMMAND_QUEUED_NOTICE}`,
     );
     if (!accepted) return;
     try {
-      if (realtimeStatusRef.current !== "connected") {
-        throw new Error("Live-связь изменилась во время подтверждения");
-      }
-      const current = await fetchOperatorAdForCommand(queryClient, ad.fb_ad_id);
-      if (
-        realtimeStatusRef.current !== "connected" ||
-        current.as_of !== ad.as_of ||
-        current.delivery_status !== ad.delivery_status ||
-        classifyOperatorDelivery(current.delivery_status) !== delivery
-      ) {
-        throw new Error(
-          "Состояние объявления изменилось. Проверьте карточку и повторите действие.",
-        );
-      }
       const idempotencyKey = getOrCreateOperatorCommandIntent(
         actionKind,
         ad.fb_ad_id,
@@ -338,7 +357,7 @@ export function MiniAdCommand({
       // «Включить» возобновляет реальный спенд — предупреждающий вид, не secondary.
       variant={isPause ? "danger" : "warning"}
       fullWidth={full}
-      loading={mutation.isPending}
+      loading={mutation.isPending || checkingFreshness}
       className="min-h-11"
       onClick={() => void run()}
     >

@@ -18,6 +18,32 @@ const OPERATOR_ACTION_STATE_REASONS = {
   unknown: "Результат команды требует сверки. Не повторяйте действие вслепую.",
 } satisfies Record<OperatorActionItem["state"], string>;
 
+/**
+ * Полный баннер неизвестного исхода — карточка/деталь действия, где «202 не
+ * значит успех» нужно сказать явно, а не короткой подписью состояния. Раньше
+ * формулировка руками копировалась на обоих фронтах (`routes/actions/$actionId.tsx`
+ * на web и `routes/actions/ActionDetailView.tsx` на TMA) с небольшими
+ * расхождениями в тексте — теперь один источник.
+ */
+export const OPERATOR_UNKNOWN_RESULT_NOTICE =
+  "Внешний результат неоднозначен. Система сверяет фактический статус; успех не подтверждён.";
+
+/**
+ * Тот же смысл в подписи списка действий (`routes/actions/index.tsx`): почему
+ * бейдж «unknown» — это ожидание сверки, а не поломка.
+ */
+export const OPERATOR_UNKNOWN_RESULT_LIST_NOTICE =
+  "Неизвестный результат означает проверку фактического результата, а не успешное завершение.";
+
+/**
+ * Хвост подтверждения money-команды (pause/activate объявления): 202 — это
+ * queued, а не подтверждённый исход. Раньше повторялось вручную с лёгким
+ * расхождением в `AdCommandButtons` (web) и `MiniAdCommand` (TMA) —
+ * `OperatorAds.tsx` на обоих фронтах.
+ */
+export const OPERATOR_COMMAND_QUEUED_NOTICE =
+  "Результат будет подтверждён отдельной задачей.";
+
 /** Returns operator copy only; unknown backend values never reach the UI. */
 export function operatorActionKindLabel(kind: unknown): string {
   if (

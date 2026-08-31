@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Filter } from "lucide-react";
 
 import type { OperatorActionState } from "@fb/shared/operator/contracts";
+import { OPERATOR_UNKNOWN_RESULT_LIST_NOTICE } from "@fb/shared/operator/actionLabels";
 import {
   operatorCabinetOptions,
   parseOperatorActionsRouteSearch,
@@ -129,9 +130,7 @@ function ActionsPage() {
 
       <section className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5">
         <h2 className="m-0 font-display text-[20px] text-bg-11">Очередь и история</h2>
-        <p className="mt-1 text-[14px] text-bg-9">
-          Неизвестный результат означает проверку фактического результата, а не успешное завершение.
-        </p>
+        <p className="mt-1 text-[14px] text-bg-9">{OPERATOR_UNKNOWN_RESULT_LIST_NOTICE}</p>
         {dataState !== "ready" && !query.isPending ? (
           <DataStateNotice state={dataState} issues={projection?.issues ?? []} />
         ) : null}

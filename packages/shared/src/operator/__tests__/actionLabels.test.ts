@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  OPERATOR_COMMAND_QUEUED_NOTICE,
+  OPERATOR_UNKNOWN_RESULT_LIST_NOTICE,
+  OPERATOR_UNKNOWN_RESULT_NOTICE,
   operatorActionKindLabel,
   operatorActionReason,
   operatorActionRecovery,
@@ -160,5 +163,26 @@ describe("operator action labels", () => {
       destination: "sources",
     });
     expect(operatorActionRecovery("confirmed", "ad-42")).toBeNull();
+  });
+
+  // Единый источник копии про «unknown ≠ success» (issue-аудит: копипаста
+  // операторских формулировок на /actions, деталь действия и в OperatorAds.tsx
+  // обоих фронтов) — см. также operatorCopyGuard.test.ts.
+  it("keeps one canonical unknown-result banner", () => {
+    expect(OPERATOR_UNKNOWN_RESULT_NOTICE).toBe(
+      "Внешний результат неоднозначен. Система сверяет фактический статус; успех не подтверждён.",
+    );
+  });
+
+  it("keeps one canonical unknown-result list caption", () => {
+    expect(OPERATOR_UNKNOWN_RESULT_LIST_NOTICE).toBe(
+      "Неизвестный результат означает проверку фактического результата, а не успешное завершение.",
+    );
+  });
+
+  it("keeps one canonical queued-command notice", () => {
+    expect(OPERATOR_COMMAND_QUEUED_NOTICE).toBe(
+      "Результат будет подтверждён отдельной задачей.",
+    );
   });
 });

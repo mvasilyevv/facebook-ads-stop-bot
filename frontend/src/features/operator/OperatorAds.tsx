@@ -24,7 +24,11 @@ import {
   operatorActiveActionLabel,
   operatorDeliveryLabel,
 } from "@fb/shared/operator/adsViewModel";
-import { operatorActionStateReason, operatorCommandTone } from "@fb/shared/operator/actionLabels";
+import {
+  OPERATOR_COMMAND_QUEUED_NOTICE,
+  operatorActionStateReason,
+  operatorCommandTone,
+} from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import {
@@ -230,7 +234,10 @@ export function AdCommandButtons({
     realtimeStatusRef.current = realtimeStatus;
   }, [realtimeStatus]);
   const queryClient = useQueryClient();
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<
+    (OperatorAdRow & { as_of: string; delivery_status: string }) | null
+  >(null);
+  const [checkingFreshness, setCheckingFreshness] = useState(false);
   const delivery = classifyOperatorDelivery(ad.delivery_status);
 
   if (ad.active_action) {
@@ -316,11 +323,19 @@ export function AdCommandButtons({
   const Icon = isPause ? CirclePause : CirclePlay;
   const actionKind: OperatorCommandKind = isPause ? "pause_ad" : "activate_ad";
 
-  async function runCommand() {
+  // Сверка «объявление не разошлось с тем, что видел оператор» происходит
+  // ДО открытия диалога (requestConfirm) — оператор не подтверждает команду
+  // впустую, чтобы затем получить отказ. Сама команда всё равно уходит с
+  // expected_delivery_status/expected_as_of из этого же свежего чтения, и
+  // сервер (core/commands/service.py) держит собственную, независимую
+  // проверку precondition — это последнее слово, а не клиентская сверка.
+  async function requestConfirm() {
+    if (realtimeStatusRef.current !== "connected") {
+      toast.error(`${label} недоступно`, "Действие недоступно до сверки live-снимка.");
+      return;
+    }
+    setCheckingFreshness(true);
     try {
-      if (realtimeStatusRef.current !== "connected") {
-        throw new Error("Live-связь изменилась во время подтверждения");
-      }
       const current = await fetchOperatorAdForCommand(queryClient, ad.fb_ad_id);
       if (
         realtimeStatusRef.current !== "connected" ||
@@ -328,10 +343,19 @@ export function AdCommandButtons({
         current.delivery_status !== ad.delivery_status ||
         classifyOperatorDelivery(current.delivery_status) !== delivery
       ) {
-        throw new Error(
-          "Состояние объявления изменилось. Проверьте карточку и повторите действие.",
-        );
+        toast.error(`${label} недоступно`, "Обновите данные перед действием.");
+        return;
       }
+      setConfirmTarget(current);
+    } catch (error) {
+      toast.error(`${label} недоступно`, operatorCommandProblemMessage(error));
+    } finally {
+      setCheckingFreshness(false);
+    }
+  }
+
+  async function runCommand(current: OperatorAdRow & { as_of: string; delivery_status: string }) {
+    try {
       const idempotencyKey = getOrCreateOperatorCommandIntent(actionKind, ad.fb_ad_id);
       const receipt = await mutation.mutateAsync({
         params: {
@@ -384,20 +408,22 @@ export function AdCommandButtons({
         variant={isPause ? "danger" : "warning"}
         size={compact ? "md" : "lg"}
         className={fullWidth ? "min-h-11 w-full" : "min-h-11"}
-        loading={mutation.isPending}
+        loading={mutation.isPending || checkingFreshness}
         leftIcon={<Icon aria-hidden="true" />}
-        onClick={() => setConfirmOpen(true)}
+        onClick={() => void requestConfirm()}
       >
         {label}
       </Button>
       <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
+        open={confirmTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmTarget(null);
+        }}
         title={`${label} объявление?`}
-        description={`«${ad.name}». Команда будет поставлена в очередь, а результат подтверждён отдельной задачей.`}
+        description={`«${ad.name}». Команда будет поставлена в очередь. ${OPERATOR_COMMAND_QUEUED_NOTICE}`}
         confirmLabel={label}
         confirmVariant={isPause ? "danger" : "warning"}
-        onConfirm={runCommand}
+        onConfirm={() => (confirmTarget ? runCommand(confirmTarget) : Promise.resolve())}
         returnFocusRef={commandButtonRef}
       />
     </>

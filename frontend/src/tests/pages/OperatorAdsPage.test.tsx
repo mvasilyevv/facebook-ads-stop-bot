@@ -571,17 +571,44 @@ describe("typed operator ads page", () => {
     expect(resume.className).not.toContain("border-danger");
   });
 
-  it("cancels a confirmed intent when the fresh row no longer matches", async () => {
+  it("does not open a pointless dialog when the ad drifted before confirmation", async () => {
+    // Сверка with a свежее чтение происходит ДО открытия ConfirmDialog: если
+    // строка успела разойтись со снимком, оператор сразу видит отказ вместо
+    // диалога, который потом всё равно завершился бы ошибкой.
     fetchOperatorAdForCommand.mockResolvedValue(
       makeAd("111", { delivery_status: "PAUSED", as_of: "2026-07-19T10:00:01Z" }),
     );
     const user = userEvent.setup();
     renderPage();
 
+    await user.click(screen.getAllByRole("button", { name: "Отключить" })[0]!);
+
+    await waitFor(() => expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("dialog", { name: "Отключить объявление?" })).not.toBeInTheDocument();
+    expect(pauseMutate).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(commandToast.error).toHaveBeenCalledWith(
+        "Отключить недоступно",
+        expect.stringContaining("Обновите данные перед действием"),
+      ),
+    );
+  });
+
+  it("sends the same request as before when the fresh row still matches", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
     await confirmRowCommand(user, "Отключить");
 
     await waitFor(() => expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce());
-    expect(pauseMutate).not.toHaveBeenCalled();
+    await waitFor(() => expect(pauseMutate).toHaveBeenCalledOnce());
+    const request = pauseMutate.mock.calls[0]?.[0] as {
+      body: { expected_delivery_status: string; expected_as_of: string };
+    };
+    expect(request.body).toEqual({
+      expected_delivery_status: "ACTIVE",
+      expected_as_of: "2026-07-19T10:00:00Z",
+    });
   });
 
   it("fails closed for unknown delivery and exposes degraded data", () => {
