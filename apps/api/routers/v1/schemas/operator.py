@@ -124,6 +124,14 @@ class OperatorAttentionItem(BaseModel):
     target: OperatorAttentionTarget
     action: OperatorAttentionAction | None
     recovery_action: Literal["retry_scan"] | None
+    # Заполняется только для kind="incident" — жизненный цикл инцидента,
+    # по которому UI решает, показывать ли действие «Подтвердить».
+    status: Literal["open", "acknowledged", "executing", "resolved", "failed"] | None = None
+    # Как у OperatorIncidentItem.requires_usd_evidence: денежная копия строки
+    # глушится по признаку самой строки, а не по глобальному флагу валюты.
+    # ``None`` только для существующих потребителей контракта до апдейта;
+    # сервер всегда заполняет реальным bool в каждой ветке построения строки.
+    requires_usd_evidence: bool | None = None
 
 
 class OperatorAttentionData(BaseModel):

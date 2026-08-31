@@ -1451,7 +1451,7 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
         severity=incident["severity"],
         title=title[:240],
         summary=summary[:500],
-        reason=str(incident.get("status") or "open"),
+        reason=_incident_public_reason(incident),
         occurred_at=incident["opened_at"],
         target=OperatorAttentionTarget(
             kind=kind,
@@ -1472,6 +1472,8 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
             if str(incident.get("incident_key") or "").startswith(LOGIN_REQUIRED_INCIDENT_PREFIX)
             else None
         ),
+        status=incident["status"],
+        requires_usd_evidence=_incident_requires_usd_evidence(incident),
     )
 
 
@@ -1587,6 +1589,8 @@ def _attention_section(
                 ),
                 action=OperatorAttentionAction(label="Открыть", href=f"/actions/{action['id']}"),
                 recovery_action=None,
+                status=None,
+                requires_usd_evidence=False,
             )
         )
     if include_system_issues:
@@ -1605,6 +1609,8 @@ def _attention_section(
                     target=OperatorAttentionTarget(kind="system", id=None, label="Система"),
                     action=OperatorAttentionAction(label="Диагностика", href="/system/sources"),
                     recovery_action=None,
+                    status=None,
+                    requires_usd_evidence=False,
                 )
             )
     rank = {"critical": 0, "warning": 1, "unknown": 2, "ok": 3}

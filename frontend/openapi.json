@@ -11409,6 +11409,29 @@
               }
             ],
             "title": "Recovery Action"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["open", "acknowledged", "executing", "resolved", "failed"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "requires_usd_evidence": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Usd Evidence"
           }
         },
         "type": "object",

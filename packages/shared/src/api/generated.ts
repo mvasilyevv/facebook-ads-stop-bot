@@ -3741,6 +3741,10 @@ export interface components {
       action: components["schemas"]["OperatorAttentionAction"] | null;
       /** Recovery Action */
       recovery_action: "retry_scan" | null;
+      /** Status */
+      status?: ("open" | "acknowledged" | "executing" | "resolved" | "failed") | null;
+      /** Requires Usd Evidence */
+      requires_usd_evidence?: boolean | null;
     };
     /** OperatorAttentionTarget */
     OperatorAttentionTarget: {
