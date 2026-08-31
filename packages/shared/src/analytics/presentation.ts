@@ -1,6 +1,6 @@
 import type { AnalyticsPerformanceRow } from "../api/types";
 import { formatSpend } from "../format/number";
-import type { AnalyticsPreset, AnalyticsSort } from "./routeState";
+import type { AnalyticsPreset, AnalyticsSection, AnalyticsSort } from "./routeState";
 
 export type AnalyticsMetricTone = "danger" | "success" | "accent";
 export interface AnalyticsMetricView {
@@ -23,6 +23,21 @@ export const ANALYTICS_PRESETS: ReadonlyArray<{
   { value: "economy", label: "Экономика" },
   { value: "funnel", label: "Воронка" },
   { value: "delivery", label: "Доставка" },
+];
+
+/**
+ * Under-tab navigation for the "Заливы" section, shared by web and TMA so a
+ * link to one graph opens the same section on either shell. Each entry
+ * mounts exactly one heavy chart/table group.
+ */
+export const ANALYTICS_SECTIONS: ReadonlyArray<{
+  value: AnalyticsSection;
+  label: string;
+}> = [
+  { value: "summary", label: "Сводка" },
+  { value: "dynamics", label: "Динамика" },
+  { value: "funnel", label: "Воронка" },
+  { value: "results", label: "Результаты" },
 ];
 
 /** Six metrics plus the object column form the fixed seven-column desktop table. */

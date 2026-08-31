@@ -1,3 +1,4 @@
+import { selectDecisionRows } from "./decisionFeed";
 import type {
   DataState,
   OperatorActionItem,
@@ -442,8 +443,15 @@ function actionSectionForDataState(
   return { ...section, data: { ...section.data, items } };
 }
 
+/**
+ * Дашборд и лента «Решения» обязаны считать одинаково — используется тот же
+ * селектор `selectDecisionRows`, что и сама лента (issue #338): иначе
+ * счётчик секции и длина ленты расходятся (например, для running-экшенов,
+ * которые не входят в решения, но раньше учитывались как «внимание»).
+ */
 export function attentionCount(snapshot: OperatorSnapshot): number | null {
-  return snapshot.attention.data?.items.length ?? null;
+  if (!snapshot.attention.data) return null;
+  return selectDecisionRows(snapshot).length;
 }
 
 function signalCountLabel(count: number): string {

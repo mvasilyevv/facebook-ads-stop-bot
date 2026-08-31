@@ -1,6 +1,8 @@
 import {
+  CAMPAIGN_BID_STRATEGY_OPTIONS,
   CAMPAIGN_GENDER_OPTIONS,
   CAMPAIGN_PLACEMENT_OPTIONS,
+  campaignPresetIsIncomplete,
   campaignPresetPayload,
   campaignPresetsDataState,
   createCampaignPresetDraft,
@@ -163,7 +165,15 @@ function PresetRecord({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const incomplete = !preset.daily_budget || preset.countries.length === 0;
+  const incomplete = campaignPresetIsIncomplete(preset);
+  const bidStrategyOption = CAMPAIGN_BID_STRATEGY_OPTIONS.find(
+    (option) => option.value === preset.bid_strategy,
+  );
+  const bidValue = bidStrategyOption?.needsBid
+    ? preset.bid_amount
+      ? `${bidStrategyOption.label} · $${preset.bid_amount}`
+      : `${bidStrategyOption.label} · не задана`
+    : (bidStrategyOption?.label ?? "—");
   return (
     <article className="bg-bg-0 p-5" data-state={incomplete ? "partial" : "ready"}>
       <div className="flex items-start justify-between gap-4">
@@ -210,10 +220,12 @@ function PresetRecord({
           label="Плейсменты"
           value={preset.placements.length ? preset.placements.join(" · ") : "Авто"}
         />
+        <Fact label="Ставка" value={bidValue} />
         <Fact label="Оптимизация" value="Purchase · fixed" />
       </dl>
       <div className="mt-5 border-t border-[var(--color-hairline)] pt-3 text-[12px] text-bg-8">
-        Нейминг: {preset.naming_template || "стандартный"} · URL tags:{" "}
+        Ссылка: {preset.display_link || "домен трекинг-ссылки"} · Нейминг:{" "}
+        {preset.naming_template || "стандартный"} · URL tags:{" "}
         {preset.url_tags_template ? "свой шаблон" : "SOP"}
       </div>
       <div className="mt-4 flex justify-end">
@@ -255,6 +267,9 @@ function PresetEditorModal({
   const pending = createPreset.isPending || updatePreset.isPending;
   const patch = (value: Partial<CampaignPresetDraft>) =>
     setDraft((current) => ({ ...current, ...value }));
+  const bidStrategyOption = CAMPAIGN_BID_STRATEGY_OPTIONS.find(
+    (option) => option.value === draft.bid_strategy,
+  );
 
   const submit = async () => {
     const nextErrors = validateCampaignPresetDraft(draft);
@@ -353,11 +368,41 @@ function PresetEditorModal({
             onChange={(event) => patch({ daily_budget: event.target.value })}
           />
         </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Select
+            label="Стратегия ставок"
+            value={draft.bid_strategy}
+            options={CAMPAIGN_BID_STRATEGY_OPTIONS.map(({ value, label }) => ({ value, label }))}
+            onChange={(event) =>
+              patch({ bid_strategy: event.target.value as CampaignPresetDraft["bid_strategy"] })
+            }
+          />
+          {/* Ставка есть только у стратегий с кэпом — как на шаге 3 визарда: у
+              «Максимального количества» её нет вовсе. */}
+          {bidStrategyOption?.needsBid ? (
+            <Input
+              label={`${bidStrategyOption.label}, USD`}
+              inputMode="decimal"
+              value={draft.bid_amount}
+              errorMessage={errors.bid_amount}
+              placeholder="5.00"
+              onChange={(event) => patch({ bid_amount: event.target.value })}
+            />
+          ) : null}
+        </div>
         <div className="border-y border-[var(--color-hairline)] py-3 text-[13px] text-bg-10">
           <span className="text-bg-8">Событие оптимизации</span>
           <strong className="ml-3 font-medium text-bg-11">Purchase</strong>
           <span className="ml-2 text-bg-8">зафиксировано правилом проекта</span>
         </div>
+        <Input
+          label="Отображаемая ссылка"
+          placeholder="play.ghana.com"
+          value={draft.display_link}
+          errorMessage={errors.display_link}
+          helpText="Пусто — Meta покажет домен трекинг-ссылки"
+          onChange={(event) => patch({ display_link: event.target.value })}
+        />
         <Input
           label="Шаблон нейминга"
           value={draft.naming_template}

@@ -409,8 +409,10 @@ describe("TMA typed operator ad detail", () => {
 
     await user.click(screen.getByRole("button", { name: "Отключить" }));
 
-    expect(tgConfirm).toHaveBeenCalledWith(
-      expect.stringContaining("Результат будет подтверждён"),
+    await waitFor(() =>
+      expect(tgConfirm).toHaveBeenCalledWith(
+        expect.stringContaining("Результат будет подтверждён"),
+      ),
     );
     await waitFor(() => expect(pauseMutate).toHaveBeenCalledOnce());
     const request = pauseMutate.mock.calls[0]?.[0] as {
@@ -477,12 +479,14 @@ describe("TMA typed operator ad detail", () => {
       expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce(),
     );
     expect(pauseMutate).not.toHaveBeenCalled();
-    expect(tgAlert).toHaveBeenCalledWith(
-      expect.stringContaining("Безопасное действие заблокировано"),
-    );
-    expect(tgAlert).toHaveBeenCalledWith(
-      expect.stringContaining("Перезагрузите приложение"),
-    );
+    await waitFor(() => {
+      expect(tgAlert).toHaveBeenCalledWith(
+        expect.stringContaining("Безопасное действие заблокировано"),
+      );
+      expect(tgAlert).toHaveBeenCalledWith(
+        expect.stringContaining("Перезагрузите приложение"),
+      );
+    });
   });
 
   it("opens the committed lifecycle and warns against retry when intent cleanup fails", async () => {
@@ -514,10 +518,13 @@ describe("TMA typed operator ad detail", () => {
     renderDetail();
 
     await user.click(screen.getByRole("button", { name: "Отключить" }));
+    await waitFor(() => expect(tgConfirm).toHaveBeenCalledOnce());
     expect(pauseMutate).not.toHaveBeenCalled();
   });
 
-  it("does not queue after the confirmed row changes before submit", async () => {
+  it("does not open a pointless confirm when the ad drifted before confirmation", async () => {
+    // Сверка происходит ДО tgConfirm: оператор не подтверждает команду, чтобы
+    // затем получить отказ на разошедшийся снимок.
     fetchOperatorAdForCommand.mockResolvedValue(
       makeAd({ delivery_status: "PAUSED", as_of: "2026-07-19T10:00:01Z" }),
     );
@@ -529,9 +536,10 @@ describe("TMA typed operator ad detail", () => {
     await waitFor(() =>
       expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce(),
     );
+    expect(tgConfirm).not.toHaveBeenCalled();
     expect(pauseMutate).not.toHaveBeenCalled();
     expect(tgAlert).toHaveBeenCalledWith(
-      expect.stringContaining("Состояние объявления изменилось"),
+      expect.stringContaining("Обновите данные перед действием"),
     );
   });
 

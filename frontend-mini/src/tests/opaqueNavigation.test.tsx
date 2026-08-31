@@ -107,8 +107,10 @@ describe("opaque TMA navigation", () => {
 
       render(<OpaqueTargetPage />);
 
-      // Экран приезжает ленивым чанком: до его загрузки виден статус, а не пустота.
-      expect(screen.getByRole("status")).toHaveTextContent("Открываем экран");
+      // Экран приезжает ленивым чанком: до его загрузки виден скелет, а не пустота.
+      expect(
+        screen.getByRole("status", { name: "Загрузка" }),
+      ).toBeInTheDocument();
       expect(await screen.findByText(expected)).toBeInTheDocument();
     },
   );

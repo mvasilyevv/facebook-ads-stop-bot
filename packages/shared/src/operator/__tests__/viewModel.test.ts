@@ -380,7 +380,22 @@ describe("operator view model", () => {
         ...snapshot,
         attention: {
           ...snapshot.attention,
-          data: { items: Array.from({ length: count }, () => ({}) as never) },
+          data: {
+            items: Array.from({ length: count }, (_, index) => ({
+              id: `incident-${index}`,
+              kind: "incident",
+              severity: "warning",
+              title: "Инцидент требует проверки",
+              summary: "Инцидент требует проверки",
+              reason: null,
+              occurred_at: "2026-07-18T10:00:00Z",
+              target: { kind: "ad", id: null, label: null },
+              action: null,
+              recovery_action: null,
+              status: "open",
+              requires_usd_evidence: false,
+            })),
+          },
         },
         system: {
           ...snapshot.system,

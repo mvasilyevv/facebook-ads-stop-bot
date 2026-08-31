@@ -1,6 +1,13 @@
 export type AnalyticsPeriod = "today" | "7d" | "30d" | "custom";
 export type AnalyticsTab = "uploads" | "events";
 export type AnalyticsPreset = "economy" | "funnel" | "delivery";
+/**
+ * Under-tab navigation for the "Заливы" tab. Each value mounts exactly one
+ * heavy chart/table group so the analytics page never renders every graph at
+ * once. `summary` carries no heavy chart — it is the cheap default landing
+ * section (totals + source quality, both rendered above the section switch).
+ */
+export type AnalyticsSection = "summary" | "dynamics" | "funnel" | "results";
 export type AnalyticsDirection = "asc" | "desc";
 export type AnalyticsSort =
   | "name"
@@ -21,6 +28,7 @@ export interface AnalyticsRouteSearch {
   offer_id?: string;
   campaign_id?: string;
   search?: string;
+  section: AnalyticsSection;
   preset: AnalyticsPreset;
   sort: AnalyticsSort;
   direction: AnalyticsDirection;
@@ -30,6 +38,7 @@ export interface AnalyticsRouteSearch {
 }
 
 const PERIODS = new Set<AnalyticsPeriod>(["today", "7d", "30d", "custom"]);
+const SECTIONS = new Set<AnalyticsSection>(["summary", "dynamics", "funnel", "results"]);
 const PRESETS = new Set<AnalyticsPreset>(["economy", "funnel", "delivery"]);
 const SORTS = new Set<AnalyticsSort>([
   "name",
@@ -55,6 +64,7 @@ export function parseAnalyticsRouteSearch(
     offer_id: nonEmptyString(search.offer_id),
     campaign_id: nonEmptyString(search.campaign_id),
     search: nonEmptyString(search.search),
+    section: member(search.section, SECTIONS, "summary"),
     preset: member(search.preset, PRESETS, "economy"),
     sort: member(search.sort, SORTS, "spend"),
     direction: search.direction === "asc" ? "asc" : "desc",

@@ -285,7 +285,7 @@ describe("TMA operator cabinet page", () => {
 
     await user.click(screen.getAllByRole("button", { name: /Отключить/ })[0]!);
 
-    expect(tgConfirm).toHaveBeenCalledOnce();
+    await waitFor(() => expect(tgConfirm).toHaveBeenCalledOnce());
     await waitFor(() => expect(pauseMutate).toHaveBeenCalledOnce());
     const request = pauseMutate.mock.calls[0]?.[0] as {
       params: { path: { ad_id: string }; header: Record<string, string> };

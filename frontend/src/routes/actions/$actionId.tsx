@@ -11,6 +11,7 @@ import {
 
 import { ACTION_STATE_LABEL, actionForRealtimeState } from "@fb/shared/operator/viewModel";
 import {
+  OPERATOR_UNKNOWN_RESULT_NOTICE,
   operatorActionKindLabel,
   operatorActionReason,
   operatorActionRecovery,
@@ -127,8 +128,7 @@ function ActionDetailPage() {
             role="status"
             className="mt-5 rounded-[var(--radius-2)] border border-warning/40 bg-warning-bg p-4 text-[14px] text-bg-10"
           >
-            Внешний результат неоднозначен. Система сверяет фактический статус; успех не
-            подтверждён.
+            {OPERATOR_UNKNOWN_RESULT_NOTICE}
           </div>
         ) : null}
       </header>

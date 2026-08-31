@@ -1,12 +1,14 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Activity, Database, RefreshCw, Search } from "lucide-react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { Suspense, lazy, type KeyboardEvent, type ReactNode } from "react";
 import type { AnalyticsPerformance } from "@fb/shared";
 import {
   parseAnalyticsRouteSearch,
   type AnalyticsPeriod,
   type AnalyticsRouteSearch,
+  type AnalyticsSection,
 } from "@fb/shared/analytics/routeState";
+import { ANALYTICS_SECTIONS } from "@fb/shared/analytics/presentation";
 import { formatSpend } from "@fb/shared/format/number";
 import { timezoneEvidenceLabel } from "@fb/shared/format/time";
 import {
@@ -27,10 +29,6 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { BudgetLineChart } from "@/components/analytics/BudgetLineChart";
-import { FunnelChart } from "@/components/analytics/FunnelChart";
-import { DaypartHeatmap } from "@/components/analytics/DaypartHeatmap";
-import { PerformanceTable } from "@/components/analytics/PerformanceTable";
 import { HistoryTimeline } from "@/components/history/HistoryTimeline";
 import {
   useAnalyticsDaypart,
@@ -42,6 +40,28 @@ import { useOperatorEvents } from "@/lib/api/operator";
 import { useOperatorDisplayPreference } from "@/lib/api/settings";
 import { formatDisplayDate, formatDisplayDateTime } from "@/lib/timezone";
 
+// Каждый график тяжёлый (recharts) и нужен только тогда, когда оператор
+// реально смотрит соответствующий раздел «Заливов» — до этого момента чанк
+// не грузится вовсе.
+const BudgetLineChart = lazy(() =>
+  import("@/components/analytics/BudgetLineChart").then((mod) => ({
+    default: mod.BudgetLineChart,
+  })),
+);
+const FunnelChart = lazy(() =>
+  import("@/components/analytics/FunnelChart").then((mod) => ({ default: mod.FunnelChart })),
+);
+const DaypartHeatmap = lazy(() =>
+  import("@/components/analytics/DaypartHeatmap").then((mod) => ({
+    default: mod.DaypartHeatmap,
+  })),
+);
+const PerformanceTable = lazy(() =>
+  import("@/components/analytics/PerformanceTable").then((mod) => ({
+    default: mod.PerformanceTable,
+  })),
+);
+
 type PeriodKey = AnalyticsPeriod;
 export const Route = createFileRoute("/analytics/")({
   component: AnalyticsPage,
@@ -49,6 +69,10 @@ export const Route = createFileRoute("/analytics/")({
 });
 
 type AnalyticsSearch = AnalyticsRouteSearch;
+
+function ChartFallback({ height = 260 }: { height?: number }) {
+  return <Skeleton height={height} className="w-full" />;
+}
 
 function AnalyticsPage() {
   const search = Route.useSearch();
@@ -133,6 +157,14 @@ function AnalyticsPage() {
     if (focus) {
       document.getElementById(`analytics-tab-${tab}`)?.focus();
     }
+  };
+
+  // Раздел живёт в URL как ?section=, так что ссылка на конкретный график
+  // открывает тот же раздел, а переключение не трогает период и фильтры.
+  const selectSection = (section: AnalyticsSection) => setSearch({ section });
+
+  const openAd = (fbAdId: string) => {
+    void navigate({ to: "/ads/$fbAdId", params: { fbAdId } });
   };
 
   const handleTabKeyDown = (
@@ -290,11 +322,13 @@ function AnalyticsPage() {
               params={performanceParams}
               period={search.period}
               preset={search.preset}
+              section={search.section}
               timeZone={timeZone}
               windowSafety={windowSafety}
               performanceState={performanceState}
               onSort={handleSort}
               onPreset={(preset) => setSearch({ preset, page: 1 })}
+              onSection={selectSection}
               onPage={(page) => setSearch({ page })}
             />
           )}
@@ -311,7 +345,7 @@ function AnalyticsPage() {
             realtimeStatus={realtimeStatus}
             timeZone={timeZone}
             onChange={setSearch}
-            onOpenAd={(fbAdId) => setSearch({ tab: "uploads", search: fbAdId, page: 1 })}
+            onOpenAd={openAd}
           />
         </div>
       )}
@@ -326,11 +360,13 @@ function UploadsView({
   params,
   period,
   preset,
+  section,
   timeZone,
   windowSafety,
   performanceState,
   onSort,
   onPreset,
+  onSection,
   onPage,
 }: {
   performanceQ: ReturnType<typeof useAnalyticsPerformance>;
@@ -339,11 +375,13 @@ function UploadsView({
   params: AnalyticsPerformanceParams;
   period: PeriodKey;
   preset: AnalyticsSearch["preset"];
+  section: AnalyticsSection;
   timeZone: string;
   windowSafety: AnalyticsWindowSafety;
   performanceState: DataState;
   onSort: (sort: NonNullable<AnalyticsPerformanceParams["sort"]>) => void;
   onPreset: (preset: AnalyticsSearch["preset"]) => void;
+  onSection: (section: AnalyticsSection) => void;
   onPage: (page: number) => void;
 }) {
   const data = performanceQ.data;
@@ -426,132 +464,214 @@ function UploadsView({
         />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(330px,0.65fr)]">
-        <Card padded className="min-w-0 p-5">
-          <SectionHeader
-            title={period === "today" ? "Факт / база / stop" : "Экономика периода"}
-            meta={
-              period === "today"
-                ? "Сейчас · почасовая шкала"
-                : "Расхождение с базой задним числом не считается"
-            }
-          />
-          {period === "today" ? (
-            budgetQ.isError ? (
-              <ErrorState
-                title="График бюджета недоступен. Неподтверждённые точки скрыты."
-                error={safeApiProblemMessage(
-                  budgetQ.error,
-                  "Подтверждённых точек нет. Повторите запрос.",
-                )}
-                onRetry={() => void budgetQ.refetch()}
-              />
-            ) : (
-              <BudgetLineChart
-                data={budgetQ.data}
-                loading={budgetQ.isLoading}
-                timezone={timeZone}
-                parentState={budgetParentState}
-              />
-            )
-          ) : (
-            <div className="flex h-[260px] items-center justify-center px-6 text-center text-[12px] text-bg-8">
-              Исторический budget delta скрыт: правила оффера не версионируются, поэтому пересчет
-              задним числом был бы недостоверным.
-            </div>
-          )}
-        </Card>
-        <Card padded className="p-5">
-          <SectionHeader title="Воронка" meta="Meta → AdSet.pro" />
-          <div className="pt-5">
-            <FunnelChart
-              clicks={totalsAvailable && totals ? totals.clicks : null}
-              registrations={totalsAvailable && totals ? totals.registrations : null}
-              ftds={totalsAvailable && totals ? totals.ftds : null}
-              confirmedDeposits={totalsAvailable && totals ? totals.confirmed_deposits : null}
-              spend={totalsAvailable ? (totals?.spend ?? null) : null}
-              currency={currency}
-              timezone={timeZone}
-              asOf={data?.window.to_iso ?? null}
-              completeness={completeness}
-              sources={sourceNames}
-            />
-          </div>
-        </Card>
+      <div
+        className="flex flex-wrap items-center gap-2 border-b border-[var(--color-hairline)] pb-2"
+        role="group"
+        aria-label="Раздел заливов"
+      >
+        {ANALYTICS_SECTIONS.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            id={`analytics-section-${item.value}`}
+            aria-label={`Раздел: ${item.label}`}
+            aria-pressed={section === item.value}
+            aria-controls={`analytics-section-panel-${item.value}`}
+            onClick={() => onSection(item.value)}
+            className={`min-h-11 rounded-[var(--radius-2)] border px-3 text-[14px] font-semibold ${
+              section === item.value
+                ? "border-accent bg-accent-bg text-accent"
+                : "border-[var(--color-hairline-strong)] text-bg-9 hover:text-bg-11"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
 
-      {period !== "today" && daypartQ.isError ? (
-        <Card padded className="p-5">
-          <ErrorState
-            title="Почасовое распределение недоступно. Неподтверждённые ячейки скрыты."
-            error={safeApiProblemMessage(
-              daypartQ.error,
-              "Подтверждённых ячеек нет. Повторите запрос.",
+      {section === "summary" ? (
+        <div
+          id="analytics-section-panel-summary"
+          role="region"
+          aria-labelledby="analytics-section-summary"
+        >
+          {/* Расход/база/stop — главный money-график: ради него аналитику и
+              открывают, поэтому он виден сразу на «Сводке», а не спрятан за
+              переключением раздела. Остальные графики (когда трафик
+              конвертит, воронка, результаты) остаются ленивыми. */}
+          <Card padded className="min-w-0 p-5">
+            <SectionHeader
+              title={period === "today" ? "Факт / база / stop" : "Экономика периода"}
+              meta={
+                period === "today"
+                  ? "Сейчас · почасовая шкала"
+                  : "Расхождение с базой задним числом не считается"
+              }
+            />
+            {period === "today" ? (
+              budgetQ.isError ? (
+                <ErrorState
+                  title="График бюджета недоступен. Неподтверждённые точки скрыты."
+                  error={safeApiProblemMessage(
+                    budgetQ.error,
+                    "Подтверждённых точек нет. Повторите запрос.",
+                  )}
+                  onRetry={() => void budgetQ.refetch()}
+                />
+              ) : (
+                <Suspense fallback={<ChartFallback height={260} />}>
+                  <BudgetLineChart
+                    data={budgetQ.data}
+                    loading={budgetQ.isLoading}
+                    timezone={timeZone}
+                    parentState={budgetParentState}
+                  />
+                </Suspense>
+              )
+            ) : (
+              <div className="flex h-[260px] items-center justify-center px-6 text-center text-[12px] text-bg-8">
+                Исторический budget delta скрыт: правила оффера не версионируются, поэтому
+                пересчет задним числом был бы недостоверным.
+              </div>
             )}
-            onRetry={() => void daypartQ.refetch()}
-          />
-        </Card>
-      ) : period !== "today" && daypartQ.data ? (
-        <Card padded className="p-5">
-          <SectionHeader title="Когда трафик конвертит" meta="HEATMAP · локальное отображение" />
-          <DaypartHeatmap data={daypartQ.data} parentState={daypartParentState} />
-        </Card>
+          </Card>
+        </div>
       ) : null}
 
-      <Card padded={false} className="min-w-0 overflow-hidden">
-        <div className="flex items-center justify-between gap-4 border-b border-[var(--color-hairline)] px-5 py-4">
-          <SectionHeader
-            title="Результат по заливам"
-            meta="Кампания → адсет → объявление"
-            compact
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={<RefreshCw size={13} />}
-            onClick={() => void performanceQ.refetch()}
-            loading={performanceQ.isFetching}
-          >
-            Обновить
-          </Button>
+      {section === "dynamics" ? (
+        <div
+          id="analytics-section-panel-dynamics"
+          role="region"
+          aria-labelledby="analytics-section-dynamics"
+          className="flex flex-col gap-5"
+        >
+          {period === "today" ? (
+            <div className="rounded-[var(--radius-3)] border border-dashed border-[var(--color-hairline)] px-5 py-6 text-center text-[14px] text-bg-8">
+              Почасовое распределение доступно для периода от 7 дней и не строится за «Сегодня».
+            </div>
+          ) : daypartQ.isError ? (
+            <Card padded className="p-5">
+              <ErrorState
+                title="Почасовое распределение недоступно. Неподтверждённые ячейки скрыты."
+                error={safeApiProblemMessage(
+                  daypartQ.error,
+                  "Подтверждённых ячеек нет. Повторите запрос.",
+                )}
+                onRetry={() => void daypartQ.refetch()}
+              />
+            </Card>
+          ) : daypartQ.data ? (
+            <Card padded className="p-5">
+              <SectionHeader
+                title="Когда трафик конвертит"
+                meta="HEATMAP · локальное отображение"
+              />
+              <Suspense fallback={<ChartFallback height={320} />}>
+                <DaypartHeatmap data={daypartQ.data} parentState={daypartParentState} />
+              </Suspense>
+            </Card>
+          ) : (
+            // Запрос ещё не подтвердил данные (загрузка или период короче
+            // 7 дней) — честный скелет вместо пустой панели.
+            <Card padded className="p-5">
+              <ChartFallback height={320} />
+            </Card>
+          )}
         </div>
-        <PerformanceTable
-          rows={data?.rows}
-          loading={performanceQ.isLoading}
-          parentState={completeness}
-          currency={currency}
-          params={params}
-          preset={preset}
-          onPreset={onPreset}
-          onSort={onSort}
-        />
-        {data && data.pagination.pages > 1 ? (
-          <div className="flex items-center justify-between border-t border-[var(--color-hairline)] px-5 py-3 text-[14px] text-bg-8">
-            <span>{data.pagination.total} строк</span>
-            <div className="flex items-center gap-2">
+      ) : null}
+
+      {section === "funnel" ? (
+        <div
+          id="analytics-section-panel-funnel"
+          role="region"
+          aria-labelledby="analytics-section-funnel"
+        >
+          <Card padded className="p-5">
+            <SectionHeader title="Воронка" meta="Meta → AdSet.pro" />
+            <div className="pt-5">
+              <Suspense fallback={<ChartFallback height={220} />}>
+                <FunnelChart
+                  clicks={totalsAvailable && totals ? totals.clicks : null}
+                  registrations={totalsAvailable && totals ? totals.registrations : null}
+                  ftds={totalsAvailable && totals ? totals.ftds : null}
+                  confirmedDeposits={totalsAvailable && totals ? totals.confirmed_deposits : null}
+                  spend={totalsAvailable ? (totals?.spend ?? null) : null}
+                  currency={currency}
+                  timezone={timeZone}
+                  asOf={data?.window.to_iso ?? null}
+                  completeness={completeness}
+                  sources={sourceNames}
+                />
+              </Suspense>
+            </div>
+          </Card>
+        </div>
+      ) : null}
+
+      {section === "results" ? (
+        <div
+          id="analytics-section-panel-results"
+          role="region"
+          aria-labelledby="analytics-section-results"
+        >
+          <Card padded={false} className="min-w-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-4 border-b border-[var(--color-hairline)] px-5 py-4">
+              <SectionHeader
+                title="Результат по заливам"
+                meta="Кампания → адсет → объявление"
+                compact
+              />
               <Button
-                size="sm"
                 variant="ghost"
-                disabled={data.pagination.page <= 1}
-                onClick={() => onPage(data.pagination.page - 1)}
-              >
-                Назад
-              </Button>
-              <span className="font-display tabular-nums">
-                {data.pagination.page} / {data.pagination.pages}
-              </span>
-              <Button
                 size="sm"
-                variant="ghost"
-                disabled={data.pagination.page >= data.pagination.pages}
-                onClick={() => onPage(data.pagination.page + 1)}
+                leftIcon={<RefreshCw size={13} />}
+                onClick={() => void performanceQ.refetch()}
+                loading={performanceQ.isFetching}
               >
-                Далее
+                Обновить
               </Button>
             </div>
-          </div>
-        ) : null}
-      </Card>
+            <Suspense fallback={<ChartFallback height={400} />}>
+              <PerformanceTable
+                rows={data?.rows}
+                loading={performanceQ.isLoading}
+                parentState={completeness}
+                currency={currency}
+                params={params}
+                preset={preset}
+                onPreset={onPreset}
+                onSort={onSort}
+              />
+            </Suspense>
+            {data && data.pagination.pages > 1 ? (
+              <div className="flex items-center justify-between border-t border-[var(--color-hairline)] px-5 py-3 text-[14px] text-bg-8">
+                <span>{data.pagination.total} строк</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={data.pagination.page <= 1}
+                    onClick={() => onPage(data.pagination.page - 1)}
+                  >
+                    Назад
+                  </Button>
+                  <span className="font-display tabular-nums">
+                    {data.pagination.page} / {data.pagination.pages}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={data.pagination.page >= data.pagination.pages}
+                    onClick={() => onPage(data.pagination.page + 1)}
+                  >
+                    Далее
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }

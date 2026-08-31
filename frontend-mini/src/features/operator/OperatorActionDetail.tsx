@@ -6,6 +6,7 @@ import {
   actionForRealtimeState,
 } from "@fb/shared/operator/viewModel";
 import {
+  OPERATOR_UNKNOWN_RESULT_NOTICE,
   operatorActionKindLabel,
   operatorActionReason,
   operatorActionRecovery,
@@ -92,7 +93,7 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
         </div>
         {action.state === "unknown" ? (
           <p role="status" className="mt-3 text-[14px] leading-5 text-bg-10">
-            Результат сверяется с фактическим статусом. Успех не подтверждён.
+            {OPERATOR_UNKNOWN_RESULT_NOTICE}
           </p>
         ) : null}
       </header>

@@ -245,6 +245,124 @@ def test_login_required_incident_exposes_only_typed_scan_recovery() -> None:
     assert channel_item.recovery_action is None
 
 
+def test_attention_incident_item_carries_status_and_requires_usd_evidence() -> None:
+    """Issue #338 PR1: лента «Решения» не знает, показывать ли «Подтвердить»,
+
+    без жизненного цикла инцидента, и глушит денежную копию по глобальному
+    признаку валюты вместо признака самой строки — оба поля аддитивны.
+    """
+
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    incident = {
+        "id": "00000000-0000-0000-0000-000000000778",
+        "severity": "critical",
+        "status": "acknowledged",
+        "title": "CPL выше базы",
+        "summary": "Кабинет тратит без результата",
+        "resource_type": "ad",
+        "resource_id": "120214000000123",
+        "resource_label": "GH_CR2",
+        "ad_account_id": "act_123",
+        "opened_at": now,
+        "facts": {"risk": "Расход растёт без FTD"},
+    }
+
+    item = operator_router._incident_attention_item(incident)
+
+    assert item.status == "acknowledged"
+    assert item.requires_usd_evidence is True
+
+
+def test_attention_incident_reason_is_never_the_bare_lifecycle_status() -> None:
+    """Regression: reason раньше был str(incident.status) → UI печатал
+
+    «Причина: open». Должен приходить `_incident_public_reason(incident)`.
+    """
+
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    incident_with_risk = {
+        "id": "00000000-0000-0000-0000-000000000779",
+        "severity": "warning",
+        "status": "open",
+        "title": "CPL выше базы",
+        "summary": "CPL $9.56 при базе $3.00.",
+        "resource_type": "ad",
+        "resource_id": "120214000000123",
+        "resource_label": "GH_CR2",
+        "opened_at": now,
+        "facts": {"risk": "Расход растёт без FTD"},
+    }
+    item = operator_router._incident_attention_item(incident_with_risk)
+    assert item.reason == "Расход растёт без FTD"
+    assert item.reason != "open"
+
+    incident_without_risk = {**incident_with_risk, "facts": {}, "status": "open"}
+    bare_item = operator_router._incident_attention_item(incident_without_risk)
+    assert bare_item.reason is None
+    for status in ("open", "acknowledged", "executing", "resolved", "failed"):
+        other = operator_router._incident_attention_item(
+            {**incident_without_risk, "status": status}
+        )
+        assert other.reason != status
+
+
+def test_attention_requires_usd_evidence_matches_incident_journal_projection() -> None:
+    """Один и тот же инцидент должен читаться одинаково в ленте и в журнале:
+
+    оба используют `_incident_requires_usd_evidence`, лента больше не глушит
+    денежную копию по глобальному флагу валюты снимка.
+    """
+
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    incident = {
+        "id": "00000000-0000-0000-0000-00000000077a",
+        "severity": "critical",
+        "status": "open",
+        "title": "CPL выше базы",
+        "summary": "Кабинет тратит без результата",
+        "resource_type": "campaign",
+        "resource_id": "120214000000456",
+        "resource_label": None,
+        "ad_account_id": "act_456",
+        "opened_at": now,
+        "facts": {},
+    }
+
+    attention_item = operator_router._incident_attention_item(incident)
+    journal_item_confirmed = operator_router._incident_item(incident, usd_scope_confirmed=True)
+    journal_item_unconfirmed = operator_router._incident_item(incident, usd_scope_confirmed=False)
+
+    assert attention_item.requires_usd_evidence == journal_item_confirmed.requires_usd_evidence
+    assert attention_item.requires_usd_evidence == journal_item_unconfirmed.requires_usd_evidence
+
+
+def test_attention_ad_target_id_stays_numeric_and_is_not_redacted_as_a_uuid() -> None:
+    """`target.id` числовой fb_ad_id должен пережить `redact_sensitive_text`:
+
+    оно заменяет UUID на «объект», но не трогает чистые цифровые id — иначе
+    лента не сможет предложить «Отключить».
+    """
+
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    fb_ad_id = "120214000000789"
+    incident = {
+        "id": "00000000-0000-0000-0000-00000000077b",
+        "severity": "critical",
+        "status": "open",
+        "title": "Объявление льёт в минус",
+        "summary": "Расход без конверсий",
+        "resource_type": "ad",
+        "resource_id": fb_ad_id,
+        "resource_label": None,
+        "opened_at": now,
+    }
+
+    item = operator_router._incident_attention_item(incident)
+
+    assert item.target.kind == "ad"
+    assert item.target.id == fb_ad_id
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("state", "created", "expected_status"),

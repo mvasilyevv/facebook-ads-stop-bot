@@ -2,15 +2,12 @@ import { useId, useState } from "react";
 import type { AnalyticsDaypart } from "@fb/shared";
 import { formatInt } from "@fb/shared/format/number";
 import type { DataState } from "@fb/shared/operator/contracts";
-import {
-  DATA_STATE_DESCRIPTION,
-  DATA_STATE_LABEL,
-} from "@fb/shared/operator/viewModel";
-import { AccessibleChartFrame, DataStateBadge } from "@fb/operator-ui";
+import { AccessibleChartFrame } from "@fb/operator-ui";
 
 import { cn } from "@/lib/cn";
 import { haptic } from "@/lib/tg";
 
+import { AnalyticsStateNotice } from "./AnalyticsStateNotice";
 import {
   preferredWeekday,
   selectedDayHours,
@@ -323,40 +320,6 @@ function HourlyBars({
           нет подтверждения
         </span>
       </div>
-    </div>
-  );
-}
-
-export function AnalyticsStateNotice({
-  state,
-  issue,
-  testId,
-}: {
-  state: Exclude<DataState, "ready">;
-  issue?: string;
-  testId?: string;
-}) {
-  return (
-    <div
-      role={state === "unavailable" ? "alert" : "status"}
-      data-state={state}
-      data-testid={testId}
-      className={cn(
-        "rounded-[var(--radius-2)] border bg-bg-2 px-4 py-3 text-[14px]",
-        state === "partial"
-          ? "border-warning/30"
-          : state === "unavailable"
-            ? "border-danger/30"
-            : "border-[var(--color-hairline-strong)]",
-      )}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <strong className="text-bg-11">{DATA_STATE_LABEL[state]}</strong>
-        <DataStateBadge state={state} compact />
-      </div>
-      <p className="m-0 mt-1 leading-5 text-bg-9">
-        {issue || DATA_STATE_DESCRIPTION[state]}
-      </p>
     </div>
   );
 }

@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { validateCampaignStep, type CampaignWizardStep } from "@fb/features/campaigns";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, Clock, Plus, Save } from "lucide-react";
 
-import { CampaignRunsHistory } from "@/components/domain/campaigns/CampaignRunsHistory";
 import { WizardStep1Start } from "@/components/domain/campaigns/WizardStep1Start";
 import { WizardStep2Identity } from "@/components/domain/campaigns/WizardStep2Identity";
 import { WizardStep3Goal } from "@/components/domain/campaigns/WizardStep3Goal";
@@ -29,18 +28,19 @@ export const Route = createFileRoute("/campaigns/create/")({
   // ?preset=<uuid> — карточка пресета ведёт сюда «Применить и создать» одной
   // ссылкой, без повторного выбора того же пресета на шаге 1. Значение из
   // адресной строки не доверенное — что не похоже на id пресета, то отброшено.
-  validateSearch: (search: Record<string, unknown>): { preset?: string } => {
+  //
+  // ?tab=history раньше монтировал здесь второй экземпляр CampaignRunsHistory
+  // (issue-аудит UI): история заливов теперь живёт только на /campaigns,
+  // а этот параметр — только чтобы старый deep-link не ломался (см.
+  // редирект в CampaignCreatePage).
+  validateSearch: (search: Record<string, unknown>): { preset?: string; tab?: "history" } => {
     const raw = search.preset;
-    return typeof raw === "string" && UUID_RE.test(raw) ? { preset: raw.toLowerCase() } : {};
+    return {
+      ...(typeof raw === "string" && UUID_RE.test(raw) ? { preset: raw.toLowerCase() } : {}),
+      ...(search.tab === "history" ? { tab: "history" as const } : {}),
+    };
   },
 });
-
-type PageTab = "wizard" | "history";
-
-const TAB_LABELS: Record<PageTab, { label: string; icon: typeof Plus }> = {
-  wizard: { label: "Создать", icon: Plus },
-  history: { label: "История", icon: Clock },
-};
 
 const STEP_LABELS = [
   "Старт",
@@ -53,11 +53,23 @@ const STEP_LABELS = [
 ] as const;
 
 export function CampaignCreatePage() {
-  const [activeTab, setActiveTab] = useState<PageTab>("wizard");
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: "/campaigns/create/" });
   const [resetOpen, setResetOpen] = useState(false);
   const store = useWizardStore();
   const draft = useCampaignDraftSync();
   const hasDraft = store.draftRevision > 0 || store.draftVersion > 0;
+
+  // История заливов живёт только на /campaigns (issue-аудит UI: тот же
+  // компонент раньше монтировался дважды — здесь и там). Старый deep-link
+  // ?tab=history не 404-ит, а уводит на канонический адрес.
+  useEffect(() => {
+    if (search.tab === "history") {
+      void navigate({ to: "/campaigns", replace: true });
+    }
+  }, [search.tab, navigate]);
+
+  if (search.tab === "history") return null;
 
   if (draft.isHydrating) {
     return (
@@ -94,16 +106,14 @@ export function CampaignCreatePage() {
       <PageHeader
         title="Создание кампаний"
         action={
-          activeTab === "wizard" ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setResetOpen(true)}
-              disabled={!hasDraft || draft.deletePending}
-            >
-              Сбросить
-            </Button>
-          ) : null
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setResetOpen(true)}
+            disabled={!hasDraft || draft.deletePending}
+          >
+            Сбросить
+          </Button>
         }
       />
 
@@ -112,40 +122,40 @@ export function CampaignCreatePage() {
         role="tablist"
         aria-label="Раздел кампаний"
       >
-        {(Object.entries(TAB_LABELS) as [PageTab, (typeof TAB_LABELS)[PageTab]][]).map(
-          ([tab, { label, icon: Icon }]) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                "-mb-px flex min-h-11 flex-1 items-center justify-center gap-2 border-b-2 px-3 font-display text-[12px] uppercase tracking-wider transition-colors sm:flex-none sm:px-4",
-                activeTab === tab
-                  ? "border-accent text-bg-11"
-                  : "border-transparent text-bg-8 hover:border-[var(--color-hairline-strong)] hover:text-bg-11",
-              )}
-            >
-              <Icon size={14} aria-hidden="true" />
-              {label}
-            </button>
-          ),
-        )}
+        <span
+          role="tab"
+          aria-selected="true"
+          className={cn(
+            "-mb-px flex min-h-11 flex-1 items-center justify-center gap-2 border-b-2 px-3 font-display text-[12px] uppercase tracking-wider sm:flex-none sm:px-4",
+            "border-accent text-bg-11",
+          )}
+        >
+          <Plus size={14} aria-hidden="true" />
+          Создать
+        </span>
+        {/* История заливов — не отдельный таб этого визарда, а канонический
+            /campaigns: тот же CampaignRunsHistory не должен монтироваться
+            дважды. */}
+        <Link
+          to="/campaigns"
+          role="tab"
+          aria-selected="false"
+          className={cn(
+            "-mb-px flex min-h-11 flex-1 items-center justify-center gap-2 border-b-2 px-3 font-display text-[12px] uppercase tracking-wider transition-colors sm:flex-none sm:px-4",
+            "border-transparent text-bg-8 hover:border-[var(--color-hairline-strong)] hover:text-bg-11",
+          )}
+        >
+          <Clock size={14} aria-hidden="true" />
+          История
+        </Link>
       </div>
 
-      {activeTab === "wizard" ? (
-        <>
-          <DraftStatus
-            state={store.draftSyncState}
-            updatedAt={store.draftUpdatedAt}
-            onReload={() => void draft.reloadServerDraft()}
-          />
-          <WizardLayout />
-        </>
-      ) : (
-        <CampaignRunsHistory />
-      )}
+      <DraftStatus
+        state={store.draftSyncState}
+        updatedAt={store.draftUpdatedAt}
+        onReload={() => void draft.reloadServerDraft()}
+      />
+      <WizardLayout />
 
       <ConfirmDialog
         open={resetOpen}
@@ -158,7 +168,6 @@ export function CampaignCreatePage() {
           void draft
             .deleteServerDraft()
             .then(() => {
-              setActiveTab("wizard");
               toast.success("Черновик сброшен");
             })
             .catch(() => toast.error("Не удалось сбросить черновик. Обновите данные и повторите."));

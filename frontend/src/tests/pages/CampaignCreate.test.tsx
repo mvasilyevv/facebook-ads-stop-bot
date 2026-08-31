@@ -20,8 +20,13 @@ import { useState, type ReactElement } from "react";
 // ─── Моки ─────────────────────────────────────────────────────────────────────
 
 // ?preset=<id> — карточка пресета ведёт на /campaigns/create с этим query
-// (#345 QW11). Управляемое состояние, чтобы конкретный тест мог задать его.
-const createRouteSearch = vi.hoisted(() => ({ value: {} as { preset?: string } }));
+// (#345 QW11). ?tab=history — старый deep-link на вкладку истории, которая
+// теперь редиректит на канонический /campaigns (issue-аудит UI). Управляемое
+// состояние, чтобы конкретный тест мог задать его.
+const createRouteSearch = vi.hoisted(
+  () => ({ value: {} as { preset?: string; tab?: "history" } }),
+);
+const campaignsCreateNavigate = vi.hoisted(() => vi.fn());
 
 // Мок TanStack Router (роут createFileRoute)
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -32,9 +37,16 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
       () =>
       <T,>(options: T): T =>
         ({ ...options, useSearch: () => createRouteSearch.value }) as T,
-    Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-      <a href={to}>{children}</a>
+    Link: ({
+      children,
+      to,
+      ...rest
+    }: { children: React.ReactNode; to: string } & Record<string, unknown>) => (
+      <a href={to} {...rest}>
+        {children}
+      </a>
     ),
+    useNavigate: () => campaignsCreateNavigate,
     useRouterState: () => ({ location: { pathname: "/campaigns/create" } }),
   };
 });
@@ -1184,6 +1196,50 @@ describe("CampaignCreatePage query preset (#345 QW11)", () => {
 
     expect(useWizardStore.getState().start.mode).toBe("new");
     expect(useWizardStore.getState().start.preset_id).toBeFalsy();
+  });
+});
+
+// История заливов смонтирована только на /campaigns (issue-аудит UI): раньше
+// тот же CampaignRunsHistory второй раз рендерился на вкладке "История" здесь.
+// Старый deep-link ?tab=history не должен ломаться — он уводит на /campaigns.
+describe("CampaignCreatePage ?tab=history redirect", () => {
+  afterEach(() => {
+    createRouteSearch.value = {};
+    campaignsCreateNavigate.mockClear();
+  });
+
+  it("уводит на канонический /campaigns вместо второй истории здесь", async () => {
+    createRouteSearch.value = { tab: "history" };
+
+    render(wrap(<CampaignCreatePage />));
+
+    await waitFor(() =>
+      expect(campaignsCreateNavigate).toHaveBeenCalledWith({
+        to: "/campaigns",
+        replace: true,
+      }),
+    );
+    // Пока редирект не сработал, визард не мигает своей копией истории.
+    expect(screen.queryByRole("heading", { name: "Как начать?" })).not.toBeInTheDocument();
+  });
+
+  it("без ?tab=history остаётся на визарде и не редиректит", () => {
+    createRouteSearch.value = {};
+
+    render(wrap(<CampaignCreatePage />));
+
+    expect(campaignsCreateNavigate).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Создать" })).toBeInTheDocument();
+  });
+
+  it("ведёт на /campaigns вкладкой «История» вместо переключения панели", () => {
+    createRouteSearch.value = {};
+
+    render(wrap(<CampaignCreatePage />));
+
+    const historyLink = screen.getByRole("tab", { name: "История" });
+    expect(historyLink.tagName).toBe("A");
+    expect(historyLink).toHaveAttribute("href", "/campaigns");
   });
 });
 

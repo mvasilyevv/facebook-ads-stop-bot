@@ -14,6 +14,7 @@ const { navigate, routeSearch } = vi.hoisted(() => ({
   routeSearch: {
     tab: "uploads",
     period: "today",
+    section: "summary",
     preset: "economy",
     sort: "spend",
     direction: "desc",
@@ -80,6 +81,7 @@ describe("mobile performance analytics", () => {
     Object.assign(routeSearch, {
       tab: "uploads",
       period: "today",
+      section: "summary",
       preset: "economy",
       sort: "spend",
       direction: "desc",
@@ -116,7 +118,9 @@ describe("mobile performance analytics", () => {
     });
   });
 
-  it("renders source evidence and responsive campaign cards without a desktop table", () => {
+  it("renders source evidence and responsive campaign cards without a desktop table", async () => {
+    // Тяжёлые карточки результата монтируются только в разделе «Результаты».
+    routeSearch.section = "results";
     render(<AnalyticsPage />);
 
     expect(screen.getByText("Качество источников")).toBeInTheDocument();
@@ -124,14 +128,14 @@ describe("mobile performance analytics", () => {
     expect(screen.getAllByText(/Снимок · 42 сек назад/).length).toBeGreaterThan(
       0,
     );
-    expect(
-      screen.getByRole("heading", { name: "Campaign Alpha" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Campaign Beta" }),
-    ).toBeInTheDocument();
 
-    const cards = screen.getByTestId("performance-cards");
+    const cards = await screen.findByTestId("performance-cards");
+    expect(
+      within(cards).getByRole("heading", { name: "Campaign Alpha" }),
+    ).toBeInTheDocument();
+    expect(
+      within(cards).getByRole("heading", { name: "Campaign Beta" }),
+    ).toBeInTheDocument();
     expect(within(cards).queryByRole("table")).not.toBeInTheDocument();
     expect(within(cards).getAllByRole("article")).toHaveLength(2);
   });
@@ -169,17 +173,26 @@ describe("mobile performance analytics", () => {
     );
   });
 
-  it("renders live thresholds, the funnel and the typed event feed", () => {
+  it("renders live thresholds in the Сводка section", async () => {
+    // Money-график виден сразу на дефолтном разделе — ради него аналитику и
+    // открывают, поэтому он не спрятан за переключением на «Динамику».
+    routeSearch.section = "summary";
     render(<AnalyticsPage />);
 
     expect(
-      screen.getByRole("heading", { name: "Накопительный расход" }),
+      await screen.findByRole("heading", { name: "Накопительный расход" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Факт \$.*184\.20/ }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Воронка").length).toBeGreaterThanOrEqual(2);
-    const funnel = screen.getByRole("list", { name: "Этапы воронки" });
+  });
+
+  it("renders the funnel in the Воронка section", async () => {
+    routeSearch.section = "funnel";
+    render(<AnalyticsPage />);
+
+    expect(screen.getAllByText("Воронка").length).toBeGreaterThanOrEqual(1);
+    const funnel = await screen.findByRole("list", { name: "Этапы воронки" });
     expect(
       within(funnel).getByText(/CR — · стоимость \$.*0\.30/),
     ).toBeInTheDocument();
@@ -189,14 +202,86 @@ describe("mobile performance analytics", () => {
     expect(
       within(funnel).getByText(/CR 14\.86% · стоимость \$.*16\.75/),
     ).toBeInTheDocument();
+  });
+
+  it("renders the typed event feed regardless of the selected section", () => {
+    // Лента событий не привязана к разделу «Заливов» — видна из «Сводки».
+    render(<AnalyticsPage />);
+
     expect(
       screen.getByText("GH_CR2: meta_api_mutation · выполнено"),
     ).toBeInTheDocument();
     expect(screen.getByText("Открыть")).toBeInTheDocument();
   });
 
-  it("keeps every analytics control at least 44px and exposes semantic labels", () => {
+  it("restores the selected analytics section from the URL and keeps other heavy charts unmounted", () => {
+    routeSearch.section = "results";
     render(<AnalyticsPage />);
+
+    expect(
+      screen.getByRole("button", { name: "Раздел: Результаты" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("heading", { name: "Кампании" }),
+    ).toBeInTheDocument();
+    // «Динамика» и «Воронка» не смонтированы вместе с «Результатами».
+    expect(
+      screen.queryByRole("heading", { name: "Накопительный расход" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Воронка", level: 2 }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows only the money chart on the default Сводка section, others stay unmounted", async () => {
+    render(<AnalyticsPage />);
+
+    expect(
+      screen.getByRole("button", { name: "Раздел: Сводка" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // Money-график (расход/база/stop) виден сразу — ради него аналитику и
+    // открывают. Воронка и результаты остаются несмонтированными.
+    expect(
+      await screen.findByRole("heading", { name: "Накопительный расход" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Воронка", level: 2 }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Кампании" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("switching the analytics section keeps filters and period untouched", () => {
+    render(<AnalyticsPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Раздел: Результаты" }));
+
+    expect(
+      lastNavigationFrom({
+        ...(routeSearch as AnalyticsRouteSearch),
+        account_id: "act_9",
+        page: 3,
+      }),
+    ).toEqual(expect.objectContaining({ account_id: "act_9", page: 3, section: "results" }));
+  });
+
+  it("shows a sticky compact totals strip that stays visible while scrolling", () => {
+    render(<AnalyticsPage />);
+
+    const sticky = screen.getByTestId("analytics-sticky-totals");
+    expect(sticky).toHaveAttribute("data-state", "ready");
+    expect(sticky.className).toContain("sticky");
+    expect(sticky).toHaveTextContent("Расход");
+    expect(sticky).toHaveTextContent("CPA");
+  });
+
+  it("keeps every analytics control at least 44px and exposes semantic labels", async () => {
+    routeSearch.section = "dynamics";
+    render(<AnalyticsPage />);
+    await screen.findByRole("img", {
+      name: /Пунктиром отмечены часы без подтверждённых данных/,
+    });
 
     for (const button of screen.getAllByRole("button")) {
       expect(button.className).toMatch(/min-h-(?:11|\[44px\])|size-11/);
@@ -226,6 +311,8 @@ describe("mobile performance analytics", () => {
   });
 
   it("keeps period, search and account filters action-first and typed", () => {
+    // Переключатель наборов колонок живёт в разделе «Результаты».
+    routeSearch.section = "results";
     render(<AnalyticsPage />);
 
     const today = screen.getByRole("button", { name: "Сегодня" });
@@ -269,8 +356,10 @@ describe("mobile performance analytics", () => {
     );
   });
 
-  it("renders selected-day x24 bars with explicit unknown gaps and an accessible table", () => {
+  it("renders selected-day x24 bars with explicit unknown gaps and an accessible table", async () => {
+    routeSearch.section = "dynamics";
     render(<AnalyticsPage />);
+    await screen.findByRole("button", { name: "Понедельник" });
 
     expect(screen.getByRole("button", { name: "Понедельник" })).toHaveAttribute(
       "aria-pressed",
@@ -332,13 +421,15 @@ describe("mobile performance analytics", () => {
     expect(document.querySelectorAll("[data-unknown-hour]")).toHaveLength(24);
   });
 
-  it("does not label raw source statuses current when daypart evidence is stale", () => {
+  it("does not label raw source statuses current when daypart evidence is stale", async () => {
+    routeSearch.section = "dynamics";
     const stale = makeDaypartFixture();
     stale.state = "stale";
     stale.issues = ["Почасовой снимок устарел"];
     mockUseDaypart.mockReturnValue(queryResult(stale, daypartRefetch));
 
     render(<AnalyticsPage />);
+    await screen.findByText("Понедельник · 24 часа");
 
     const daypartFigure = screen
       .getByText("Понедельник · 24 часа")
@@ -380,7 +471,7 @@ describe("mobile performance analytics", () => {
     expect(document.body).not.toHaveTextContent(/\bnull\b/i);
   });
 
-  it("hides non-USD funnel money even when the response is single-currency", () => {
+  it("hides non-USD funnel money even when the response is single-currency", async () => {
     const kwd = makePerformanceFixture();
     kwd.scope = {
       ...kwd.scope,
@@ -397,20 +488,24 @@ describe("mobile performance analytics", () => {
     };
     mockUsePerformance.mockReturnValue(queryResult(kwd, performanceRefetch));
 
-    render(<AnalyticsPage />);
+    routeSearch.section = "funnel";
+    const { rerender } = render(<AnalyticsPage />);
 
-    const funnel = screen
-      .getByRole("heading", { name: "Воронка", level: 2 })
-      .closest("section");
+    const funnel = (
+      await screen.findByRole("heading", { name: "Воронка", level: 2 })
+    ).closest("section");
     expect(funnel).not.toBeNull();
     expect(funnel).not.toHaveTextContent(/KWD|1\.234/);
     expect(funnel).toHaveTextContent(/стоимость —/i);
     expect(document.body).toHaveTextContent(
       "валюта не USD · денежные итоги скрыты",
     );
-    const liveBudget = screen
-      .getByRole("heading", { name: "Накопительный расход" })
-      .closest("figure");
+
+    routeSearch.section = "summary";
+    rerender(<AnalyticsPage />);
+    const liveBudget = (
+      await screen.findByRole("heading", { name: "Накопительный расход" })
+    ).closest("figure");
     expect(liveBudget).not.toBeNull();
     expect(liveBudget).toHaveTextContent(
       "Денежные значения скрыты: рабочая валюта не подтверждена как USD.",
@@ -525,7 +620,7 @@ describe("mobile performance analytics", () => {
     );
   });
 
-  it("does not turn a degraded zero-row response into a confirmed empty result", () => {
+  it("does not turn a degraded zero-row response into a confirmed empty result", async () => {
     const degraded = makePerformanceFixture();
     degraded.state = "partial";
     degraded.issues = ["Tracker coverage is incomplete"];
@@ -535,9 +630,15 @@ describe("mobile performance analytics", () => {
       queryResult(degraded, performanceRefetch),
     );
 
+    routeSearch.section = "results";
     render(<AnalyticsPage />);
 
     expect(screen.getByText("Количество не подтверждено")).toBeInTheDocument();
+    // Дожидаемся, пока ленивые карточки результата смонтируются, иначе
+    // отрицательная проверка ниже была бы тривиально верна и без исправления.
+    expect(
+      await screen.findByText(/Часть источников недоступна/),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(
         "Сервер подтвердил, что по выбранным фильтрам строк нет.",
@@ -546,24 +647,25 @@ describe("mobile performance analytics", () => {
     expect(screen.getAllByText("Частично").length).toBeGreaterThan(0);
   });
 
-  it("labels zero rows as confirmed only for the explicit empty state", () => {
+  it("labels zero rows as confirmed only for the explicit empty state", async () => {
     const empty = makePerformanceFixture();
     empty.state = "empty";
     empty.rows = [];
     empty.pagination = { page: 1, page_size: 20, total: 0, pages: 0 };
     mockUsePerformance.mockReturnValue(queryResult(empty, performanceRefetch));
 
+    routeSearch.section = "results";
     render(<AnalyticsPage />);
 
     expect(screen.getByText("0 строк")).toBeInTheDocument();
     expect(
-      screen.getByText(
+      await screen.findByText(
         "Сервер подтвердил, что по выбранным фильтрам строк нет.",
       ),
     ).toBeInTheDocument();
   });
 
-  it("fails closed for unavailable payloads and request errors", () => {
+  it("fails closed for unavailable payloads and request errors", async () => {
     const unavailable = makePerformanceFixture();
     unavailable.state = "unavailable";
     unavailable.issues = ["Meta source unavailable"];
@@ -573,11 +675,12 @@ describe("mobile performance analytics", () => {
       queryResult(unavailable, performanceRefetch),
     );
 
+    routeSearch.section = "results";
     const { rerender } = render(<AnalyticsPage />);
     expect(screen.getAllByText("Недоступно").length).toBeGreaterThan(0);
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
     expect(
-      screen.getAllByText(/неподтверждённые значения скрыты/i).length,
+      (await screen.findAllByText(/неподтверждённые значения скрыты/i)).length,
     ).toBeGreaterThan(0);
 
     mockUsePerformance.mockReturnValue({
@@ -597,7 +700,7 @@ describe("mobile performance analytics", () => {
     expect(performanceRefetch).toHaveBeenCalledOnce();
   });
 
-  it("hides live spend and threshold values for an unavailable series", () => {
+  it("hides live spend and threshold values for an unavailable series", async () => {
     const unavailable = makeLiveBudgetFixture();
     unavailable.state = "unavailable";
     unavailable.issues = ["Meta budget series unavailable"];
@@ -605,9 +708,10 @@ describe("mobile performance analytics", () => {
       queryResult(unavailable, liveBudgetRefetch),
     );
 
+    routeSearch.section = "summary";
     render(<AnalyticsPage />);
 
-    const heading = screen.getByRole("heading", {
+    const heading = await screen.findByRole("heading", {
       name: "Накопительный расход",
     });
     const chart = heading.closest("figure");
@@ -625,13 +729,20 @@ describe("mobile performance analytics", () => {
 });
 
 function lastNavigation(): AnalyticsRouteSearch {
+  return lastNavigationFrom(routeSearch as AnalyticsRouteSearch);
+}
+
+/** Same as `lastNavigation`, but applies the patch to a caller-supplied
+ * previous state instead of the live `routeSearch` fixture — useful for
+ * proving a patch preserves fields the fixture doesn't carry by default. */
+function lastNavigationFrom(previous: AnalyticsRouteSearch): AnalyticsRouteSearch {
   const call = navigate.mock.calls.at(-1)?.[0] as
     | {
         search: (previous: AnalyticsRouteSearch) => AnalyticsRouteSearch;
       }
     | undefined;
   if (!call) throw new Error("Expected analytics navigation");
-  return call.search(routeSearch as AnalyticsRouteSearch);
+  return call.search(previous);
 }
 
 function queryResult<T>(data: T, refetch: () => void) {

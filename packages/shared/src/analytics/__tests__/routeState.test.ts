@@ -11,6 +11,7 @@ describe("analytics route state", () => {
         from_date: "2026-08-01",
         to_date: "2026-08-08",
         account_id: " act_1 ",
+        section: "results",
         preset: "funnel",
         sort: "ftds",
         direction: "asc",
@@ -23,6 +24,7 @@ describe("analytics route state", () => {
         from_date: "2026-08-01",
         to_date: "2026-08-08",
         account_id: "act_1",
+        section: "results",
         preset: "funnel",
         sort: "ftds",
         direction: "asc",
@@ -36,6 +38,7 @@ describe("analytics route state", () => {
       period: "forever",
       from_date: "2026-02-30",
       to_date: "08/01/2026",
+      section: "chaos",
       preset: "everything",
       sort: "profit",
       page: "-1",
@@ -43,6 +46,7 @@ describe("analytics route state", () => {
     expect(parsed.period).toBe("today");
     expect(parsed.from_date).toBeUndefined();
     expect(parsed.to_date).toBeUndefined();
+    expect(parsed.section).toBe("summary");
     expect(parsed.preset).toBe("economy");
     expect(parsed.sort).toBe("spend");
     expect(parsed.direction).toBe("desc");
