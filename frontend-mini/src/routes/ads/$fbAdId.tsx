@@ -38,6 +38,13 @@ function AdDetailRoute() {
   return <MiniAdDetail fbAdId={fbAdId} />;
 }
 
+// Экспортируется отдельно: /open (routes/open.tsx) переиспользует этот же
+// вид без смены URL, чтобы id цели никогда не попадал в адресную строку.
+// Этот компонент завязан на @fb/operator-ui + OperatorAds — те же модули,
+// что и главному экрану (OperatorMiniDashboard), поэтому статический
+// импорт дешевле по итоговому бюджету, чем вынос в отдельный ленивый чанк
+// (см. commit history / отчёт issue #349: разбиение создаёт отдельный
+// gzip-поток хуже сжимаемый, чем общий с уже нужным дашборду кодом).
 export function MiniAdDetail({ fbAdId }: { fbAdId: string }) {
   const realtimeStatus = useOperatorRealtimeStatus();
   const ads = useOperatorAds({ search: fbAdId, page: 1, page_size: 10 });

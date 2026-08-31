@@ -35,6 +35,10 @@ function MiniIncidentDetailRoute() {
   return <MiniIncidentDetail incidentId={incidentId} />;
 }
 
+// Экспортируется отдельно: /open (routes/open.tsx) переиспользует этот же
+// вид без смены URL (см. пояснение в $fbAdId.tsx рядом — OperatorAds уже
+// нужен главному экрану, поэтому статический импорт дешевле по бюджету,
+// чем отдельный ленивый чанк).
 export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
   const navigate = useNavigate();
   const incidentQuery = useOperatorIncident(incidentId);

@@ -45,7 +45,7 @@ vi.mock("@/lib/operatorApi", () => ({
 }));
 
 import { Route as ActionsRoute } from "@/routes/actions/index";
-import { MiniActionDetail } from "@/routes/actions/$actionId";
+import { MiniActionDetail } from "@/routes/actions/ActionDetailView";
 
 const ActionsPage = (ActionsRoute as unknown as { component: ComponentType })
   .component;

@@ -30,7 +30,7 @@ vi.mock("@/lib/tg", () => ({
   getTgStartParam: () => null,
   tgAlert,
 }));
-vi.mock("@/routes/actions/$actionId", () => ({
+vi.mock("@/routes/actions/ActionDetailView", () => ({
   MiniActionDetail: ({ actionId }: { actionId: string }) => (
     <div>action:{actionId}</div>
   ),
@@ -133,5 +133,19 @@ describe("opaque TMA navigation", () => {
     );
     expect(screen.queryByText("ad:previous-ad-A")).not.toBeInTheDocument();
     expect(tgAlert).toHaveBeenCalledOnce();
+  });
+
+  it("lazily renders the resolved target's detail view behind a Suspense boundary", async () => {
+    storeResolvedNavigation({ target_kind: "action", target_id: "act-9001" });
+
+    render(<OpaqueTargetPage />);
+
+    // Компонент детали грузится динамическим import() (см. open.tsx) —
+    // сразу после рендера доступен только fallback-скелет.
+    expect(screen.getByRole("status", { name: "Загрузка" })).toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(screen.getByText("action:act-9001")).toBeInTheDocument(),
+    );
   });
 });
