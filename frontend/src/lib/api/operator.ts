@@ -271,6 +271,15 @@ export function useAcknowledgeOperatorIncident() {
   return operatorApi.useMutation("post", "/api/operator/incidents/{incident_id}/ack");
 }
 
+/**
+ * Запись ручной сверки задачи. Это НЕ команда в Meta: ответ 200 означает
+ * «наблюдение записано», а исход задачи остаётся неизвестным. Повтор с тем же
+ * наблюдением идемпотентен на сервере, поэтому Idempotency-Key здесь не нужен.
+ */
+export function useRecordOperatorManualReview() {
+  return operatorApi.useMutation("post", "/api/operator/actions/{task_id}/manual-review");
+}
+
 export function operatorProblemMessage(error: unknown): string {
   // Fallback — это подсказка к действию, а не повтор заголовка: ErrorState уже
   // сообщил, что именно недоступно, и дублирование строки ничего не добавляет.

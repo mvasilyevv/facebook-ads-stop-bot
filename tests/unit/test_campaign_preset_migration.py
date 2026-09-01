@@ -12,9 +12,9 @@ def test_campaign_preset_migration_is_the_single_forward_only_head() -> None:
     chain = load_project_revision_chain()
 
     assert migration.down_revision == "0005_am_columns_setting"
-    # Голова уехала на 0010: пороги стоп-правил стали настройками оффера (#260).
+    # Голова уехала на 0011: у задачи появился факт ручной сверки (#360).
     # Цепочка остаётся линейной и forward-only.
-    assert chain.head == "0010_offer_rule_thresholds"
+    assert chain.head == "0011_task_manual_review"
     with pytest.raises(RuntimeError, match="forward-only"):
         migration.downgrade()
 
@@ -73,6 +73,39 @@ def test_worker_heartbeat_migration_creates_an_empty_table_without_backfill(
     assert "DEFAULT" not in sql
     assert "UPDATE" not in sql
     assert "DROP" not in sql
+
+
+def test_manual_review_migration_adds_facts_without_touching_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ручная сверка — новая ось, а не переписывание исхода (issue #360).
+
+    Ни одна существующая строка не должна поменяться: у неё нет сверки, и
+    придумать её задним числом нельзя. Наблюдение — закрытый список из трёх
+    значений: кнопки «ок» здесь нет по замыслу.
+    """
+
+    migration = importlib.import_module("migrations.versions.0011_task_manual_review")
+    statements: list[str] = []
+    monkeypatch.setattr(migration.op, "execute", statements.append)
+
+    migration.upgrade()
+
+    sql = "\n".join(statements)
+    assert migration.down_revision == "0010_offer_rule_thresholds"
+    for column in (
+        "manual_review_observation",
+        "manual_review_at",
+        "manual_review_by",
+    ):
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in sql
+    assert "IN ('stopped', 'active', 'missing')" in sql
+    assert "ck_task_queue_manual_review_complete" in sql
+    assert "UPDATE" not in sql
+    assert "DROP COLUMN" not in sql
+    assert "result" not in sql.replace("result->>'outcome'", "")
+    with pytest.raises(RuntimeError, match="forward-only"):
+        migration.downgrade()
 
 
 def test_campaign_preset_migration_adds_snapshot_fields_and_purchase_guard(

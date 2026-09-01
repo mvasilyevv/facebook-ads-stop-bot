@@ -178,6 +178,59 @@ def browser_rejection_not_retryable_reason(reason_code: str | None) -> str | Non
     )
 
 
+# Почему автоматика больше не пытается сверить исход. Отдельно от причины
+# отказа: причина отвечает «что случилось», а это — «и почему система теперь
+# молчит». Без этого текста терминальный UNKNOWN выглядит как задача, которую
+# всё ещё кто-то проверяет, — и оператор ждёт вечно.
+_AUTOMATION_STOPPED_CAUSES: dict[str, str] = {
+    "reconciliation_exhausted": (
+        "Автоматическая сверка исчерпала попытки — система больше не проверяет этот исход"
+    ),
+    "browser_readiness_reconciliation_attempts_exhausted": (
+        "Автоматическая сверка исчерпала попытки — система больше не проверяет этот исход"
+    ),
+    "stuck_campaign_create_after_worker_loss": (
+        "Залив мог начаться в кабинете до обрыва — автоматический повтор запрещён, "
+        "он создал бы дубль"
+    ),
+    "stuck_duplicate_without_checkpoint": (
+        "Дублирование оборвалось без контрольной точки — автоматический повтор "
+        "запрещён, он создал бы дубль"
+    ),
+}
+
+_IRREVERSIBLE_AUTOMATION_STOPPED_CAUSE = (
+    "Действие необратимо — система не повторяет и не сверяет его сама"
+)
+
+
+def automation_stopped_reason(result: Mapping[str, Any] | None, *, status: str) -> str | None:
+    """Почему по неизвестному исходу автоматика больше не работает.
+
+    Терминальность решает ``status``, а не ``reconcile_required``: у зависшего
+    залива стоят одновременно ``reconcile_required`` и ``status='failed'`` —
+    сверка «требуется», но вызывать её уже некому. Пока задача жива в очереди,
+    говорить «система больше не пытается» было бы враньём в другую сторону.
+
+    Словарь закрытый — незнакомый машинный код наружу не едет; ``None`` значит
+    «причина не записана», а не «всё в порядке».
+    """
+    if not isinstance(result, Mapping):
+        return None
+    if str(result.get("outcome") or "").upper() != "UNKNOWN":
+        return None
+    if str(status or "").lower() in {"pending", "retrying", "running"}:
+        return None
+    if result.get("reconciliation_exhausted") is True:
+        return _AUTOMATION_STOPPED_CAUSES["reconciliation_exhausted"]
+    named = _AUTOMATION_STOPPED_CAUSES.get(str(result.get("reason") or "").strip())
+    if named:
+        return named
+    if result.get("manual_review_required") is True:
+        return _IRREVERSIBLE_AUTOMATION_STOPPED_CAUSE
+    return None
+
+
 def operator_reason_from_result(result: Mapping[str, Any] | None) -> str | None:
     """Прочитать записанную причину из результата задачи.
 

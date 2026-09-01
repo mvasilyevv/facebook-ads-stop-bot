@@ -40,6 +40,12 @@ vi.mock("@/lib/operatorApi", () => ({
   useOperatorActions: (...args: unknown[]) => useOperatorActions(...args),
   useOperatorAction: (...args: unknown[]) => useOperatorAction(...args),
   useOperatorSnapshot: (...args: unknown[]) => useOperatorSnapshot(...args),
+  useRecordOperatorManualReview: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
   operatorProblemMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Ошибка",
 }));

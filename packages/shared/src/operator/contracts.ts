@@ -44,6 +44,8 @@ export type OperatorFunnelStage = components["schemas"]["OperatorFunnelStage"];
 export type OperatorFunnelStageKey = OperatorFunnelStage["key"];
 export type OperatorFunnelData = components["schemas"]["OperatorFunnelData"];
 export type OperatorActionItem = components["schemas"]["OperatorActionItem"];
+export type OperatorActionManualReview =
+  components["schemas"]["OperatorActionManualReview"];
 export type OperatorActionsResponse =
   components["schemas"]["OperatorActionsResponse"];
 export type OperatorAdRow = components["schemas"]["OperatorAdRow"];

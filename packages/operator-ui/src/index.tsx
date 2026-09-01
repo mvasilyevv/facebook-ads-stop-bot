@@ -27,6 +27,7 @@ export {
 } from "./severity";
 export { MetricCell, type MetricCellProps, Metric, type MetricProps } from "./Metric";
 export { FreshnessLine, type FreshnessLineProps } from "./FreshnessLine";
+export { ManualReviewPanel, type ManualReviewPanelProps } from "./ManualReviewPanel";
 
 export interface DataStateBadgeProps {
   state: DataState;

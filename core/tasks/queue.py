@@ -17,7 +17,8 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -27,6 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.meta_api.errors import BROWSER_OPERATION_REJECTION_REASONS
 from core.tasks.wakeup import TASK_QUEUE_NOTIFY_CHANNEL
+from core.telegram.notifications import enqueue_notification_in_transaction
+from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
 from core.wording import (
     action_label_ru,
     ads_ru,
@@ -2909,6 +2912,208 @@ async def defer_unknown_reconciliation(
             },
         )
     return bool(result.rowcount)
+
+
+# ===================== ручная сверка терминального UNKNOWN =====================
+#
+# Автоматическая сверка закрывает не всё. Для pause/activate она исчерпывается
+# (``reconciliation_exhausted``), для создания и дублирования запрещена
+# архитектурно: слепой повтор — это дубль кампании и второй открут бюджета.
+# После этого строка остаётся UNKNOWN навсегда, и раньше единственным способом
+# её закрыть была правка БД руками.
+#
+# Ручная сверка — ОТДЕЛЬНАЯ ось поверх неизвестного исхода, а не его подмена.
+# ``result.outcome`` остаётся UNKNOWN: внешняя операция как была неизвестной,
+# так и осталась, оператор лишь свидетельствует, что видел фактическое
+# состояние своими глазами. Поэтому запись живёт в собственных колонках
+# (кто/когда/что увидел) по образцу acknowledge инцидента и никогда не трогает
+# ``status`` и ``result``.
+
+@asynccontextmanager
+async def _manual_review_scope(
+    engine: AsyncEngine,
+    connection: AsyncConnection | None,
+) -> AsyncIterator[AsyncConnection]:
+    """Событие сверки коммитится в одной транзакции с записью факта."""
+    if connection is not None:
+        yield connection
+        return
+    async with engine.begin() as conn:
+        yield conn
+
+
+MANUAL_REVIEW_OBSERVATIONS: frozenset[str] = frozenset({"stopped", "active", "missing"})
+
+# Вопрос закрывают только те наблюдения, при которых объект точно не тратит
+# деньги. «Активен» — единственный исход, при котором неизвестность стоит
+# бюджета: он фиксируется как факт, но сверку не закрывает — нужна команда.
+MANUAL_REVIEW_CLOSING_OBSERVATIONS: frozenset[str] = frozenset({"stopped", "missing"})
+
+_MANUAL_REVIEW_OBSERVATION_RU: dict[str, str] = {
+    "stopped": "объект остановлен и не тратит бюджет",
+    "active": "объект всё ещё активен",
+    "missing": "объект в кабинете не найден",
+}
+
+# Задачу можно сверять только когда автоматика уже не работает по ней: иначе
+# оператор снял бы барьер под живой попыткой воркера.
+_MANUAL_REVIEW_ACTIVE_STATUSES: frozenset[str] = frozenset({"pending", "retrying", "running"})
+
+
+class ManualReviewTaskNotFoundError(LookupError):
+    """Задачи с таким идентификатором нет."""
+
+
+class ManualReviewNotApplicableError(RuntimeError):
+    """Задача не в том состоянии, в котором ручная сверка имеет смысл."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"manual review is not applicable: {reason}")
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class ManualReconciliation:
+    """Зафиксированный факт ручной сверки одной задачи."""
+
+    task_id: int
+    observation: str
+    reviewed_at: datetime
+    reviewed_by: str
+    question_closed: bool
+    was_changed: bool
+    correlation_id: uuid.UUID
+
+
+def manual_review_closes_question(observation: str) -> bool:
+    return observation in MANUAL_REVIEW_CLOSING_OBSERVATIONS
+
+
+async def record_manual_reconciliation(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    observation: str,
+    reviewed_by: str,
+    connection: AsyncConnection | None = None,
+) -> ManualReconciliation:
+    """Записать, что оператор сверил задачу глазами, и что именно он увидел.
+
+    Идемпотентно по паре (задача, наблюдение): вторая вкладка с тем же выбором
+    не создаёт второго события и не переписывает автора первой сверки. Другое
+    наблюдение разрешено — состояние в кабинете могло измениться, — и тогда это
+    новый факт с новым событием; предыдущий остаётся в журнале уведомлений.
+    """
+    if observation not in MANUAL_REVIEW_OBSERVATIONS:
+        raise ValueError(f"unsupported manual review observation: {observation!r}")
+    principal = reviewed_by.strip()
+    if not principal:
+        raise ValueError("reviewed_by is required")
+    if len(principal) > 128:
+        raise ValueError("reviewed_by exceeds 128 characters")
+
+    question_closed = manual_review_closes_question(observation)
+
+    async with _manual_review_scope(engine, connection) as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT id, status, result, correlation_id, task_type, payload,
+                           manual_review_observation, manual_review_at, manual_review_by
+                    FROM task_queue
+                    WHERE id = :task_id
+                    FOR UPDATE
+                    """
+                ),
+                {"task_id": int(task_id)},
+            )
+        ).first()
+        if row is None:
+            raise ManualReviewTaskNotFoundError(str(task_id))
+
+        stored_result = row.result if isinstance(row.result, dict) else {}
+        if str(stored_result.get("outcome") or "").upper() != "UNKNOWN":
+            raise ManualReviewNotApplicableError("outcome_is_not_unknown")
+        if str(row.status or "").lower() in _MANUAL_REVIEW_ACTIVE_STATUSES:
+            raise ManualReviewNotApplicableError("task_is_still_running")
+
+        correlation_id = uuid.UUID(str(row.correlation_id))
+        if row.manual_review_observation == observation:
+            return ManualReconciliation(
+                task_id=int(row.id),
+                observation=observation,
+                reviewed_at=row.manual_review_at,
+                reviewed_by=str(row.manual_review_by or principal),
+                question_closed=question_closed,
+                was_changed=False,
+                correlation_id=correlation_id,
+            )
+
+        # Ни status, ни result здесь не меняются намеренно: исход внешней
+        # операции остался неизвестным, и запись оператора его не подменяет.
+        updated = (
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET manual_review_observation = :observation,
+                        manual_review_at = NOW(),
+                        manual_review_by = :reviewed_by,
+                        updated_at = NOW()
+                    WHERE id = :task_id
+                    RETURNING manual_review_at, manual_review_by
+                    """
+                ),
+                {
+                    "task_id": int(task_id),
+                    "observation": observation,
+                    "reviewed_by": principal,
+                },
+            )
+        ).one()
+
+        await enqueue_notification_in_transaction(
+            conn,
+            NotificationEventSpec(
+                event_type="task_manual_review",
+                severity="ok" if question_closed else "critical",
+                audience="all",
+                facts=NotificationCardFacts(
+                    title=f"Ручная сверка задачи #{int(task_id)}",
+                    summary=(
+                        f"Оператор {principal} проверил кабинет: "
+                        f"{_MANUAL_REVIEW_OBSERVATION_RU[observation]}."
+                    ),
+                    lines=[
+                        f"Сверил: {principal}",
+                        (
+                            "Исход внешней операции остаётся неизвестным"
+                            if question_closed
+                            else "Нужна команда: объект продолжает работать"
+                        ),
+                    ],
+                    risk=(
+                        None
+                        if question_closed
+                        else "Объект может тратить бюджет, пока команда не отправлена"
+                    ),
+                    status=("Вопрос закрыт" if question_closed else "Вопрос остаётся открытым"),
+                ),
+                dedupe_key=f"task:{int(task_id)}:manual-review:{observation}",
+                correlation_id=correlation_id,
+            ),
+        )
+
+    return ManualReconciliation(
+        task_id=int(task_id),
+        observation=observation,
+        reviewed_at=updated.manual_review_at,
+        reviewed_by=str(updated.manual_review_by),
+        question_closed=question_closed,
+        was_changed=True,
+        correlation_id=correlation_id,
+    )
 
 
 # ====================== reconcile (вызывается reconciler_worker'ом) ======================

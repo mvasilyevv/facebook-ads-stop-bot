@@ -15,11 +15,20 @@ import {
   formatZonedDateTime,
   timezoneEvidenceLabel,
 } from "@fb/shared/format/time";
-import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import type { ManualReviewObservation } from "@fb/shared/operator/manualReview";
+import {
+  DataStateBadge,
+  DataStateNotice,
+  ManualReviewPanel,
+} from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { ErrorState } from "@/components/ui";
-import { operatorProblemMessage, useOperatorAction } from "@/lib/operatorApi";
+import {
+  operatorProblemMessage,
+  useOperatorAction,
+  useRecordOperatorManualReview,
+} from "@/lib/operatorApi";
 
 /**
  * Экран действия: маршрут `/actions/$actionId` и deep-link `/open` открывают
@@ -28,6 +37,7 @@ import { operatorProblemMessage, useOperatorAction } from "@/lib/operatorApi";
 export function MiniActionDetail({ actionId }: { actionId: string }) {
   const realtimeStatus = useOperatorRealtimeStatus();
   const query = useOperatorAction(actionId);
+  const manualReview = useRecordOperatorManualReview();
   const projection = query.data
     ? actionForRealtimeState(
         query.data,
@@ -128,6 +138,39 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
         {/* Состояние уже названо чипом выше; здесь — причина исхода из события. */}
         <Row label="Причина" value={operatorActionReason(action)} />
       </dl>
+      {/* Способ закрыть терминальный неизвестный исход (#360): иначе строка
+          остаётся «требует сверки» навсегда. */}
+      <div className="mt-4">
+        <ManualReviewPanel
+          compact
+          review={action.manual_review}
+          available={action.manual_review_available === true}
+          automationStoppedReason={action.automation_stopped_reason}
+          reviewedAtLabel={
+            action.manual_review && action.cabinet_timezone
+              ? formatZonedDateTime(
+                  action.manual_review.at,
+                  action.cabinet_timezone,
+                )
+              : null
+          }
+          busy={manualReview.isPending}
+          errorMessage={
+            manualReview.isError
+              ? operatorProblemMessage(manualReview.error)
+              : null
+          }
+          onSubmit={(observation: ManualReviewObservation) => {
+            manualReview.mutate(
+              {
+                params: { path: { task_id: Number(action.id) } },
+                body: { observation },
+              },
+              { onSuccess: () => void query.refetch() },
+            );
+          }}
+        />
+      </div>
       {recovery?.destination === "target" && action.target_id ? (
         <Link
           to="/ads/$fbAdId"

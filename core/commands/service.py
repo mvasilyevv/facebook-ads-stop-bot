@@ -463,6 +463,7 @@ class CommandService:
                         """
                         SELECT task.id, task.correlation_id, task.status,
                                task.result, task.completed_at, task.updated_at,
+                               task.manual_review_observation,
                                task.payload->>'mutation_kind' AS action_kind,
                                EXISTS (
                                  SELECT 1
@@ -915,6 +916,25 @@ def _target_barrier(latest: Any | None) -> Any | None:
     if status in {"pending", "retrying", "running"}:
         return latest
     if outcome == "UNKNOWN" or result.get("reconcile_required") is True:
+        # Терминальный неизвестный исход держит барьер до тех пор, пока его
+        # никто не разобрал: слепая повторная команда поверх неизвестности —
+        # это ровно тот случай, ради которого барьер и заведён.
+        #
+        # Но без выхода барьер становится вечным: авто-стоп для этого
+        # объявления после него не создаст ни одной задачи, даже если
+        # сканирование увидит объявление снова активным (FSM вернёт
+        # disabled→normal, новый инцидент придёт с новым ключом — и упрётся
+        # сюда же). Зафиксированная ручная сверка снимает барьер: оператор
+        # видел фактическое состояние в Ads Manager, и это единственная
+        # сверка, доступная для терминального UNKNOWN. Исход задачи при этом
+        # остаётся UNKNOWN — сняли барьер, а не переписали результат.
+        #
+        # Барьер снимается и для наблюдения «всё ещё активен»: иначе оператор,
+        # который своими глазами увидел работающий объект, не может отправить
+        # команду вообще. Создание и дублирование сюда не попадают — этот
+        # запрос читает только pause_ad/activate_ad.
+        if getattr(latest, "manual_review_observation", None):
+            return None
         return latest
     if status == "succeeded" and outcome == "CONFIRMED" and not bool(latest.has_post_evidence):
         return latest

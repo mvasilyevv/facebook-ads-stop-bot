@@ -18,7 +18,8 @@ import {
 } from "@fb/shared/operator/actionLabels";
 import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
 import type { OperatorActionItem } from "@fb/shared/operator/contracts";
-import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import type { ManualReviewObservation } from "@fb/shared/operator/manualReview";
+import { DataStateBadge, DataStateNotice, ManualReviewPanel } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import {
@@ -26,7 +27,11 @@ import {
   OperatorPageBoundary,
   OperatorUnavailableState,
 } from "@/components/layout/OperatorPageBoundary";
-import { operatorProblemMessage, useOperatorAction } from "@/lib/api/operator";
+import {
+  operatorProblemMessage,
+  useOperatorAction,
+  useRecordOperatorManualReview,
+} from "@/lib/api/operator";
 
 export const Route = createFileRoute("/actions/$actionId")({ component: ActionDetailPage });
 
@@ -34,6 +39,7 @@ function ActionDetailPage() {
   const { actionId } = Route.useParams();
   const realtimeStatus = useOperatorRealtimeStatus();
   const actionQuery = useOperatorAction(actionId);
+  const manualReview = useRecordOperatorManualReview();
   const projection = actionQuery.data
     ? actionForRealtimeState(
         actionQuery.data,
@@ -208,6 +214,34 @@ function ActionDetailPage() {
           ) : null}
         </div>
       </section>
+
+      {/* Терминальный неизвестный исход должен иметь способ закрыться: без него
+          оператор возвращается на этот экран бесконечно (#360). */}
+      <div className="mt-5">
+        <ManualReviewPanel
+          review={action.manual_review}
+          available={action.manual_review_available === true}
+          automationStoppedReason={action.automation_stopped_reason}
+          reviewedAtLabel={
+            action.manual_review && action.cabinet_timezone
+              ? formatZonedDateTime(action.manual_review.at, action.cabinet_timezone)
+              : null
+          }
+          busy={manualReview.isPending}
+          errorMessage={
+            manualReview.isError ? operatorProblemMessage(manualReview.error) : null
+          }
+          onSubmit={(observation: ManualReviewObservation) => {
+            manualReview.mutate(
+              {
+                params: { path: { task_id: Number(action.id) } },
+                body: { observation },
+              },
+              { onSuccess: () => void actionQuery.refetch() },
+            );
+          }}
+        />
+      </div>
     </article>
   );
 }

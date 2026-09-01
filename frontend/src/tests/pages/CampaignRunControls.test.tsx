@@ -16,6 +16,21 @@ const mocks = vi.hoisted(() => ({
   toastWarning: vi.fn(),
 }));
 
+// Баннер ручной сверки читает факт сверки с задачи (#360). Здесь проверяется
+// жизненный цикл залива, а не сверка, поэтому операторский клиент замещается —
+// как и клиент кампаний рядом.
+vi.mock("@/lib/api/operator", () => ({
+  useOperatorAction: () => ({ data: null, refetch: vi.fn() }),
+  useRecordOperatorManualReview: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  operatorProblemMessage: (error: unknown) =>
+    error instanceof Error ? error.message : "Ошибка",
+}));
+
 vi.mock("@/lib/api/campaigns", () => ({
   RUN_STATUS_LABELS: {
     queued: "В очереди",

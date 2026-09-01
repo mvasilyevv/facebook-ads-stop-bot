@@ -440,7 +440,10 @@ function RunExpandedDetails({
         </div>
       ) : null}
       {manualReviewRequired ? (
-        <CampaignRunManualReview createdMetaIds={run.created_meta_ids ?? {}} />
+        <CampaignRunManualReview
+          createdMetaIds={run.created_meta_ids ?? {}}
+          taskId={run.task?.id ?? null}
+        />
       ) : null}
       {/* Созданные IDs успешного запуска остаются доступны для сверки результата. */}
       {!manualReviewRequired && metaIdGroups.length > 0 ? (

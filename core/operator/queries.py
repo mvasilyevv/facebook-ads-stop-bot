@@ -20,11 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.rules.labels import rule_label
 from core.scanner.status import (
     DELIVERY_ATTENTION_STATUSES,
+    DELIVERY_DISABLED_STATUSES,
     DELIVERY_REJECTED_STATUSES,
     normalized_delivery_status,
 )
-from core.tasks.action_reason import operator_reason_from_result
+from core.tasks.action_reason import automation_stopped_reason, operator_reason_from_result
 from core.tasks.channel import disable_channel_sql, enable_channel_sql, target_id_sql
+from core.tasks.queue import manual_review_closes_question
 
 
 def _json(value: Any) -> dict[str, Any]:
@@ -118,6 +120,24 @@ def _run_id(payload: dict[str, Any], result: dict[str, Any]) -> str | None:
     return None
 
 
+def task_manual_review(row: Any) -> dict[str, Any] | None:
+    """Зафиксированный факт ручной сверки — или ``None``, если её не было.
+
+    Это отдельная ось от исхода: ``state`` задачи остаётся ``unknown`` и после
+    сверки. Оператор свидетельствует, что видел фактическое состояние в Ads
+    Manager, а не что внешняя операция подтвердилась.
+    """
+    observation = getattr(row, "manual_review_observation", None)
+    if not observation:
+        return None
+    return {
+        "observation": str(observation),
+        "at": getattr(row, "manual_review_at", None),
+        "by": (str(row.manual_review_by) if getattr(row, "manual_review_by", None) else None),
+        "question_closed": manual_review_closes_question(str(observation)),
+    }
+
+
 def _task_item(row: Any) -> dict[str, Any]:
     payload = _json(row.payload)
     result = _json(row.result)
@@ -144,6 +164,15 @@ def _task_item(row: Any) -> dict[str, Any]:
         "updated_at": row.updated_at,
         "requested_by": str(row.requested_by) if row.requested_by else None,
         "reason": task_action_reason(result),
+        # Почему автоматика больше не пытается сверить исход. null означает
+        # «причина не записана», а не «всё в порядке».
+        "automation_stopped_reason": automation_stopped_reason(result, status=str(row.status)),
+        "manual_review": task_manual_review(row),
+        # Сверять глазами имеет смысл только там, где автоматика уже не работает
+        # по задаче: иначе оператор снял бы барьер под живой попыткой воркера.
+        "manual_review_available": (
+            state == "unknown" and str(row.status) not in {"pending", "retrying", "running"}
+        ),
         "correlation_id": str(row.correlation_id),
         "account_id": (
             str(payload.get("account_id") or payload.get("ad_account_id"))
@@ -220,6 +249,7 @@ async def fetch_operator_actions(
         SELECT tq.id, tq.task_type, tq.status, tq.payload, tq.result,
                tq.requested_by, tq.last_error, tq.created_at, tq.updated_at,
                tq.correlation_id,
+               tq.manual_review_observation, tq.manual_review_at, tq.manual_review_by,
                COALESCE(a.ad_name, tq.payload->>'target_id') AS target_label
         FROM task_queue tq
         LEFT JOIN fb_ads a ON a.fb_ad_id = tq.payload->>'target_id'
@@ -728,6 +758,26 @@ def _delivery_statuses_sql(values: frozenset[str]) -> str:
     return ", ".join(f"'{value}'" for value in sorted(values))
 
 
+def _approaching_only_clauses() -> tuple[str, ...]:
+    """WHERE predicates for the early-warning ("approaching stop") feed.
+
+    Issue 352: a row must disappear only when Meta *confirmed* the ad isn't
+    running (``DELIVERY_DISABLED_STATUSES``). The previous
+    ``delivery_status = 'ACTIVE'`` clause dropped every unconfirmed/unknown
+    status (``NULL`` included) along with genuinely inactive ones — an ad
+    that may still be delivering and approaching its stop threshold silently
+    vanished from the operator's early warning. ``NOT IN`` keeps ``NULL``
+    (``COALESCE`` to ``''``, never a member of the disabled set) and any
+    future/unrecognized status string, which is the safe default here.
+    """
+    return (
+        "a.nearest_rule_stage IN ('none','warning')",
+        f"UPPER(COALESCE(a.delivery_status, '')) NOT IN "
+        f"({_delivery_statuses_sql(DELIVERY_DISABLED_STATUSES)})",
+        "COALESCE(alert.alert_state, 'normal') NOT IN ('stop_sent','claimed','disabled')",
+    )
+
+
 async def fetch_operator_ads(
     engine: AsyncEngine,
     *,
@@ -771,13 +821,7 @@ async def fetch_operator_ads(
         clauses.append("a.delivery_status = :delivery_status")
         params["delivery_status"] = delivery_status
     if approaching_only:
-        clauses.extend(
-            (
-                "a.nearest_rule_stage IN ('none','warning')",
-                "UPPER(COALESCE(a.delivery_status, '')) = 'ACTIVE'",
-                "COALESCE(alert.alert_state, 'normal') NOT IN ('stop_sent','claimed','disabled')",
-            )
-        )
+        clauses.extend(_approaching_only_clauses())
     severity_expr = (
         "CASE WHEN alert.alert_state IN ('stop_sent','disabled') "
         f"OR UPPER(COALESCE(a.delivery_status, '')) IN "

@@ -287,6 +287,19 @@ export function useAcknowledgeOperatorIncident() {
   );
 }
 
+/**
+ * Запись ручной сверки задачи. Это НЕ команда в Meta: ответ 200 означает
+ * «наблюдение записано», исход задачи остаётся неизвестным. Идемпотентность
+ * обеспечивает сервер по паре (задача, наблюдение), поэтому Idempotency-Key
+ * здесь не нужен.
+ */
+export function useRecordOperatorManualReview() {
+  return operatorApi.useMutation(
+    "post",
+    "/api/operator/actions/{task_id}/manual-review",
+  );
+}
+
 export function useResolveTmaNavigation() {
   return operatorApi.useMutation("post", "/api/tma/navigation/resolve");
 }

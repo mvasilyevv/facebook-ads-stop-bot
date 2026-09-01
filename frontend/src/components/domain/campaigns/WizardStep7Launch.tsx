@@ -358,7 +358,10 @@ function RunProgress({ runId, onFinish, showFinish = true }: RunProgressProps) {
       )}
 
       {manualReviewRequired ? (
-        <CampaignRunManualReview createdMetaIds={run.created_meta_ids ?? {}} />
+        <CampaignRunManualReview
+          createdMetaIds={run.created_meta_ids ?? {}}
+          taskId={run.task?.id ?? null}
+        />
       ) : null}
 
       <TechnicalDetails ids={run.created_meta_ids ?? {}} />
