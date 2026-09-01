@@ -59,6 +59,7 @@ vi.mock("@/features/campaigns/useCampaignWizardDraft", async () => {
           ad_account_ids: ["123"],
           page_id: "page_1",
           pixel_id: "pixel_1",
+          pixel_confirmed: false,
           account_context_state: "ready" as const,
           timezone_name: "America/New_York",
           currency: "USD" as const,

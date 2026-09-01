@@ -14,6 +14,12 @@ const identityOverride = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
 
+// Пустой каталог офферов по умолчанию; холдер позволяет подставить оффер с
+// pixel_id для теста расхождения (issue #359).
+const offersOverride = vi.hoisted(() => ({
+  data: [] as Record<string, unknown>[],
+}));
+
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const React = await import("react");
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -25,7 +31,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 vi.mock("@/lib/api", () => ({
-  useOffers: () => ({ data: [], isPending: false }),
+  useOffers: () => ({ data: offersOverride.data, isPending: false }),
 }));
 
 vi.mock("@/lib/campaigns", () => ({
@@ -61,6 +67,7 @@ vi.mock("@/features/campaigns/useCampaignWizardDraft", async () => {
           ad_account_ids: ["123"],
           page_id: "page_1",
           pixel_id: "pixel_1",
+          pixel_confirmed: false,
           account_context_state: "ready" as const,
           timezone_name: "America/New_York",
           currency: "USD" as const,
@@ -141,6 +148,7 @@ describe("TMA campaign creator", () => {
     vi.clearAllMocks();
     api.runDetails = {};
     identityOverride.value = {};
+    offersOverride.data = [];
   });
 
   it("passes all seven action-first steps and keeps queued distinct from success", async () => {
@@ -245,5 +253,28 @@ describe("TMA campaign creator", () => {
     await user.click(screen.getByRole("button", { name: /Далее/ }));
 
     expect(await screen.findByText("Meta отклонила запрос по кабинету")).toBeVisible();
+  });
+
+  // Тихий случай из issue #359: пиксель валиден, но чужой офферу — сервер это
+  // отклонит, а UI обязан предупредить раньше, а не молчать.
+  it("предупреждает о расхождении пикселя с офферным", async () => {
+    const user = userEvent.setup();
+    offersOverride.data = [
+      {
+        code: "US_GAME",
+        name: "US Game",
+        ad_account_ids: ["123"],
+        countries: [],
+        pixel_id: "pixel_offer",
+      },
+    ];
+    identityOverride.value = { pixel_id: "pixel_other" };
+
+    render(<CampaignWizard />);
+    await user.click(screen.getByRole("button", { name: /Далее/ }));
+
+    expect(
+      await screen.findByText(/отличается от привязанного к офферу/),
+    ).toBeVisible();
   });
 });

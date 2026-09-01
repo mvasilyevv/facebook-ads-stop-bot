@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useRef, useState, type FC } from "react";
-import { validateCampaignIdentity } from "@fb/features/campaigns";
+import { offerPixelDiverges, validateCampaignIdentity } from "@fb/features/campaigns";
 import { ChoiceCheckList } from "@fb/operator-ui";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
@@ -162,6 +162,8 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
       account_context_issue: null,
     };
     if (offer.pixel_id) patch.pixel_id = offer.pixel_id;
+    // Новый оффер — старое подтверждение расхождения к нему не относится.
+    patch.pixel_confirmed = false;
     onChange(patch);
 
     // Гео оффера → префилл countries в шаге «Параметры» (редактируемо).
@@ -208,6 +210,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
     values.account_context_state === "ready" &&
     Boolean(selectedOffer?.cpa_threshold) &&
     (!offerCurrency || offerCurrency !== values.currency);
+  const pixelDiverges = offerPixelDiverges(selectedOffer?.pixel_id, values.pixel_id);
 
   return (
     <div className="space-y-6">
@@ -439,7 +442,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
               placeholder="Выберите пиксель"
               options={pixels.map((p) => ({ value: p.id, label: `${p.name} — ${p.id}` }))}
               value={values.pixel_id}
-              onChange={(e) => onChange({ pixel_id: e.target.value })}
+              onChange={(e) => onChange({ pixel_id: e.target.value, pixel_confirmed: false })}
               errorMessage={errors.pixel_id}
             />
           ) : (
@@ -447,12 +450,30 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
               label="ID пикселя"
               placeholder="123456789"
               value={values.pixel_id}
-              onChange={(e) => onChange({ pixel_id: e.target.value })}
+              onChange={(e) => onChange({ pixel_id: e.target.value, pixel_confirmed: false })}
               errorMessage={errors.pixel_id}
               helpText="Не удалось подтянуть — введите ID вручную"
             />
           )}
         </div>
+        {pixelDiverges && (
+          <div className="mt-3 flex flex-col gap-2 rounded-[var(--radius-2)] border border-warning/35 bg-warning/10 px-3 py-2.5">
+            <div className="flex items-center gap-2 text-[12px] font-medium text-warning">
+              <AlertTriangle aria-hidden="true" size={14} />
+              Пиксель отличается от привязанного к офферу ({selectedOffer?.pixel_id}). Сервер
+              отклонит запуск, пока это не подтверждено — кабинет может держать несколько
+              валидных пикселей, но неверный уводит открутку в чужую оптимизацию.
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 text-[12px] text-bg-10">
+              <input
+                type="checkbox"
+                checked={values.pixel_confirmed}
+                onChange={(e) => onChange({ pixel_confirmed: e.target.checked })}
+              />
+              Использую этот пиксель осознанно, не по ошибке
+            </label>
+          </div>
+        )}
       </div>
     </div>
   );

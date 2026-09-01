@@ -66,6 +66,13 @@ export interface CampaignWizardIdentity {
   ad_account_ids: string[];
   page_id: string;
   pixel_id: string;
+  /**
+   * Явное согласие оператора использовать pixel_id, отличный от offer.pixel_id
+   * (кабинет может держать несколько валидных пикселей). Сбрасывается при любом
+   * изменении pixel_id или оффера — подтверждение относится к конкретной паре
+   * значений, а не остаётся включённым навсегда.
+   */
+  pixel_confirmed: boolean;
   account_context_state: "ready" | "stale" | "unavailable";
   timezone_name: string;
   currency: "" | "USD";
@@ -162,6 +169,7 @@ const DEFAULT_IDENTITY: CampaignWizardIdentity = {
   ad_account_ids: [],
   page_id: "",
   pixel_id: "",
+  pixel_confirmed: false,
   account_context_state: "unavailable",
   timezone_name: "",
   currency: "",
@@ -341,6 +349,8 @@ function campaignWizardFromWireWithoutRecursion(
     identity: {
       ...draft.identity,
       ad_account_ids: [...selectedAccounts],
+      // Черновики, созданные до появления сверки пикселя, этого поля не имеют.
+      pixel_confirmed: draft.identity.pixel_confirmed ?? false,
     },
     goal: {
       ...goal,
@@ -361,6 +371,21 @@ function campaignWizardFromWireWithoutRecursion(
       })),
     },
   };
+}
+
+/**
+ * Пиксель залива разошёлся с офферным (issue #359): офферный пиксель задан,
+ * оператор ввёл/выбрал другой. Оффер несёт РОВНО один канонический пиксель
+ * (nullable-скаляр); кабинет может держать несколько валидных — расхождение
+ * не всегда ошибка, но должно быть видно ДО отправки, а не молчать.
+ */
+export function offerPixelDiverges(
+  offerPixelId: string | null | undefined,
+  submittedPixelId: string,
+): boolean {
+  const expected = (offerPixelId ?? "").trim();
+  const submitted = submittedPixelId.trim();
+  return expected.length > 0 && submitted.length > 0 && expected !== submitted;
 }
 
 export function validateCampaignIdentity(
@@ -529,6 +554,7 @@ export function buildCampaignConfig(state: CampaignWizardState): CampaignConfig 
     act_id: state.identity.ad_account_ids?.[0] ?? state.identity.act_id,
     page_id: state.identity.page_id,
     pixel_id: state.identity.pixel_id,
+    pixel_confirmed: state.identity.pixel_confirmed,
     offer_code: state.identity.offer_code,
     byer_tag: state.identity.byer_tag || null,
     objective: state.goal.objective,

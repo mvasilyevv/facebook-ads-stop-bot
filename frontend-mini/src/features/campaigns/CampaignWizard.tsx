@@ -7,6 +7,7 @@ import {
   campaignLaunchUnits,
   campaignPresetsDataState,
   nextCampaignKey,
+  offerPixelDiverges,
   validateCampaignStep,
   type CampaignWizardCampaign,
   type CampaignWizardConcept,
@@ -154,6 +155,7 @@ export function CampaignWizard() {
     (offer) => offer.code === state.identity.offer_code,
   );
   const offerAccounts = selectedOffer?.ad_account_ids?.filter(Boolean) ?? [];
+  const pixelDiverges = offerPixelDiverges(selectedOffer?.pixel_id, state.identity.pixel_id);
   const presetsState = campaignPresetsDataState({
     isPending: presets.isPending,
     isError: presets.isError,
@@ -172,6 +174,8 @@ export function CampaignWizard() {
       value: {
         offer_code: code,
         pixel_id: offer?.pixel_id ?? "",
+        // Новый оффер — прежнее подтверждение расхождения к нему не относится.
+        pixel_confirmed: false,
         ad_account_ids: accounts.length === 1 ? [accounts[0]!] : [],
         act_id: accounts.length === 1 ? accounts[0]! : "",
         account_context_state: "unavailable",
@@ -617,7 +621,7 @@ export function CampaignWizard() {
                   onChange={(event) =>
                     patchIdentity({
                       type: "patchIdentity",
-                      value: { pixel_id: event.target.value },
+                      value: { pixel_id: event.target.value, pixel_confirmed: false },
                     })
                   }
                 />
@@ -629,11 +633,34 @@ export function CampaignWizard() {
                   onChange={(event) =>
                     patchIdentity({
                       type: "patchIdentity",
-                      value: { pixel_id: event.target.value },
+                      value: { pixel_id: event.target.value, pixel_confirmed: false },
                     })
                   }
                 />
               )}
+              {pixelDiverges ? (
+                <div className="flex flex-col gap-2 rounded-[var(--radius-2)] border border-warning/35 bg-warning/10 p-3 text-[12px] text-warning">
+                  <div className="flex items-center gap-2 font-medium">
+                    <AlertTriangle aria-hidden="true" size={14} />
+                    Пиксель отличается от привязанного к офферу ({selectedOffer?.pixel_id}). Сервер
+                    отклонит запуск без подтверждения — кабинет может держать несколько валидных
+                    пикселей, но неверный уводит открутку в чужую оптимизацию.
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-bg-10">
+                    <input
+                      type="checkbox"
+                      checked={state.identity.pixel_confirmed}
+                      onChange={(event) =>
+                        patchIdentity({
+                          type: "patchIdentity",
+                          value: { pixel_confirmed: event.target.checked },
+                        })
+                      }
+                    />
+                    Использую этот пиксель осознанно, не по ошибке
+                  </label>
+                </div>
+              ) : null}
               <Input
                 label="Тег байера"
                 value={state.identity.byer_tag}

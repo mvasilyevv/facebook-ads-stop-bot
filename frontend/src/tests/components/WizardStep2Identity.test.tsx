@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api/campaigns", () => ({
@@ -15,6 +16,7 @@ vi.mock("@/lib/api/offers", () => ({
         name: "GH Aviator",
         ad_account_ids: ["1234567890123456", "9876543210987654"],
         countries: [],
+        pixel_id: "555",
       },
     ],
     isLoading: false,
@@ -29,6 +31,7 @@ const BASE_IDENTITY: WizardIdentity = {
   ad_account_ids: [],
   page_id: "",
   pixel_id: "",
+  pixel_confirmed: false,
   account_context_state: "unavailable",
   timezone_name: "",
   currency: "",
@@ -39,11 +42,11 @@ const BASE_IDENTITY: WizardIdentity = {
   byer_tag: "",
 };
 
-function renderStep(overrides: Partial<WizardIdentity>) {
+function renderStep(overrides: Partial<WizardIdentity>, onChange: (v: Partial<WizardIdentity>) => void = () => {}) {
   return render(
     <WizardStep2Identity
       values={{ ...BASE_IDENTITY, ...overrides }}
-      onChange={() => {}}
+      onChange={onChange}
       onGoalChange={() => {}}
     />,
   );
@@ -95,5 +98,37 @@ describe("WizardStep2Identity — кабинеты оффера", () => {
     renderStep({ offer_code: "GH_AVI", ad_account_ids: ["1234567890123456"] });
 
     expect(screen.queryByText(/act_/)).toBeNull();
+  });
+});
+
+describe("WizardStep2Identity — расхождение пикселя с оффером (issue #359)", () => {
+  // Тихий случай из issue: пиксель валиден, но чужой офферу — сервер это
+  // отклонит, а UI обязан предупредить раньше, а не молчать.
+  it("показывает предупреждение, когда пиксель разошёлся с офферным", () => {
+    renderStep({ offer_code: "GH_AVI", pixel_id: "999" });
+
+    expect(screen.getByText(/отличается от привязанного к офферу/)).toBeInTheDocument();
+  });
+
+  it("не показывает предупреждение, когда пиксель совпадает с офферным", () => {
+    renderStep({ offer_code: "GH_AVI", pixel_id: "555" });
+
+    expect(screen.queryByText(/отличается от привязанного к офферу/)).toBeNull();
+  });
+
+  it("не показывает предупреждение без выбранного оффера (нечего сверять)", () => {
+    renderStep({ offer_code: "", pixel_id: "999" });
+
+    expect(screen.queryByText(/отличается от привязанного к офферу/)).toBeNull();
+  });
+
+  it("чекбокс подтверждения переключает pixel_confirmed на true", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderStep({ offer_code: "GH_AVI", pixel_id: "999", pixel_confirmed: false }, onChange);
+
+    await user.click(screen.getByRole("checkbox", { name: /осознанно/ }));
+
+    expect(onChange).toHaveBeenCalledWith({ pixel_confirmed: true });
   });
 });

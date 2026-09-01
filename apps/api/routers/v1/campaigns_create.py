@@ -293,13 +293,78 @@ def _compute_campaign_idempotency_key(config: CampaignConfig) -> str:
     return f"campaign:{config.offer_code}:{config.start_date}:{digest}"
 
 
+def _reject_pixel_mismatch(*, offer_pixel_id: str, submitted_pixel_id: str) -> HTTPException:
+    """Пиксель залива разошёлся с офферным — деньги открутятся не на ту оптимизацию.
+
+    Оба id не секрет (аудитория FB видит их в самой кампании), поэтому оба
+    называются оператору прямо в сообщении — узнаваемая причина, а не общий текст.
+    """
+
+    return HTTPException(
+        status_code=409,
+        detail=(
+            "Пиксель не совпадает с оффером: ожидался "
+            f"{offer_pixel_id}, выбран {submitted_pixel_id}"
+        ),
+    )
+
+
+def _evaluate_offer_scope(
+    *,
+    account_is_configured: bool,
+    rule_currency: str,
+    cpa_threshold_is_set: bool,
+    account_currency: str,
+    offer_pixel_id: str,
+    submitted_pixel_id: str,
+    pixel_confirmed: bool,
+) -> None:
+    """Pure decision core of ``_require_offer_scope`` — no I/O, pinned down by unit tests.
+
+    Порядок отказов сохраняет старое поведение (кабинет → валюта), пиксель
+    проверяется последним — самой узкой и самой новой причиной.
+    """
+
+    if not account_is_configured:
+        raise HTTPException(
+            status_code=409,
+            detail="Выбранный кабинет не привязан к офферу",
+        )
+
+    if cpa_threshold_is_set and not rule_currency:
+        raise HTTPException(
+            status_code=409,
+            detail="Валютный контекст CPA оффера не подтверждён",
+        )
+    if rule_currency and rule_currency != account_currency:
+        raise HTTPException(
+            status_code=409,
+            detail="Валюта CPA оффера не совпадает с валютой кабинета",
+        )
+
+    # Оффер несёт РОВНО один канонический пиксель (nullable-скаляр, а не таблица
+    # членства вроде offer_ad_accounts). Не задан → сверять не с чем, пропускаем
+    # молча по семантике "нечем сверить", а не "совпало". Задан и разошёлся с
+    # присланным — по умолчанию отказ: кабинет отдаёт дропдаун ВСЕХ своих
+    # пикселей (не только офферного), поэтому расхождение бывает осознанным
+    # (мультипиксельный кабинет). ``pixel_confirmed`` — явное подтверждение
+    # оператора с шага «Идентичность» снимает отказ, не отключая сверку вообще.
+    if offer_pixel_id and offer_pixel_id != submitted_pixel_id and not pixel_confirmed:
+        raise _reject_pixel_mismatch(
+            offer_pixel_id=offer_pixel_id,
+            submitted_pixel_id=submitted_pixel_id,
+        )
+
+
 async def _require_offer_scope(
     engine: DepEngine,
     *,
     offer_code: str,
     account_context: CampaignAccountContext,
+    pixel_id: str,
+    pixel_confirmed: bool,
 ) -> None:
-    """Reject a catalog offer/account/currency mismatch before any writes."""
+    """Reject a catalog offer/account/currency/pixel mismatch before any writes."""
 
     async with engine.connect() as conn:
         row = (
@@ -308,6 +373,7 @@ async def _require_offer_scope(
                     text(
                         """
                     SELECT offer.id,
+                           offer.pixel_id,
                            rule.cpa_threshold,
                            rule.currency
                     FROM offers AS offer
@@ -332,23 +398,15 @@ async def _require_offer_scope(
     if row is None:
         return
 
-    if not account_is_configured:
-        raise HTTPException(
-            status_code=409,
-            detail="Выбранный кабинет не привязан к офферу",
-        )
-
-    rule_currency = str(row["currency"] or "").strip().upper()
-    if row["cpa_threshold"] is not None and not rule_currency:
-        raise HTTPException(
-            status_code=409,
-            detail="Валютный контекст CPA оффера не подтверждён",
-        )
-    if rule_currency and rule_currency != account_context.currency:
-        raise HTTPException(
-            status_code=409,
-            detail="Валюта CPA оффера не совпадает с валютой кабинета",
-        )
+    _evaluate_offer_scope(
+        account_is_configured=account_is_configured,
+        rule_currency=str(row["currency"] or "").strip().upper(),
+        cpa_threshold_is_set=row["cpa_threshold"] is not None,
+        account_currency=account_context.currency,
+        offer_pixel_id=str(row["pixel_id"] or "").strip(),
+        submitted_pixel_id=pixel_id.strip(),
+        pixel_confirmed=pixel_confirmed,
+    )
 
 
 def _account_context_rejection(exc: CampaignAccountContextError) -> HTTPException:
@@ -401,6 +459,8 @@ async def _campaign_config_from_request(
         engine,
         offer_code=body.config.offer_code,
         account_context=context,
+        pixel_id=body.config.pixel_id,
+        pixel_confirmed=body.config.pixel_confirmed,
     )
     assert context.timezone_name is not None
     assert context.currency is not None

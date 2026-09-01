@@ -22,6 +22,7 @@ export {
   campaignWizardToDraft,
   createCampaignWizardState,
   createCampaignPresetDraft,
+  offerPixelDiverges,
   toggleCampaignTag,
   validateCampaignPresetDraft,
   validateCampaignCreatives,
