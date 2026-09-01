@@ -1101,6 +1101,9 @@ POST_BASELINE_ARTIFACT_HASHES: dict[str, str] = {
     "check_constraint:public.offer_rules.ck_offer_rules_spend_no_dep_to_range": "874a7196b9505ce4ffde9b3be6898cdfb22844d4558f98849adaecdbfad4ba0c",
     "check_constraint:public.offer_rules.ck_offer_rules_spend_with_dep_from_range": "f12855e5c90fae01c6ed4ff0709e3e705adfa16aa9f165d9a1e68b58008cddbb",
     "check_constraint:public.offer_rules.ck_offer_rules_spend_with_dep_to_range": "21d49ff883622cd080d74a6976f1a6a55c355b7fc19b1575ab371383001e7215",
+    # 0011_task_manual_review (#360): ручная сверка задачи с неизвестным исходом.
+    "check_constraint:public.task_queue.ck_task_queue_manual_review_complete": "4fc54893c587c9933a1c1280ae7a4e1535a72d69168e8aad6492affd8cf79976",
+    "check_constraint:public.task_queue.ck_task_queue_manual_review_observation": "a5fc53e5d1ad6f59666f2cdd9114705b9a39f9695be6218d2c82d3522bcbc9e6",
 }
 
 

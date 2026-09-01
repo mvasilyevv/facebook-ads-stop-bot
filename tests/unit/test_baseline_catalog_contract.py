@@ -105,7 +105,17 @@ def test_frozen_sql_and_orm_checks_are_all_in_the_catalog_manifest() -> None:
         if isinstance(constraint, CheckConstraint) and constraint.name is not None
     }
 
-    assert orm <= frozen
+    # Модель сверяется с головой, а не только с baseline: ревизии после него
+    # добавляют свои проверки (0011 — ручная сверка задачи), и требовать их
+    # присутствия в замороженном baseline значило бы запретить их вовсе.
+    post_baseline = {
+        key
+        for key in baseline_contract.POST_BASELINE_ARTIFACT_HASHES
+        if key.startswith("check_constraint:")
+    }
+    assert orm <= frozen | post_baseline
+    # Сам baseline при этом остаётся ровно тем, чем был: его поверхность
+    # совпадает с замороженным SQL один в один.
     assert {
         key
         for key in baseline_contract.BASELINE_ARTIFACT_HASHES
