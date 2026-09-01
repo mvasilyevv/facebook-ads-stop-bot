@@ -1017,6 +1017,36 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/operator/actions/{task_id}/manual-review": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Record Operator Manual Review
+     * @description Зафиксировать, что оператор сверил задачу глазами, и что именно он увидел.
+     *
+     *     Это НЕ команда в Meta и НЕ подтверждение исхода: ``state`` в ответе
+     *     остаётся ``unknown``. Ответ 200 означает «факт записан», а не «внешняя
+     *     операция удалась». Повтор с тем же наблюдением идемпотентен и возвращает
+     *     ``recorded=false``.
+     *
+     *     Личность берётся из доверенной границы аутентификации
+     *     (``request.state.operator_principal``); заголовок — только запасное
+     *     значение, как в остальных операторских командах. Роль проверяет middleware:
+     *     POST относится к write-методам и для TMA доступен только владельцу.
+     */
+    post: operations["record_operator_manual_review_api_operator_actions__task_id__manual_review_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/operator/preferences/display": {
     parameters: {
       query?: never;
@@ -2550,6 +2580,11 @@ export interface components {
       page_id: string;
       /** Pixel Id */
       pixel_id: string;
+      /**
+       * Pixel Confirmed
+       * @default false
+       */
+      pixel_confirmed: boolean;
       /** Offer Code */
       offer_code: string;
       /** Byer Tag */
@@ -3569,6 +3604,18 @@ export interface components {
        * @description Recorded outcome reason in operator language; null when no reason was recorded.
        */
       reason: string | null;
+      /**
+       * Automation Stopped Reason
+       * @description Why automatic reconciliation will not run again; null when nothing was recorded.
+       */
+      automation_stopped_reason?: string | null;
+      manual_review?: components["schemas"]["OperatorActionManualReview"] | null;
+      /**
+       * Manual Review Available
+       * @description Whether the operator may record a manual reconciliation for this task. False while automation may still act on it.
+       * @default false
+       */
+      manual_review_available: boolean;
       /** Correlation Id */
       correlation_id: string;
       /** Account Id */
@@ -3581,6 +3628,29 @@ export interface components {
       account_context_observed_at: string | null;
       /** Account Context Issues */
       account_context_issues: string[];
+    };
+    /**
+     * OperatorActionManualReview
+     * @description Факт ручной сверки задачи: кто, когда и что именно увидел.
+     *
+     *     Отдельная ось от исхода. ``state`` задачи остаётся ``unknown`` и после
+     *     сверки: внешняя операция как была неизвестной, так и осталась — оператор
+     *     засвидетельствовал только фактическое состояние объекта.
+     */
+    OperatorActionManualReview: {
+      observation: components["schemas"]["OperatorManualReviewObservation"];
+      /**
+       * At
+       * Format: date-time
+       */
+      at: string;
+      /** By */
+      by: string | null;
+      /**
+       * Question Closed
+       * @description Whether the recorded observation closes the question. An object observed still active never closes it.
+       */
+      question_closed: boolean;
     };
     /**
      * OperatorActionState
@@ -3715,6 +3785,14 @@ export interface components {
     OperatorAttentionData: {
       /** Items */
       items: components["schemas"]["OperatorAttentionItem"][];
+      /** Total */
+      total: number;
+      /** Truncated */
+      truncated: boolean;
+      /** Decisions Count */
+      decisions_count: number;
+      /** Decisions Critical */
+      decisions_critical: boolean;
     };
     /** OperatorAttentionItem */
     OperatorAttentionItem: {
@@ -4016,6 +4094,35 @@ export interface components {
       severity: components["schemas"]["OperatorSeverity"];
       /** Correlation Id */
       correlation_id: string | null;
+    };
+    /**
+     * OperatorManualReviewObservation
+     * @description Что оператор увидел в Ads Manager. Закрытый список, не свободный текст.
+     * @enum {string}
+     */
+    OperatorManualReviewObservation: "stopped" | "active" | "missing";
+    /**
+     * OperatorManualReviewRequest
+     * @description Закрытие требует названного наблюдения, а не кнопки «ок».
+     */
+    OperatorManualReviewRequest: {
+      observation: components["schemas"]["OperatorManualReviewObservation"];
+    };
+    /** OperatorManualReviewResponse */
+    OperatorManualReviewResponse: {
+      /** Task Id */
+      task_id: number;
+      /** Public Id */
+      public_id: string;
+      state: components["schemas"]["OperatorActionState"];
+      manual_review: components["schemas"]["OperatorActionManualReview"];
+      /**
+       * Recorded
+       * @description False when the same observation was already recorded (idempotent replay).
+       */
+      recorded: boolean;
+      /** Correlation Id */
+      correlation_id: string;
     };
     /** OperatorPortfolioData */
     OperatorPortfolioData: {
@@ -8247,6 +8354,106 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["OperatorIncidentAckResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  record_operator_manual_review_api_operator_actions__task_id__manual_review_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "X-Operator-Principal"?: string;
+      };
+      path: {
+        task_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OperatorManualReviewRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorManualReviewResponse"];
         };
       };
       /** @description Authentication failed */

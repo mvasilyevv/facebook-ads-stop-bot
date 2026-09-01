@@ -12,6 +12,11 @@
  *   - Объявления: ads_in_warning + ads_in_stop (активные инциденты, из stats).
  *   - Инциденты: attention.data.items с kind="incident" (тот же снапшот, что
  *     кормит секцию «Требует внимания» на дашборде — без отдельного запроса).
+ *   - «Решения» (issue #338) — без своего badge: полный `selectDecisionRows`
+ *     требует полной формы строки (target, occurred_at и т.д.), а лёгкие
+ *     smoke-фикстуры этого экрана (`shell.test.tsx`) намеренно частичные —
+ *     заводить здесь второй, более тяжёлый счётчик того же семейства того
+ *     не стоит. Счётчик самой ленты живёт на `/decisions`.
  * 196px expanded / 64px collapsed (state в Zustand).
  */
 
@@ -20,6 +25,7 @@ import {
   LayoutDashboard,
   Activity,
   Layers,
+  ListChecks,
   Radar,
   Tag,
   BarChart3,
@@ -59,6 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
     eyebrow: "ОПЕРАЦИИ",
     items: [
       { to: "/", label: "Сейчас", icon: LayoutDashboard },
+      { to: "/decisions", label: "Решения", icon: ListChecks },
       { to: "/actions", label: "Действия", icon: Activity, badgeKey: "actions" },
       { to: "/incidents", label: "Инциденты", icon: ShieldAlert, badgeKey: "incidents" },
     ],

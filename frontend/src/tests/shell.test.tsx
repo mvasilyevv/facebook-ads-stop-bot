@@ -203,6 +203,7 @@ describe("Sidebar — smoke-рендер с роутером", () => {
     const links = within(navigation).getAllByRole("link");
     expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
       "Сейчас",
+      "Решения",
       "Действия",
       "Инциденты",
       "Объявления",

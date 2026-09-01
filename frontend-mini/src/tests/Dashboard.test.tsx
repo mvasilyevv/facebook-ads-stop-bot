@@ -120,6 +120,7 @@ function makeReloginSnapshot(
     snapshot.actions.data!.items.push({
       id: "1843",
       public_id: "#1843",
+      manual_review_available: false,
       kind: "scan",
       state: scanState,
       title: "Сканирование",
@@ -319,18 +320,21 @@ describe("TMA operator dashboard", () => {
         ...base,
         id: "1844",
         public_id: "#1844",
+        manual_review_available: false,
         updated_at: "2026-07-18T10:15:00Z",
       },
       {
         ...base,
         id: "1843",
         public_id: "#1843",
+        manual_review_available: false,
         updated_at: "2026-07-18T10:14:00Z",
       },
       {
         ...base,
         id: "1842",
         public_id: "#1842",
+        manual_review_available: false,
         updated_at: "2026-07-18T10:13:00Z",
       },
     ];
@@ -459,6 +463,7 @@ describe("TMA operator dashboard", () => {
       state: "queued",
       task_id: 1842,
       public_id: "#1842",
+      manual_review_available: false,
       created: true,
       correlation_id: "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f",
     });

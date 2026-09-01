@@ -132,6 +132,7 @@ function makeReloginSnapshot(
     snapshot.actions.data!.items.push({
       id: "1843",
       public_id: "#1843",
+      manual_review_available: false,
       kind: "scan",
       state: scanState,
       title: "Сканирование",
@@ -639,6 +640,7 @@ describe("operator dashboard", () => {
     mockScan.mockResolvedValue({
       task_id: 1843,
       public_id: "#1843",
+      manual_review_available: false,
       state: "queued",
       created: true,
       correlation_id: "corr-scan",

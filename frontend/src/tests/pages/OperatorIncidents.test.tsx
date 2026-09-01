@@ -126,8 +126,11 @@ describe("operator incident journal", () => {
       status: ["open"],
       page_size: 30,
     });
+    // Issue 354: заголовок — природа сигнала, не деньги; он остаётся
+    // видимым, даже когда сумма (Spend $18.40) скрыта из-за протухшего
+    // снимка валюты.
     expect(
-      screen.getByRole("heading", { name: "Денежный сигнал требует проверки" }),
+      screen.getByRole("heading", { name: "CPL $9.56 > $3.00" }),
     ).toBeInTheDocument();
     expect(screen.queryByText(/\$18\.40/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Открыть/ })).toHaveAttribute(

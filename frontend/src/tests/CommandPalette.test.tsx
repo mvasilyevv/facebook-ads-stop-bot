@@ -55,6 +55,17 @@ describe("CommandPalette", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/incidents" });
   });
 
+  // #338 — лента «Решения» обязана быть достижима так же, как остальные
+  // разделы «01 Операции», а не только через Sidebar.
+  it("находит «Решения» и ведёт на /decisions", async () => {
+    useCommandPalette.setState({ open: true });
+    render(<CommandPalette />);
+    expect(screen.getByText("Решения")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Поиск"), "решен");
+    await userEvent.keyboard("{Enter}");
+    expect(navigateMock).toHaveBeenCalledWith({ to: "/decisions" });
+  });
+
   // Ввод запроса фильтрует список разделов
   it("фильтрует разделы по запросу", async () => {
     useCommandPalette.setState({ open: true });

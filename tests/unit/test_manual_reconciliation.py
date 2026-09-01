@@ -559,7 +559,9 @@ def test_unreviewed_terminal_unknown_offers_manual_review() -> None:
 
 def test_running_task_does_not_offer_manual_review() -> None:
     item = queries._task_item(
-        _projection_row(status="retrying", result={"outcome": "UNKNOWN", "reconcile_required": True})
+        _projection_row(
+            status="retrying", result={"outcome": "UNKNOWN", "reconcile_required": True}
+        )
     )
 
     assert item["manual_review_available"] is False

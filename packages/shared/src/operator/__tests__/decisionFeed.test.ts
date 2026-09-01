@@ -40,6 +40,7 @@ function actionItem(
 ): OperatorActionItem {
   return {
     public_id: `#${overrides.id}`,
+    manual_review_available: false,
     kind: "pause",
     state: "queued",
     title: "Отключение объявления",
@@ -64,7 +65,13 @@ function snapshotWith(
   actions: OperatorActionItem[] = [],
 ): OperatorSnapshot {
   const snapshot = makeOperatorSnapshot();
-  snapshot.attention.data = { items };
+  snapshot.attention.data = {
+    items,
+    total: items.length,
+    truncated: false,
+    decisions_count: items.length,
+    decisions_critical: false,
+  };
   snapshot.actions.data = { items: actions };
   return snapshot;
 }

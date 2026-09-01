@@ -173,12 +173,14 @@ describe("typed operator ads page", () => {
     pauseMutate.mockResolvedValue({
       task_id: 1842,
       public_id: "#1842",
+      manual_review_available: false,
       created: true,
       state: "queued",
     });
     activateMutate.mockResolvedValue({
       task_id: 1843,
       public_id: "#1843",
+      manual_review_available: false,
       created: true,
       state: "queued",
     });
@@ -514,6 +516,7 @@ describe("typed operator ads page", () => {
     pauseMutate.mockResolvedValue({
       task_id: 1842,
       public_id: "#1842",
+      manual_review_available: false,
       created: true,
       state: "confirmed",
     });
@@ -534,6 +537,7 @@ describe("typed operator ads page", () => {
     pauseMutate.mockResolvedValue({
       task_id: 1842,
       public_id: "#1842",
+      manual_review_available: false,
       created: false,
       state: "unknown",
     });
@@ -694,6 +698,7 @@ describe("typed operator ads page", () => {
           active_action: {
             id: "1842",
             public_id: "#1842",
+            manual_review_available: false,
             kind: "pause",
             state: "unknown",
             title: "Отключение объявления",

@@ -395,6 +395,10 @@ describe("operator view model", () => {
               status: "open",
               requires_usd_evidence: false,
             })),
+            total: count,
+            truncated: false,
+            decisions_count: count,
+            decisions_critical: false,
           },
         },
         system: {

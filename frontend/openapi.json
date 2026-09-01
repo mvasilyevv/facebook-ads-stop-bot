@@ -4437,6 +4437,138 @@
         }
       }
     },
+    "/api/operator/actions/{task_id}/manual-review": {
+      "post": {
+        "tags": ["operator"],
+        "summary": "Record Operator Manual Review",
+        "description": "Зафиксировать, что оператор сверил задачу глазами, и что именно он увидел.\n\nЭто НЕ команда в Meta и НЕ подтверждение исхода: ``state`` в ответе\nостаётся ``unknown``. Ответ 200 означает «факт записан», а не «внешняя\nоперация удалась». Повтор с тем же наблюдением идемпотентен и возвращает\n``recorded=false``.\n\nЛичность берётся из доверенной границы аутентификации\n(``request.state.operator_principal``); заголовок — только запасное\nзначение, как в остальных операторских командах. Роль проверяет middleware:\nPOST относится к write-методам и для TMA доступен только владельцу.",
+        "operationId": "record_operator_manual_review_api_operator_actions__task_id__manual_review_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "X-Operator-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "default": "operator:web",
+              "title": "X-Operator-Principal"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorManualReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorManualReviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Command lifecycle conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Ad projection changed before enqueue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator source unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/operator/preferences/display": {
       "get": {
         "tags": ["operator"],
@@ -8426,6 +8558,11 @@
             "type": "string",
             "title": "Pixel Id"
           },
+          "pixel_confirmed": {
+            "type": "boolean",
+            "title": "Pixel Confirmed",
+            "default": false
+          },
           "offer_code": {
             "type": "string",
             "title": "Offer Code"
@@ -10788,6 +10925,34 @@
             "title": "Reason",
             "description": "Recorded outcome reason in operator language; null when no reason was recorded."
           },
+          "automation_stopped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Automation Stopped Reason",
+            "description": "Why automatic reconciliation will not run again; null when nothing was recorded."
+          },
+          "manual_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorActionManualReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manual_review_available": {
+            "type": "boolean",
+            "title": "Manual Review Available",
+            "description": "Whether the operator may record a manual reconciliation for this task. False while automation may still act on it.",
+            "default": false
+          },
           "correlation_id": {
             "type": "string",
             "title": "Correlation Id"
@@ -10865,6 +11030,38 @@
           "account_context_issues"
         ],
         "title": "OperatorActionItem"
+      },
+      "OperatorActionManualReview": {
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/OperatorManualReviewObservation"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By"
+          },
+          "question_closed": {
+            "type": "boolean",
+            "title": "Question Closed",
+            "description": "Whether the recorded observation closes the question. An object observed still active never closes it."
+          }
+        },
+        "type": "object",
+        "required": ["observation", "at", "by", "question_closed"],
+        "title": "OperatorActionManualReview",
+        "description": "Факт ручной сверки задачи: кто, когда и что именно увидел.\n\nОтдельная ось от исхода. ``state`` задачи остаётся ``unknown`` и после\nсверки: внешняя операция как была неизвестной, так и осталась — оператор\nзасвидетельствовал только фактическое состояние объекта."
       },
       "OperatorActionState": {
         "type": "string",
@@ -11341,10 +11538,28 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "decisions_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Decisions Count"
+          },
+          "decisions_critical": {
+            "type": "boolean",
+            "title": "Decisions Critical"
           }
         },
         "type": "object",
-        "required": ["items"],
+        "required": ["items", "total", "truncated", "decisions_count", "decisions_critical"],
         "title": "OperatorAttentionData"
       },
       "OperatorAttentionItem": {
@@ -12262,6 +12477,60 @@
         "type": "object",
         "required": ["code", "title", "detail", "severity", "correlation_id"],
         "title": "OperatorIssue"
+      },
+      "OperatorManualReviewObservation": {
+        "type": "string",
+        "enum": ["stopped", "active", "missing"],
+        "title": "OperatorManualReviewObservation",
+        "description": "Что оператор увидел в Ads Manager. Закрытый список, не свободный текст."
+      },
+      "OperatorManualReviewRequest": {
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/OperatorManualReviewObservation"
+          }
+        },
+        "type": "object",
+        "required": ["observation"],
+        "title": "OperatorManualReviewRequest",
+        "description": "Закрытие требует названного наблюдения, а не кнопки «ок»."
+      },
+      "OperatorManualReviewResponse": {
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "public_id": {
+            "type": "string",
+            "title": "Public Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperatorActionState"
+          },
+          "manual_review": {
+            "$ref": "#/components/schemas/OperatorActionManualReview"
+          },
+          "recorded": {
+            "type": "boolean",
+            "title": "Recorded",
+            "description": "False when the same observation was already recorded (idempotent replay)."
+          },
+          "correlation_id": {
+            "type": "string",
+            "title": "Correlation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "public_id",
+          "state",
+          "manual_review",
+          "recorded",
+          "correlation_id"
+        ],
+        "title": "OperatorManualReviewResponse"
       },
       "OperatorPortfolioData": {
         "properties": {

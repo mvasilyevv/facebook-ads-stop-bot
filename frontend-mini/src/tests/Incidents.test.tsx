@@ -79,8 +79,10 @@ function payload(): OperatorIncidentsResponse {
         id: "00000000-0000-0000-0000-000000000051",
         severity: "critical",
         status: "open",
-        title: "Spend $18.40 выше stop",
-        summary: "CPL $9.56",
+        // Заголовок инцидента — название правила (core/rules/labels.py::rule_label),
+        // сумм в нём не бывает: деньги живут в summary и reason.
+        title: "Расход без депозита",
+        summary: "Валюта кабинета не подтверждена. Обновите снимок — денежные детали скрыты.",
         reason: "расход без первого депозита",
         occurred_at: "2026-08-08T12:00:00Z",
         account_id: "123",
@@ -142,10 +144,11 @@ describe("TMA incident journal", () => {
       status: ["open"],
       page_size: 30,
     });
-    expect(
-      screen.getByRole("heading", { name: "Денежный сигнал требует проверки" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/\$18\.40/)).not.toBeInTheDocument();
+    // Issue 354: прячется сумма, а не природа сигнала — заголовок правила
+    // остаётся видимым, иначе оператор не может рассортировать инциденты.
+    expect(screen.getByRole("heading", { name: "Расход без депозита" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Валюта кабинета не подтверждена/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Открыть/ }));
     await waitFor(() =>

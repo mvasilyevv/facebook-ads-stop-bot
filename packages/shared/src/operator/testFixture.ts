@@ -59,6 +59,10 @@ export function makeOperatorSnapshot(): OperatorSnapshot {
             recovery_action: null,
           },
         ],
+        total: 1,
+        truncated: false,
+        decisions_count: 0,
+        decisions_critical: false,
       },
     },
     portfolio: {
@@ -255,6 +259,7 @@ export function makeOperatorSnapshot(): OperatorSnapshot {
           {
             id: "1842",
             public_id: "#1842",
+            manual_review_available: false,
             kind: "pause",
             state: "running",
             title: "Отключение объявления",

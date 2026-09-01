@@ -181,11 +181,13 @@ describe("TMA typed operator ad detail", () => {
     pauseMutate.mockResolvedValue({
       task_id: 1842,
       public_id: "#1842",
+      manual_review_available: false,
       created: true,
     });
     activateMutate.mockResolvedValue({
       task_id: 1843,
       public_id: "#1843",
+      manual_review_available: false,
       created: true,
     });
     fetchOperatorAdForCommand.mockImplementation(
@@ -445,6 +447,7 @@ describe("TMA typed operator ad detail", () => {
       .mockResolvedValueOnce({
         task_id: 1842,
         public_id: "#1842",
+        manual_review_available: false,
         created: false,
       });
     const user = userEvent.setup();
@@ -679,6 +682,7 @@ describe("TMA typed operator ad detail", () => {
         active_action: {
           id: "1842",
           public_id: "#1842",
+          manual_review_available: false,
           kind: "pause",
           state: "running",
           title: "Отключение объявления",
@@ -706,6 +710,7 @@ describe("TMA typed operator ad detail", () => {
         active_action: {
           id: "1842",
           public_id: "#1842",
+          manual_review_available: false,
           kind: "pause",
           state: "confirmed",
           title: "Отключение объявления",
@@ -735,6 +740,7 @@ describe("TMA typed operator ad detail", () => {
         active_action: {
           id: "1842",
           public_id: "#1842",
+          manual_review_available: false,
           kind: "pause",
           state: "unknown",
           title: "Отключение объявления",

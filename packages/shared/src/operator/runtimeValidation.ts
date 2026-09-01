@@ -728,7 +728,10 @@ function snapshot(value: unknown, endpoint: string): void {
   section(root.funnel, endpoint, "$.funnel", funnelData, emptyFunnel);
   section(root.actions, endpoint, "$.actions", actionsData, emptyItems);
   section(root.system, endpoint, "$.system", systemData);
-  if (meta.currency_state !== "single" || meta.currency !== "USD") {
+  // Issue 354: a confirmed single currency (any code, not just USD) hides
+  // nothing — only a mixed/unknown scope forces the economy/funnel totals
+  // fail-closed.
+  if (meta.currency_state !== "single") {
     const economy = record(root.economy, endpoint, "$.economy");
     const funnel = record(root.funnel, endpoint, "$.funnel");
     if (economy.state === "ready" || funnel.state === "ready") {
@@ -898,7 +901,10 @@ function adsResponse(value: unknown, endpoint: string): void {
   ) {
     fail(endpoint, "$.state_rows");
   }
-  if (scope.currency_state !== "single" || scope.currency !== "USD") {
+  // Issue 354: a confirmed single currency (any code, not just USD) hides
+  // nothing — only a mixed/unknown scope is a real reason for fail-closed
+  // money redaction.
+  if (scope.currency_state !== "single") {
     if (root.state === "ready") fail(endpoint, "$.state");
     for (const rowValue of rows) {
       const row = record(rowValue, endpoint, "$.rows[*]");
@@ -958,18 +964,25 @@ function validateIncidentMoneyEvidence(
   incidents: Record<string, unknown>[],
   endpoint: string,
 ): void {
-  const usdConfirmed =
-    scope.currency_state === "single" && scope.currency === "USD";
+  // Issue 354: a confirmed single currency (any code) is enough — "not USD"
+  // alone is not a reason to hide anything. Only mixed/unknown scopes are.
+  const currencyConfirmed = scope.currency_state === "single";
   const guarded = incidents.filter(
     (incident) => incident.requires_usd_evidence === true,
   );
-  if (usdConfirmed || guarded.length === 0) return;
+  if (currencyConfirmed || guarded.length === 0) return;
   if (state === "ready") fail(endpoint, "$.state_currency_evidence");
+  const expectedSummary =
+    scope.currency_state === "mixed"
+      ? "В выборке несколько валют. Сузьте до одного кабинета — денежные детали скрыты."
+      : "Валюта кабинета не подтверждена. Обновите снимок — денежные детали скрыты.";
   for (const incident of guarded) {
+    // The title names which rule fired, not how much money is involved — it
+    // is never blanked, even when the sum itself is hidden.
     if (
-      incident.title !== "Денежный сигнал требует проверки" ||
-      incident.summary !==
-        "Валюта кабинета не подтверждена. Денежные детали скрыты." ||
+      typeof incident.title !== "string" ||
+      incident.title.length === 0 ||
+      incident.summary !== expectedSummary ||
       incident.reason !== null
     ) {
       fail(endpoint, "$.incident_money_copy");

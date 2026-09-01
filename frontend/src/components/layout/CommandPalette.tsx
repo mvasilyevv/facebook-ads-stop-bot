@@ -14,6 +14,7 @@ import {
   Search,
   LayoutDashboard,
   Activity,
+  ListChecks,
   ShieldAlert,
   Table,
   Radar,
@@ -44,6 +45,12 @@ const PAGES = [
     label: "Обзор",
     kw: "dashboard панель главная обзор",
     icon: <LayoutDashboard size={15} />,
+  },
+  {
+    to: "/decisions",
+    label: "Решения",
+    kw: "decisions решения лента очередь attention внимание",
+    icon: <ListChecks size={15} />,
   },
   {
     to: "/actions",

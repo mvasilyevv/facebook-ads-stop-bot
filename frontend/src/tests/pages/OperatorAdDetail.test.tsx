@@ -463,6 +463,7 @@ describe("typed operator ad detail", () => {
           active_action: {
             id: "1842",
             public_id: "#1842",
+            manual_review_available: false,
             kind: "pause",
             state: "running",
             title: "Отключение объявления",
@@ -494,6 +495,7 @@ describe("typed operator ad detail", () => {
           active_action: {
             id: "1842",
             public_id: "#1842",
+            manual_review_available: false,
             kind: "pause",
             state: "confirmed",
             title: "Отключение объявления",
@@ -525,6 +527,7 @@ describe("typed operator ad detail", () => {
           active_action: {
             id: "1842",
             public_id: "#1842",
+            manual_review_available: false,
             kind: "pause",
             state: "unknown",
             title: "Отключение объявления",

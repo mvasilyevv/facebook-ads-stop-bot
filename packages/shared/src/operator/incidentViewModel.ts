@@ -66,10 +66,19 @@ export function operatorIncidentsQuery(
   };
 }
 
-export function operatorIncidentUsdConfirmed(
-  scope: Pick<OperatorScopeEvidence, "currency" | "currency_state">,
+/**
+ * A single confirmed currency — whatever it is — is enough to show money
+ * copy safely; it is already denominated correctly server-side. Only a
+ * mixed scope (several accounts, several currencies) or an unknown one
+ * (stale/missing snapshot) is a real reason to hide anything (issue #354).
+ * "Not USD" alone is not: it used to trigger the same fail-closed hiding as
+ * a genuinely stale snapshot, which reads as "European cabinet, working as
+ * intended" instead of the actually more common "we lost the snapshot".
+ */
+export function operatorIncidentCurrencyConfirmed(
+  scope: Pick<OperatorScopeEvidence, "currency_state">,
 ): boolean {
-  return scope.currency_state === "single" && scope.currency === "USD";
+  return scope.currency_state === "single";
 }
 
 /** A disconnected live channel can retain history, but cannot label it current. */
@@ -94,23 +103,43 @@ export function operatorIncidentCountLabel(count: number): string {
   return `${absolute.toLocaleString("ru-RU")} ${noun}`;
 }
 
+/** The explanatory summary shown instead of a hidden money figure — the
+
+ * cause differs (mixed vs unknown) and must read as two different things,
+ * not one blanket "currency isn't proven" line (issue #354).
+ */
+function operatorIncidentHiddenMoneySummary(
+  currencyState: OperatorScopeEvidence["currency_state"],
+): string {
+  if (currencyState === "mixed") {
+    return "В выборке несколько валют. Сузьте до одного кабинета — денежные детали скрыты.";
+  }
+  return "Валюта кабинета не подтверждена. Обновите снимок — денежные детали скрыты.";
+}
+
 /**
- * Defence in depth: the server already suppresses monetary incident copy when
- * USD is not proven. Web and TMA repeat the same gate before rendering.
+ * Defence in depth: the server already suppresses monetary incident copy
+ * when the cabinet currency isn't confirmed as a single value. Web and TMA
+ * repeat the same gate before rendering.
+ *
+ * The title is never hidden: it names which rule fired, not how much money
+ * is involved, and the operator needs it to triage the incident list even
+ * when the sum itself can't be shown (issue #354).
  */
 export function operatorIncidentCopy(
   item: OperatorIncidentItem,
   scope: Pick<OperatorScopeEvidence, "currency" | "currency_state">,
 ): { title: string; summary: string | null; reason: string | null } {
-  if (item.requires_usd_evidence && !operatorIncidentUsdConfirmed(scope)) {
+  const title = item.title.trim() || "Инцидент требует проверки";
+  if (item.requires_usd_evidence && !operatorIncidentCurrencyConfirmed(scope)) {
     return {
-      title: "Денежный сигнал требует проверки",
-      summary: "Валюта кабинета не подтверждена. Денежные детали скрыты.",
+      title,
+      summary: operatorIncidentHiddenMoneySummary(scope.currency_state),
       reason: null,
     };
   }
   return {
-    title: item.title.trim() || "Инцидент требует проверки",
+    title,
     summary: item.summary?.trim() || null,
     reason: item.reason?.trim() || null,
   };

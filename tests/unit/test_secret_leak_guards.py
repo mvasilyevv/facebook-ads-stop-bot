@@ -319,7 +319,7 @@ def test_operator_incident_copy_redacts_untrusted_text_fields() -> None:
         "facts": {"risk": f"Bearer {_SECRET}"},
     }
 
-    item = operator_router._incident_item(incident, usd_scope_confirmed=True)
+    item = operator_router._incident_item(incident, currency_state="single")
 
     public_copy = " ".join(
         filter(

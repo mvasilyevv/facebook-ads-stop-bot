@@ -24,6 +24,7 @@ describe("operator re-login recovery", () => {
     snapshot.actions.data!.items.push({
       id: "1843",
       public_id: "#1843",
+      manual_review_available: false,
       kind: "scan",
       state: "running",
       title: "Сканирование",

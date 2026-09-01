@@ -1,6 +1,10 @@
 /**
- * TabBar — нижний tab-bar канона (5 вкладок).
- * Сейчас / Действия / Реклама / Ещё.
+ * TabBar — нижний tab-bar канона (4 вкладки).
+ * Сейчас / Решения / Реклама / Ещё.
+ *
+ * Вкладка «Действия» заменена на «Решения» (issue #338, PR4): лента решений —
+ * главный операционный экран, а журнал действий и журнал инцидентов остаются
+ * доступны из неё. Обе вкладки одновременно не влезают: их и так четыре.
  * Иконка 21px + лейбл 10px, активная — accent + weight 600. safe-area снизу.
  * «Ещё» (Settings) активна также на вторичных системных экранах.
  */
@@ -28,10 +32,10 @@ interface TabConfig {
 const MAIN_TABS: TabConfig[] = [
   { to: "/", label: "Сейчас", Icon: LayoutGrid },
   {
-    to: "/actions",
-    label: "Действия",
+    to: "/decisions",
+    label: "Решения",
     Icon: Activity,
-    extra: ["/incidents"],
+    extra: ["/incidents", "/actions"],
   },
   { to: "/ads", label: "Реклама", Icon: Megaphone },
   {
@@ -65,8 +69,14 @@ function isTabActive(tab: TabConfig, pathname: string): boolean {
   return false;
 }
 
-/** Открытые инциденты для бейджа на «Действиях» — kind среди attention-сигналов. */
-function useOpenIncidentBadge(): { count: number | null; critical: boolean } {
+/**
+ * Бейдж на вкладке «Решения» — оператор должен узнавать о новых решениях,
+ * не открывая ленту (issue #338, п.4). Число берётся готовым из снимка
+ * (`attention.decisions_count`), а не пересчитывается здесь: копия правила
+ * отбора в начальном чанке разошлась бы с самой лентой при первой правке,
+ * а импорт `selectDecisionRows` в TabBar пробивает бюджет initial JS.
+ */
+function useDecisionBadge(): { count: number | null; critical: boolean } {
   const realtimeStatus = useOperatorRealtimeStatus();
   // Пассивное чтение уже загруженного снимка (тем же питается «Требует
   // внимания» на «Сейчас»); свой сетевой запрос TabBar не заводит.
@@ -75,10 +85,9 @@ function useOpenIncidentBadge(): { count: number | null; critical: boolean } {
   if (realtimeStatus !== "connected" || !attention || attention.state !== "ready" || !attention.data) {
     return { count: null, critical: false };
   }
-  const incidents = attention.data.items.filter((item) => item.kind === "incident");
   return {
-    count: incidents.length,
-    critical: incidents.some((item) => item.severity === "critical"),
+    count: attention.data.decisions_count,
+    critical: attention.data.decisions_critical,
   };
 }
 
@@ -86,7 +95,7 @@ export function TabBar() {
   const router = useRouter();
   const location = useLocation();
   const pathname = location.pathname;
-  const incidentBadge = useOpenIncidentBadge();
+  const decisionBadge = useDecisionBadge();
 
   if (shouldHide(pathname)) return null;
 
@@ -108,7 +117,7 @@ export function TabBar() {
           const active = isTabActive(tab, pathname);
           const Icon = tab.Icon;
           const badgeCount =
-            tab.to === "/actions" && incidentBadge.count ? incidentBadge.count : 0;
+            tab.to === "/decisions" && decisionBadge.count ? decisionBadge.count : 0;
           return (
             <button
               key={tab.to}
@@ -119,7 +128,7 @@ export function TabBar() {
               }}
               aria-label={
                 badgeCount > 0
-                  ? `${tab.label}, открытых инцидентов: ${badgeCount}`
+                  ? `${tab.label}, решений: ${badgeCount}`
                   : tab.label
               }
               aria-current={active ? "page" : undefined}
@@ -138,7 +147,7 @@ export function TabBar() {
                     aria-hidden="true"
                     className="absolute -right-2 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 font-display text-[12px] font-semibold leading-none tabular-nums text-bg-0"
                     style={{
-                      backgroundColor: incidentBadge.critical
+                      backgroundColor: decisionBadge.critical
                         ? "var(--color-danger)"
                         : "var(--color-warning)",
                     }}

@@ -417,9 +417,10 @@ describe("operator semantic runtime validation", () => {
         scope: unknownScope,
         items: [
           {
+            // Issue 354: the title is never blanked — only the sum is hidden.
             ...detail.incident,
-            title: "Денежный сигнал требует проверки",
-            summary: "Валюта кабинета не подтверждена. Денежные детали скрыты.",
+            summary:
+              "Валюта кабинета не подтверждена. Обновите снимок — денежные детали скрыты.",
             reason: null,
           },
         ],

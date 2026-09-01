@@ -10,7 +10,12 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from apps.api.routers.v1.operator import _approaching_stop_section
+from apps.api.routers.v1.operator import (
+    _approaching_stop_section,
+    _hide_unconfirmed_rule_money,
+    _redact_approaching_stop_row,
+)
+from apps.api.routers.v1.schemas.operator import OperatorSeverity
 from core.observer.writers import upsert_catalog_hierarchy
 from core.operator.queries import _operator_rule_context
 
@@ -209,6 +214,96 @@ def test_approaching_stop_section_ranks_descending_and_preserves_data_state() ->
     assert section.data is not None
     assert [item.id for item in section.data.items] == ["stale", "middle", "low"]
     assert section.data.items[0].data_state == "stale"
+
+
+def test_approaching_stop_section_keeps_unconfirmed_delivery_status_as_unknown() -> None:
+    """Issue 352: an unconfirmed delivery status is "we don't know", not
+
+    "we know it's inactive". Dropping the row would be a dangerous-direction
+    false negative — a still-delivering ad silently missing from the early
+    warning feed. It must stay, and never read as a clean "ok" row.
+    """
+    row = _approaching_row(row_id="unconfirmed", percent_to_stop="80.00")
+    row["delivery_status"] = None
+    row["severity"] = "ok"
+
+    section = _approaching_stop_section(
+        rows=[row], now=datetime(2026, 8, 14, 10, 0, 30, tzinfo=UTC)
+    )
+
+    assert section.data is not None
+    assert [item.id for item in section.data.items] == ["unconfirmed"]
+    assert section.data.items[0].severity == OperatorSeverity.UNKNOWN
+
+
+def test_approaching_stop_section_drops_only_confirmed_inactive_status() -> None:
+    """A status Meta actually confirmed as inactive (PAUSED) legitimately
+
+    disappears — this is the "we know" case #352 does not touch.
+    """
+    row = _approaching_row(row_id="paused", percent_to_stop="80.00")
+    row["delivery_status"] = "PAUSED"
+
+    section = _approaching_stop_section(rows=[row], now=datetime(2026, 8, 14, 10, tzinfo=UTC))
+
+    assert section.data is not None
+    assert section.data.items == []
+
+
+def test_hide_unconfirmed_rule_money_hides_percent_alongside_value_and_threshold() -> None:
+    """Issue 353: a percent without numerator/denominator doesn't tell the
+
+    operator anything — it must disappear together with value/threshold, not
+    survive alone.
+    """
+    row = _approaching_row(row_id="ad", percent_to_stop="84.00")
+    rows = [row]
+
+    _hide_unconfirmed_rule_money(rows)
+
+    context = rows[0]["rule_context"]
+    assert context["value"] is None
+    assert context["threshold"] is None
+    assert context["percent_to_stop"] is None
+    metrics = rows[0]["metrics"]
+    assert metrics["spend"] is None
+    assert metrics["cpc"] is None
+    assert metrics["cost_per_registration"] is None
+    assert metrics["cost_per_ftd"] is None
+    # Безвалютные метрики не деньги — прятать их нельзя никогда.
+    assert metrics["impressions"] == 100
+    assert metrics["clicks"] == 10
+    assert metrics["registrations"] == 1
+    assert metrics["ftd"] == 0
+    assert metrics["confirmed_deposits"] == 0
+    assert metrics["frequency"] == "1.20"
+
+
+def test_redact_approaching_stop_row_does_not_reintroduce_the_disappearance_bug() -> None:
+    """Regression: hiding the percent (#353) on the raw dict *before*
+
+    `_approaching_stop_section` selects rows would make its own "no percent
+    -> drop" rule swallow the row, silently emptying the early-warning feed
+    for every currency-unconfirmed cabinet — the same failure shape #352
+    fixes, for a different reason. Redaction must happen after selection.
+    """
+    now = datetime(2026, 8, 14, 10, 0, 30, tzinfo=UTC)
+    row = _approaching_row(row_id="hidden-money", percent_to_stop="84.00")
+
+    section = _approaching_stop_section(rows=[row], now=now)
+    assert section.data is not None
+    item = section.data.items[0]
+
+    redacted = _redact_approaching_stop_row(item)
+
+    assert redacted.id == "hidden-money"
+    assert redacted.rule_context.percent_to_stop is None
+    assert redacted.rule_context.value is None
+    assert redacted.rule_context.threshold is None
+    assert redacted.metrics.spend is None
+    # Клики/показы не денежные — прятать их нельзя.
+    assert redacted.metrics.clicks == 10
+    assert redacted.metrics.impressions == 100
 
 
 def test_approaching_stop_empty_list_is_empty_not_unavailable() -> None:

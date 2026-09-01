@@ -14,6 +14,7 @@ import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as RemoteDesktopIndexRouteImport } from './routes/remote-desktop/index'
 import { Route as OffersIndexRouteImport } from './routes/offers/index'
 import { Route as IncidentsIndexRouteImport } from './routes/incidents/index'
+import { Route as DecisionsIndexRouteImport } from './routes/decisions/index'
 import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
 import { Route as AnalyticsIndexRouteImport } from './routes/analytics/index'
 import { Route as AdsIndexRouteImport } from './routes/ads/index'
@@ -50,6 +51,11 @@ const OffersIndexRoute = OffersIndexRouteImport.update({
 const IncidentsIndexRoute = IncidentsIndexRouteImport.update({
   id: '/incidents/',
   path: '/incidents/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DecisionsIndexRoute = DecisionsIndexRouteImport.update({
+  id: '/decisions/',
+  path: '/decisions/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
@@ -125,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/ads/': typeof AdsIndexRoute
   '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
+  '/decisions/': typeof DecisionsIndexRoute
   '/incidents/': typeof IncidentsIndexRoute
   '/offers/': typeof OffersIndexRoute
   '/remote-desktop/': typeof RemoteDesktopIndexRoute
@@ -144,6 +151,7 @@ export interface FileRoutesByTo {
   '/ads': typeof AdsIndexRoute
   '/analytics': typeof AnalyticsIndexRoute
   '/campaigns': typeof CampaignsIndexRoute
+  '/decisions': typeof DecisionsIndexRoute
   '/incidents': typeof IncidentsIndexRoute
   '/offers': typeof OffersIndexRoute
   '/remote-desktop': typeof RemoteDesktopIndexRoute
@@ -164,6 +172,7 @@ export interface FileRoutesById {
   '/ads/': typeof AdsIndexRoute
   '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
+  '/decisions/': typeof DecisionsIndexRoute
   '/incidents/': typeof IncidentsIndexRoute
   '/offers/': typeof OffersIndexRoute
   '/remote-desktop/': typeof RemoteDesktopIndexRoute
@@ -185,6 +194,7 @@ export interface FileRouteTypes {
     | '/ads/'
     | '/analytics/'
     | '/campaigns/'
+    | '/decisions/'
     | '/incidents/'
     | '/offers/'
     | '/remote-desktop/'
@@ -204,6 +214,7 @@ export interface FileRouteTypes {
     | '/ads'
     | '/analytics'
     | '/campaigns'
+    | '/decisions'
     | '/incidents'
     | '/offers'
     | '/remote-desktop'
@@ -223,6 +234,7 @@ export interface FileRouteTypes {
     | '/ads/'
     | '/analytics/'
     | '/campaigns/'
+    | '/decisions/'
     | '/incidents/'
     | '/offers/'
     | '/remote-desktop/'
@@ -243,6 +255,7 @@ export interface RootRouteChildren {
   AdsIndexRoute: typeof AdsIndexRoute
   AnalyticsIndexRoute: typeof AnalyticsIndexRoute
   CampaignsIndexRoute: typeof CampaignsIndexRoute
+  DecisionsIndexRoute: typeof DecisionsIndexRoute
   IncidentsIndexRoute: typeof IncidentsIndexRoute
   OffersIndexRoute: typeof OffersIndexRoute
   RemoteDesktopIndexRoute: typeof RemoteDesktopIndexRoute
@@ -286,6 +299,13 @@ declare module '@tanstack/react-router' {
       path: '/incidents'
       fullPath: '/incidents/'
       preLoaderRoute: typeof IncidentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/decisions/': {
+      id: '/decisions/'
+      path: '/decisions'
+      fullPath: '/decisions/'
+      preLoaderRoute: typeof DecisionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/campaigns/': {
@@ -387,6 +407,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdsIndexRoute: AdsIndexRoute,
   AnalyticsIndexRoute: AnalyticsIndexRoute,
   CampaignsIndexRoute: CampaignsIndexRoute,
+  DecisionsIndexRoute: DecisionsIndexRoute,
   IncidentsIndexRoute: IncidentsIndexRoute,
   OffersIndexRoute: OffersIndexRoute,
   RemoteDesktopIndexRoute: RemoteDesktopIndexRoute,

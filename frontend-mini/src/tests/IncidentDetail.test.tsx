@@ -160,7 +160,7 @@ describe("TMA typed incident detail", () => {
         },
         incident: {
           ...current.data.incident,
-          title: "Spend $18.40 выше stop",
+          title: "CPL выше базы: GH_CR2",
           summary: "CPL $9.56",
           requires_usd_evidence: true,
         },
@@ -169,10 +169,12 @@ describe("TMA typed incident detail", () => {
 
     render(<IncidentDetail />);
 
+    // Issue 354: заголовок — природа сигнала (какое правило сработало), не
+    // сумма; он остаётся видимым, только денежная сводка скрыта.
     expect(
-      screen.getByRole("heading", { name: "Денежный сигнал требует проверки" }),
+      screen.getByRole("heading", { name: "CPL выше базы: GH_CR2" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/\$18\.40/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$9\.56/)).not.toBeInTheDocument();
   });
 
   it("keeps a failed acknowledgement visible instead of navigating away", async () => {

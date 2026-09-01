@@ -20,8 +20,10 @@ from apps.api.routers.v1.schemas.operator import (
     ApiProblem,
     DataState,
     OperatorActionItem,
+    OperatorActionManualReview,
     OperatorActionsData,
     OperatorActionsResponse,
+    OperatorActionState,
     OperatorAdCommandRequest,
     OperatorAdRow,
     OperatorAdsResponse,
@@ -43,6 +45,9 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorIncidentItem,
     OperatorIncidentsResponse,
     OperatorIssue,
+    OperatorManualReviewObservation,
+    OperatorManualReviewRequest,
+    OperatorManualReviewResponse,
     OperatorPortfolioData,
     OperatorScopeEvidence,
     OperatorSection,
@@ -97,6 +102,12 @@ from core.operator.queries import (
 )
 from core.public_identifiers import parse_public_uuid, public_uuid
 from core.safe_diagnostics import redact_sensitive_text
+from core.scanner.status import DELIVERY_DISABLED_STATUSES, normalized_delivery_status
+from core.tasks.queue import (
+    ManualReviewNotApplicableError,
+    ManualReviewTaskNotFoundError,
+    record_manual_reconciliation,
+)
 from core.worker_liveness import (
     WORKER_POLL_INTERVAL_SECONDS,
     heartbeat_stale_after_seconds,
@@ -194,21 +205,23 @@ def _scope_evidence(
 
 
 def _currency_issue(currencies: AccountCurrencyResolution) -> OperatorIssue | None:
-    if currencies.state == "single" and currencies.currency == "USD":
-        return None
+    """Issue 354: `unknown` (снимок протух/не получен) — самая частая причина в
+
+    живой системе, куда чаще настоящего не-долларового кабинета. Три причины
+    различаются кодом и текстом действия; `single` (любая валюта, не только
+    USD) ничего не скрывает — денежные суммы уже посчитаны в валюте кабинета,
+    и `OperatorScopeEvidence.currency` уже несёт её код для подписи в UI.
+    """
     if currencies.state == "single":
-        return OperatorIssue(
-            code="currency_not_usd",
-            title="Кабинет настроен не в USD",
-            detail="FB Agent принимает денежные решения только для долларовых бюджетов.",
-            severity=OperatorSeverity.UNKNOWN,
-            correlation_id=None,
-        )
+        return None
     if currencies.state == "mixed":
         return OperatorIssue(
             code="currency_mixed",
             title="В выборке несколько валют",
-            detail="Денежные суммы и производные метрики скрыты; выберите один кабинет.",
+            detail=(
+                "Единой валюты нет — сквозной итог не считается. "
+                "Сузьте выборку до одного кабинета, чтобы увидеть суммы."
+            ),
             severity=OperatorSeverity.UNKNOWN,
             correlation_id=None,
         )
@@ -217,9 +230,10 @@ def _currency_issue(currencies: AccountCurrencyResolution) -> OperatorIssue | No
         code="currency_unknown",
         title="Валюта кабинета не подтверждена",
         detail=(
-            f"Нет подтверждённой валюты для: {missing}."
+            f"Нет подтверждённой валюты для: {missing}. "
+            "Обновите снимок кабинета, чтобы увидеть суммы."
             if missing
-            else "Не найден кабинет с подтверждённой валютой."
+            else "Не найден кабинет с подтверждённой валютой. Обновите снимок кабинета."
         ),
         severity=OperatorSeverity.UNKNOWN,
         correlation_id=None,
@@ -1501,10 +1515,21 @@ def _incident_public_reason(incident: dict[str, Any]) -> str | None:
     return None
 
 
+def _currency_hidden_money_summary(currency_state: str) -> str:
+    """Issue 354: заголовок инцидента — это природа сигнала, а не деньги;
+
+    прятать имеет смысл только сумму, и только объяснив причину (mixed vs
+    unknown), а не одной and-the-same строкой для обоих случаев.
+    """
+    if currency_state == "mixed":
+        return "В выборке несколько валют. Сузьте до одного кабинета — денежные детали скрыты."
+    return "Валюта кабинета не подтверждена. Обновите снимок — денежные детали скрыты."
+
+
 def _incident_item(
     incident: dict[str, Any],
     *,
-    usd_scope_confirmed: bool,
+    currency_state: str,
 ) -> OperatorIncidentItem:
     resource_type = str(incident.get("resource_type") or "system")
     kind = (
@@ -1517,7 +1542,11 @@ def _incident_item(
         else "system"
     )
     requires_usd_evidence = _incident_requires_usd_evidence(incident)
-    money_copy_visible = not requires_usd_evidence or usd_scope_confirmed
+    # Issue 354: единственная причина скрывать сумму — отсутствие единственной
+    # подтверждённой валюты (mixed/unknown). Один не-долларовый, но
+    # подтверждённый кабинет — не причина: заголовок сообщает природу
+    # сигнала, а не сумму, и всегда остаётся видимым.
+    money_copy_visible = not requires_usd_evidence or currency_state == "single"
     raw_title = redact_sensitive_text(incident.get("title")).strip()
     raw_summary = redact_sensitive_text(incident.get("summary")).strip()
     public_incident_id = _public_incident_id(incident["id"])
@@ -1525,15 +1554,11 @@ def _incident_item(
         id=public_incident_id,
         severity=incident["severity"],
         status=incident["status"],
-        title=(
-            raw_title or "Инцидент требует проверки"
-            if money_copy_visible
-            else "Денежный сигнал требует проверки"
-        ),
+        title=raw_title or "Инцидент требует проверки",
         summary=(
             (raw_summary or None)
             if money_copy_visible
-            else "Валюта кабинета не подтверждена. Денежные детали скрыты."
+            else _currency_hidden_money_summary(currency_state)
         ),
         reason=_incident_public_reason(incident) if money_copy_visible else None,
         occurred_at=incident["opened_at"],
@@ -1565,6 +1590,7 @@ def _attention_section(
     include_system_issues: bool = True,
 ) -> OperatorSection[OperatorAttentionData]:
     items = [_incident_attention_item(incident) for incident in incidents]
+    decision_action_ids: set[str] = set()
     for action in actions:
         if action["state"] not in {"failed", "unknown", "running"}:
             continue
@@ -1573,6 +1599,10 @@ def _attention_section(
             if action["state"] in {"failed", "unknown"} and action["kind"] in {"pause", "activate"}
             else "warning"
         )
+        if action["state"] in {"failed", "unknown"}:
+            # Running-действие — прогресс, а не решение: в ленту «Решения» и в
+            # её счётчик оно не входит (см. `selectDecisionRows`).
+            decision_action_ids.add(f"task:{action['id']}")
         items.append(
             OperatorAttentionItem(
                 id=f"task:{action['id']}",
@@ -1613,8 +1643,23 @@ def _attention_section(
                     requires_usd_evidence=False,
                 )
             )
-    rank = {"critical": 0, "warning": 1, "unknown": 2, "ok": 3}
-    items.sort(key=lambda item: (rank[item.severity], -item.occurred_at.timestamp(), item.id))
+    # Компаратор обязан совпадать с клиентским `compareDecisionRows`
+    # (packages/shared/src/operator/decisionFeed.ts) — это то же правило,
+    # которое byer утвердил в issue #338: severity → деньги раньше системного
+    # → occurred_at по возрастанию (незакрытое обязательство дорожает со
+    # временем, это не лента новостей) → id как детерминированный tie-break.
+    # Расхождение здесь означает, что при срезе лимитом сервер отдаёт не
+    # 50 важнейших строк, а 50 отобранных по другому правилу (issue #355).
+    severity_rank = {"critical": 0, "unknown": 1, "warning": 2, "ok": 3}
+    money_rank = {"ad": 0, "campaign": 0, "account": 0, "system": 1}
+    items.sort(
+        key=lambda item: (
+            severity_rank[item.severity],
+            money_rank[item.target.kind],
+            item.occurred_at.timestamp(),
+            item.id,
+        )
+    )
     if include_system_issues and system.state in {
         DataState.PARTIAL,
         DataState.STALE,
@@ -1623,13 +1668,31 @@ def _attention_section(
         state = DataState.PARTIAL
     else:
         state = DataState.READY if items else DataState.EMPTY
+    attention_limit = 50
+    visible_items = items[:attention_limit]
+    # Правило отбора ленты «Решения» — то же, что в клиентском
+    # `selectDecisionRows`: строка требует решения, а не просто сообщает о
+    # происходящем.
+    decision_rows = [
+        item
+        for item in items
+        if item.kind == "incident"
+        or item.id in decision_action_ids
+        or (item.kind == "source" and item.severity != "ok")
+    ]
     return OperatorSection(
         state=state,
         as_of=max((item.occurred_at for item in items), default=system.as_of),
         freshness_seconds=system.freshness_seconds,
         sources=["incidents", "task_queue", "worker_telemetry"],
         issues=[],
-        data=OperatorAttentionData(items=items[:50]),
+        data=OperatorAttentionData(
+            items=visible_items,
+            total=len(items),
+            truncated=len(items) > len(visible_items),
+            decisions_count=len(decision_rows),
+            decisions_critical=any(row.severity == "critical" for row in decision_rows),
+        ),
     )
 
 
@@ -1638,17 +1701,26 @@ def _approaching_stop_section(
     rows: list[dict[str, Any]],
     now: datetime,
 ) -> OperatorSection[OperatorApproachingStopData]:
-    """Build a ranked early-warning section from persisted evaluator context."""
+    """Build a ranked early-warning section from persisted evaluator context.
+
+    Issue 352: a row drops out only when Meta confirmed it isn't running
+    (``DELIVERY_DISABLED_STATUSES``). An unconfirmed/unrecognized status is a
+    "we don't know", not a "we know it's inactive" — dropping it would be a
+    dangerous-direction false negative (a still-delivering ad silently missing
+    from the early-warning feed). It stays, with severity forced to unknown
+    so it never reads as a clean "ok" row while its delivery is unconfirmed.
+    """
     items: list[OperatorAdRow] = []
     for row in rows:
         item = OperatorAdRow.model_validate(row)
-        if (
-            item.rule_context.percent_to_stop is None
-            or item.rule_context.stage == "stop"
-            or item.severity == OperatorSeverity.CRITICAL
-            or (item.delivery_status or "").strip().upper() != "ACTIVE"
-        ):
+        if item.rule_context.percent_to_stop is None or item.rule_context.stage == "stop":
             continue
+        if item.severity == OperatorSeverity.CRITICAL:
+            continue
+        if normalized_delivery_status(item.delivery_status) in DELIVERY_DISABLED_STATUSES:
+            continue
+        if item.delivery_status is None and item.severity == OperatorSeverity.OK:
+            item = item.model_copy(update={"severity": OperatorSeverity.UNKNOWN})
         items.append(item)
     items.sort(
         key=lambda item: (
@@ -1687,6 +1759,34 @@ def _hide_unconfirmed_rule_money(rows: list[dict[str, Any]]) -> None:
         if context["rule_code"] in _MONEY_RULE_CODES:
             context["value"] = None
             context["threshold"] = None
+            # Issue 353: процент без числителя и знаменателя не читается —
+            # прячем его вместе с ними, а не оставляем голым отношением.
+            context["percent_to_stop"] = None
+
+
+def _redact_approaching_stop_row(item: OperatorAdRow) -> OperatorAdRow:
+    """Apply the same money-hiding as `_hide_unconfirmed_rule_money`, but
+
+    after `_approaching_stop_section` already selected and ranked rows by the
+    real `percent_to_stop`. Redacting the dict first (issue #353) would null
+    `percent_to_stop` and make the section's own "no percent → drop" rule
+    swallow the row — reintroducing the exact silent-disappearance failure
+    mode issue #352 fixes, just for a different reason.
+    """
+    metrics = item.metrics.model_copy(
+        update={
+            "spend": None,
+            "cpc": None,
+            "cost_per_registration": None,
+            "cost_per_ftd": None,
+        }
+    )
+    context = item.rule_context
+    if context.rule_code in _MONEY_RULE_CODES:
+        context = context.model_copy(
+            update={"value": None, "threshold": None, "percent_to_stop": None}
+        )
+    return item.model_copy(update={"metrics": metrics, "rule_context": context})
 
 
 async def _fetch_approaching_stop_rows(
@@ -1915,9 +2015,17 @@ async def get_operator_snapshot(
         now=now,
         include_system_issues=account_id is None,
     )
-    if _currency_issue(currencies) is not None:
-        _hide_unconfirmed_rule_money(approaching_stop_rows)
     approaching_stop = _approaching_stop_section(rows=approaching_stop_rows, now=now)
+    if _currency_issue(currencies) is not None and approaching_stop.data is not None:
+        approaching_stop = approaching_stop.model_copy(
+            update={
+                "data": OperatorApproachingStopData(
+                    items=[
+                        _redact_approaching_stop_row(item) for item in approaching_stop.data.items
+                    ]
+                )
+            }
+        )
     cabinet_end = to_dt
     if window == "today":
         if cabinet_days.cabinet_timezone is not None:
@@ -2450,10 +2558,10 @@ async def get_operator_incidents(
             correlation_id=correlation_id,
         )
 
-    usd_scope_confirmed = currencies.state == "single" and currencies.currency == "USD"
-    items = [_incident_item(row, usd_scope_confirmed=usd_scope_confirmed) for row in incident_rows]
+    currency_confirmed = currencies.state == "single"
+    items = [_incident_item(row, currency_state=currencies.state) for row in incident_rows]
     has_suppressed_money = any(
-        item.requires_usd_evidence and not usd_scope_confirmed for item in items
+        item.requires_usd_evidence and not currency_confirmed for item in items
     )
     issues: list[OperatorIssue] = []
     if has_suppressed_money:
@@ -2576,9 +2684,9 @@ async def get_operator_incident(
                 )
             )
 
-    usd_scope_confirmed = currencies.state == "single" and currencies.currency == "USD"
-    incident_item = _incident_item(incident, usd_scope_confirmed=usd_scope_confirmed)
-    if incident_item.requires_usd_evidence and not usd_scope_confirmed:
+    currency_confirmed = currencies.state == "single"
+    incident_item = _incident_item(incident, currency_state=currencies.state)
+    if incident_item.requires_usd_evidence and not currency_confirmed:
         currency_issue = _currency_issue(currencies)
         if currency_issue is not None:
             issues.append(currency_issue)
@@ -2658,6 +2766,91 @@ async def acknowledge_operator_incident(
         status="acknowledged",
         acknowledged_at=acknowledgement.acknowledged_at,
         correlation_id=_public_request_id(acknowledgement.correlation_id),
+    )
+
+
+@router.post(
+    "/actions/{task_id}/manual-review",
+    response_model=OperatorManualReviewResponse,
+    responses=_PROBLEM_RESPONSES,
+)
+async def record_operator_manual_review(
+    task_id: int,
+    body: OperatorManualReviewRequest,
+    engine: DepEngine,
+    request: Request,
+    reviewed_by: str = Header(default="operator:web", alias="X-Operator-Principal", max_length=128),
+) -> OperatorManualReviewResponse | JSONResponse:
+    """Зафиксировать, что оператор сверил задачу глазами, и что именно он увидел.
+
+    Это НЕ команда в Meta и НЕ подтверждение исхода: ``state`` в ответе
+    остаётся ``unknown``. Ответ 200 означает «факт записан», а не «внешняя
+    операция удалась». Повтор с тем же наблюдением идемпотентен и возвращает
+    ``recorded=false``.
+
+    Личность берётся из доверенной границы аутентификации
+    (``request.state.operator_principal``); заголовок — только запасное
+    значение, как в остальных операторских командах. Роль проверяет middleware:
+    POST относится к write-методам и для TMA доступен только владельцу.
+    """
+    correlation_id = str(uuid.uuid4())
+    try:
+        recorded = await record_manual_reconciliation(
+            engine,
+            task_id=task_id,
+            observation=body.observation.value,
+            reviewed_by=getattr(request.state, "operator_principal", reviewed_by),
+        )
+    except ManualReviewTaskNotFoundError:
+        return _problem(
+            status_code=404,
+            code="action_not_found",
+            message="Действие не найдено",
+            correlation_id=correlation_id,
+        )
+    except ManualReviewNotApplicableError as exc:
+        message = (
+            "Задача ещё выполняется — дождитесь, пока система закончит сверку"
+            if exc.reason == "task_is_still_running"
+            else "У этой задачи исход уже определён, сверять нечего"
+        )
+        return _problem(
+            status_code=409,
+            code="manual_review_not_applicable",
+            message=message,
+            correlation_id=correlation_id,
+        )
+    except ValueError as exc:
+        return _problem(
+            status_code=422,
+            code="invalid_manual_review",
+            message=str(exc),
+            correlation_id=correlation_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "operator manual review failed correlation_id=%s",
+            correlation_id,
+        )
+        return _problem(
+            status_code=503,
+            code="manual_review_unavailable",
+            message="Запись ручной сверки временно недоступна",
+            correlation_id=correlation_id,
+        )
+    return OperatorManualReviewResponse(
+        task_id=recorded.task_id,
+        public_id=f"#{recorded.task_id}",
+        # Ручная сверка не переписывает исход внешней операции.
+        state=OperatorActionState.UNKNOWN,
+        manual_review=OperatorActionManualReview(
+            observation=OperatorManualReviewObservation(recorded.observation),
+            at=recorded.reviewed_at,
+            by=recorded.reviewed_by,
+            question_closed=recorded.question_closed,
+        ),
+        recorded=recorded.was_changed,
+        correlation_id=_public_request_id(recorded.correlation_id),
     )
 
 

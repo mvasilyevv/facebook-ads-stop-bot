@@ -44,11 +44,12 @@ vi.mock("@/lib/operatorApi", () => ({
 import { TabBar } from "@/components/layout/TabBar";
 
 describe("TabBar", () => {
-  // Action-first канон: Сейчас/Действия/Реклама/Ещё.
+  // Action-first канон: Сейчас/Решения/Реклама/Ещё («Действия» заменена
+  // «Решениями» — issue #338, PR4, спека eng-lead).
   it("рендерит 4 основные вкладки", () => {
     render(<TabBar />);
     expect(screen.getByLabelText("Сейчас")).toBeInTheDocument();
-    expect(screen.getByLabelText("Действия")).toBeInTheDocument();
+    expect(screen.getByLabelText("Решения")).toBeInTheDocument();
     expect(screen.getByLabelText("Реклама")).toBeInTheDocument();
     expect(screen.getByLabelText("Ещё")).toBeInTheDocument();
   });
@@ -78,13 +79,24 @@ describe("TabBar", () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/ads" });
   });
 
-  // Действия — основной money-action таб.
-  it("клик по Действия навигирует на /actions", async () => {
+  // Решения — главный операционный таб (issue #338).
+  it("клик по Решения навигирует на /decisions", async () => {
     mockLocation.pathname = "/";
     mockNavigate.mockClear();
     render(<TabBar />);
-    await userEvent.click(screen.getByLabelText("Действия"));
-    expect(mockNavigate).toHaveBeenCalledWith({ to: "/actions" });
+    await userEvent.click(screen.getByLabelText("Решения"));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/decisions" });
+  });
+
+  // Журнал инцидентов и лог действий остаются доступны из той же вкладки
+  // (extra-пути), отдельного таба для них не заводим — тесно.
+  it("подсвечивает «Решения» на /incidents и /actions (extra-пути)", () => {
+    mockLocation.pathname = "/incidents";
+    render(<TabBar />);
+    expect(screen.getByLabelText("Решения")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   // Скрывается на /ads/:fbAdId (detail)
@@ -120,16 +132,36 @@ describe("TabBar", () => {
     expect(screen.getByLabelText("Ещё")).toHaveAttribute("aria-current", "page");
   });
 
-  // Бейдж открытых инцидентов на «Действия» — источник: уже загруженный снимок.
+  function incidentItem(id: string, severity: "warning" | "critical") {
+    return {
+      id,
+      kind: "incident" as const,
+      severity,
+      title: "Сигнал",
+      summary: "Сигнал требует проверки",
+      reason: null,
+      occurred_at: "2026-01-01T00:00:00Z",
+      target: { kind: "ad" as const, id: "1", label: "Ad" },
+      action: null,
+      recovery_action: null,
+      status: "open" as const,
+      requires_usd_evidence: false,
+    };
+  }
+
+  // Бейдж на «Решения» — дешёвая аппроксимация без импорта decisionFeed.ts
+  // (бюджет initial JS, см. комментарий в TabBar.tsx): incident/source(≠ok)
+  // считаются напрямую, action — не считается (нужен join с actions,
+  // которого здесь нет; точный список — на самом экране «Решения»).
   it("не показывает бейдж, пока снимок ещё не загружен нигде (unknown ≠ 0)", () => {
     mockLocation.pathname = "/";
     mockPeekOperatorSnapshot.mockReturnValue({ data: undefined });
     render(<TabBar />);
-    expect(screen.getByLabelText("Действия")).toBeInTheDocument();
-    expect(screen.queryByLabelText(/открытых инцидентов/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Решения")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/ожидают решения/)).not.toBeInTheDocument();
   });
 
-  it("показывает число открытых инцидентов из attention-секции снимка", () => {
+  it("показывает число решений, посчитанное сервером, а не пересчитывает строки сам", () => {
     mockLocation.pathname = "/";
     mockPeekOperatorSnapshot.mockReturnValue({
       data: {
@@ -137,18 +169,39 @@ describe("TabBar", () => {
           state: "ready",
           data: {
             items: [
-              { kind: "incident", severity: "warning" },
-              { kind: "incident", severity: "warning" },
-              { kind: "action", severity: "critical" },
+              incidentItem("incident-1", "warning"),
+              incidentItem("incident-2", "warning"),
+              {
+                id: "task:99",
+                kind: "action" as const,
+                severity: "critical" as const,
+                title: "Команда требует сверки",
+                summary: "#99 · running",
+                reason: null,
+                occurred_at: "2026-01-01T00:00:00Z",
+                target: { kind: "ad" as const, id: null, label: null },
+                action: { label: "Открыть", href: "/actions/99" },
+                recovery_action: null,
+                status: null,
+                requires_usd_evidence: false,
+              },
             ],
+            total: 3,
+            truncated: false,
+            // Сервер отобрал строки тем же правилом, что и лента: два
+            // инцидента считаются, running-действие — нет, это прогресс.
+            decisions_count: 2,
+            decisions_critical: false,
           },
+        },
+        actions: {
+          state: "ready",
+          data: { items: [{ id: "99", state: "running" }] },
         },
       },
     });
     render(<TabBar />);
-    expect(
-      screen.getByLabelText("Действия, открытых инцидентов: 2"),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Решения, решений: 2")).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
@@ -161,14 +214,18 @@ describe("TabBar", () => {
     expect(mockPeekOperatorSnapshot).toHaveBeenCalledWith({ window: "today" });
   });
 
-  it("красит бейдж в danger, если среди инцидентов есть critical", () => {
+  it("красит бейдж в danger, если среди решений есть critical", () => {
     mockLocation.pathname = "/";
     mockPeekOperatorSnapshot.mockReturnValue({
       data: {
         attention: {
           state: "ready",
           data: {
-            items: [{ kind: "incident", severity: "critical" }],
+            items: [incidentItem("incident-1", "critical")],
+            total: 1,
+            truncated: false,
+            decisions_count: 1,
+            decisions_critical: true,
           },
         },
       },

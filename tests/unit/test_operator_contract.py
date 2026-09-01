@@ -329,8 +329,8 @@ def test_attention_requires_usd_evidence_matches_incident_journal_projection() -
     }
 
     attention_item = operator_router._incident_attention_item(incident)
-    journal_item_confirmed = operator_router._incident_item(incident, usd_scope_confirmed=True)
-    journal_item_unconfirmed = operator_router._incident_item(incident, usd_scope_confirmed=False)
+    journal_item_confirmed = operator_router._incident_item(incident, currency_state="single")
+    journal_item_unconfirmed = operator_router._incident_item(incident, currency_state="unknown")
 
     assert attention_item.requires_usd_evidence == journal_item_confirmed.requires_usd_evidence
     assert attention_item.requires_usd_evidence == journal_item_unconfirmed.requires_usd_evidence
@@ -361,6 +361,175 @@ def test_attention_ad_target_id_stays_numeric_and_is_not_redacted_as_a_uuid() ->
 
     assert item.target.kind == "ad"
     assert item.target.id == fb_ad_id
+
+
+def _minimal_system_section(now: datetime, *, issues: list | None = None) -> OperatorSection:
+    return OperatorSection(
+        state=DataState.READY,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["cabinet_runtime"],
+        issues=issues or [],
+        data=operator_router.OperatorSystemData(
+            severity="ok",
+            monitoring_enabled=True,
+            last_scan_at=now,
+            next_scan_at=None,
+            workers=[],
+            background_workers=[],
+        ),
+    )
+
+
+def test_attention_section_orders_rows_like_client_decision_feed() -> None:
+    """Issue #355: сервер режет ленту лимитом ДО того, как клиент успевает
+
+    пересортировать `snapshot.attention` по `compareDecisionRows`
+    (packages/shared/src/operator/decisionFeed.ts). Значит порядок и срез
+    обязаны совпадать один в один, иначе лимит в 50 отдаёт не 50 важнейших
+    строк, а 50 отобранных по чужому правилу.
+
+    Правило byer (issue #338): severity (critical → unknown → warning → ok,
+    unknown дороже warning — «неизвестно, что с деньгами») → деньги раньше
+    системного → occurred_at по ВОЗРАСТАНИЮ (незакрытое обязательство
+    дорожает со временем, это не лента новостей) → id как tie-break.
+    """
+
+    now = datetime(2026, 8, 31, 12, tzinfo=UTC)
+
+    def incident(id_suffix: str, severity: str, hours_ago: int) -> dict:
+        return {
+            "id": f"00000000-0000-4000-8000-0000000000{id_suffix}",
+            "severity": severity,
+            "status": "open",
+            "title": "Сигнал",
+            "summary": "Сигнал",
+            "resource_type": "ad",
+            "resource_id": "120214000000001",
+            "resource_label": None,
+            "opened_at": now - timedelta(hours=hours_ago),
+        }
+
+    # severity должна победить occurred_at: критический "старый" всё равно
+    # не первый здесь, потому что он единственный critical — сортируем внутри
+    # warning двумя строками с разным возрастом, плюс unknown должен встать
+    # выше warning несмотря на то, что он новее любого warning.
+    critical = incident("01", "critical", hours_ago=5)
+    unknown = incident("02", "unknown", hours_ago=2)
+    warning_older = incident("03", "warning", hours_ago=1)
+    warning_newer = incident("04", "warning", hours_ago=0)
+
+    section = operator_router._attention_section(
+        incidents=[warning_newer, unknown, warning_older, critical],
+        actions=[],
+        system=_minimal_system_section(now),
+        now=now,
+    )
+
+    assert [item.severity for item in section.data.items] == [
+        "critical",
+        "unknown",
+        "warning",
+        "warning",
+    ]
+    # Внутри одинаковой severity — старейшее первым (issue #338, occurred_at ASC).
+    warning_ids = [item.id for item in section.data.items if item.severity == "warning"]
+    assert warning_ids == [
+        operator_router._incident_attention_item(warning_older).id,
+        operator_router._incident_attention_item(warning_newer).id,
+    ]
+
+
+def test_attention_section_ranks_money_targets_above_system_before_id() -> None:
+    """money_rank обязан победить чистый id-tie-break: иначе "source:" строки
+
+    (лексически раньше "task:") молча обгоняют денежные при равной severity
+    и occurred_at, хотя byer требует деньги раньше системного (issue #338/#355).
+    """
+
+    now = datetime(2026, 8, 31, 12, tzinfo=UTC)
+    action = {
+        "id": "1",
+        "public_id": "#1",
+        "kind": "pause",
+        "state": "running",
+        "title": "Отключение рекламы",
+        "target_label": "ad-111",
+        "updated_at": now,
+        "reason": None,
+    }
+    system = _minimal_system_section(
+        now,
+        issues=[
+            operator_router.OperatorIssue(
+                code="scan_snapshot_stale",
+                title="Scan snapshot устарел",
+                detail=None,
+                severity="warning",
+                correlation_id=None,
+            )
+        ],
+    )
+
+    section = operator_router._attention_section(
+        incidents=[],
+        actions=[action],
+        system=system,
+        now=now,
+    )
+
+    ids = [item.id for item in section.data.items]
+    assert ids[0] == "task:1"
+    assert ids[0].startswith("task:")
+    assert any(item_id.startswith("source:") for item_id in ids)
+    assert ids.index("task:1") < next(
+        index for index, item_id in enumerate(ids) if item_id.startswith("source:")
+    )
+
+
+def test_attention_section_reports_total_and_truncation_when_limit_applies() -> None:
+    """Issue #355: срез лимитом был молчаливым — контракт обязан нести
+
+    `total` (сколько строк-кандидатов было до среза) и `truncated`, иначе
+    оператор не может отличить «это все сигналы» от «показаны первые 50».
+    """
+
+    now = datetime(2026, 8, 31, 12, tzinfo=UTC)
+    incidents = [
+        {
+            "id": f"00000000-0000-4000-8000-{index:012d}",
+            "severity": "warning",
+            "status": "open",
+            "title": "Сигнал",
+            "summary": "Сигнал",
+            "resource_type": "ad",
+            "resource_id": "120214000000001",
+            "resource_label": None,
+            "opened_at": now - timedelta(minutes=index),
+        }
+        for index in range(60)
+    ]
+
+    section = operator_router._attention_section(
+        incidents=incidents,
+        actions=[],
+        system=_minimal_system_section(now),
+        now=now,
+    )
+
+    assert section.data.total == 60
+    assert len(section.data.items) == 50
+    assert section.data.truncated is True
+
+    small_section = operator_router._attention_section(
+        incidents=incidents[:5],
+        actions=[],
+        system=_minimal_system_section(now),
+        now=now,
+    )
+    assert small_section.data.total == 5
+    assert len(small_section.data.items) == 5
+    assert small_section.data.truncated is False
 
 
 @pytest.mark.asyncio
@@ -1109,9 +1278,13 @@ async def test_operator_incident_list_hides_money_copy_without_confirmed_usd(
     assert not isinstance(response, operator_router.JSONResponse)
     assert response.state == DataState.PARTIAL
     assert response.scope.currency_state == "unknown"
-    assert response.items[0].title == "Денежный сигнал требует проверки"
+    # Issue 354: заголовок — природа сигнала, не деньги; он остаётся видимым
+    # даже когда снимок валюты кабинета протух, иначе оператор перестаёт
+    # различать инциденты в журнале.
+    assert response.items[0].title == "CPL $9.56 > $3.00"
     assert response.items[0].summary is not None
     assert "$" not in response.items[0].summary
+    assert "обновите снимок" in response.items[0].summary.lower()
     assert response.items[0].requires_usd_evidence is True
     assert response.items[0].status == "open"
     assert "00000000-0000-0000-0000-000000000099" not in response.model_dump_json()
@@ -1125,9 +1298,17 @@ async def test_operator_incident_list_hides_money_copy_without_confirmed_usd(
 
 
 @pytest.mark.asyncio
-async def test_operator_incident_detail_hides_business_copy_without_usd_evidence(
+async def test_operator_incident_detail_shows_business_copy_for_confirmed_non_usd_currency(
     monkeypatch,
 ) -> None:
+    """Issue 354: a single confirmed non-USD currency is not "unproven USD" —
+
+    the cabinet's real currency is known, so nothing is hidden. Only a
+    mixed/unknown currency scope is a reason to redact; "not USD" alone used
+    to trigger the same fail-closed hiding as a genuinely stale snapshot,
+    which reads as "European cabinet, working as intended" instead of the
+    actually more common and more dangerous "we lost the snapshot".
+    """
     now = datetime(2026, 8, 8, 12, tzinfo=UTC)
     incident_id = "00000000-0000-0000-0000-000000000052"
     cabinet_days = operator_router.CabinetDayResolution(
@@ -1179,13 +1360,164 @@ async def test_operator_incident_detail_hides_business_copy_without_usd_evidence
     )
 
     assert not isinstance(response, operator_router.JSONResponse)
-    assert response.state == DataState.PARTIAL
+    assert response.state == DataState.READY
     assert response.scope.currency == "EUR"
-    assert response.incident.title == "Денежный сигнал требует проверки"
-    assert response.incident.summary is not None
-    assert "$" not in response.incident.summary
+    assert response.incident.title == "Spend $44.00 выше stop"
+    assert response.incident.summary == "CPL $8.80"
     assert response.incident.status == "open"
-    assert any(issue.code == "currency_not_usd" for issue in response.issues)
+    assert not any(issue.code.startswith("currency_") for issue in response.issues)
+
+
+def test_currency_issue_distinguishes_three_causes_with_distinct_text() -> None:
+    """Issue 354: unknown (stale/missing snapshot), mixed (several accounts,
+
+    several currencies) and a confirmed single non-USD currency are three
+    different situations and must read as three different things. `unknown`
+    is the far more common real-world cause than "not USD" and must point at
+    refreshing the snapshot, not at picking one cabinet.
+    """
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    single_usd = operator_router.AccountCurrencyResolution(
+        account_ids=("1",),
+        currencies={"1": "USD"},
+        observed_at_by_account={"1": now},
+        missing_account_ids=(),
+    )
+    single_eur = operator_router.AccountCurrencyResolution(
+        account_ids=("1",),
+        currencies={"1": "EUR"},
+        observed_at_by_account={"1": now},
+        missing_account_ids=(),
+    )
+    mixed = operator_router.AccountCurrencyResolution(
+        account_ids=("1", "2"),
+        currencies={"1": "USD", "2": "EUR"},
+        observed_at_by_account={"1": now, "2": now},
+        missing_account_ids=(),
+    )
+    unknown = operator_router.AccountCurrencyResolution(
+        account_ids=("1",),
+        currencies={},
+        observed_at_by_account={},
+        missing_account_ids=("1",),
+    )
+
+    # single ≠ USD скрывать нечего — вообще нет issue, суммы видны как есть.
+    assert operator_router._currency_issue(single_usd) is None
+    assert operator_router._currency_issue(single_eur) is None
+
+    mixed_issue = operator_router._currency_issue(mixed)
+    unknown_issue = operator_router._currency_issue(unknown)
+    assert mixed_issue is not None
+    assert unknown_issue is not None
+    assert mixed_issue.code == "currency_mixed"
+    assert unknown_issue.code == "currency_unknown"
+    assert mixed_issue.title != unknown_issue.title
+    assert mixed_issue.detail != unknown_issue.detail
+    assert "сузьте" in (mixed_issue.detail or "").lower()
+    assert "обновите снимок" in (unknown_issue.detail or "").lower()
+
+
+def test_incident_item_title_is_never_replaced_regardless_of_currency_state() -> None:
+    """Issue 354: the title names which rule fired — it carries no money and
+
+    must never be blanked, or the operator loses the ability to sort/triage
+    incidents and stops opening them.
+    """
+    incident = {
+        "id": "00000000-0000-0000-0000-000000000060",
+        "severity": "critical",
+        "status": "open",
+        "title": "CPL выше базы: GH_CR2",
+        "summary": "Spend $44.00 выше stop",
+        "resource_type": "ad",
+        "resource_id": "1",
+        "resource_label": "GH_CR2",
+        "ad_account_id": "1",
+        "opened_at": datetime(2026, 8, 8, tzinfo=UTC),
+        "facts": {"metrics": {"spend": "44.00"}},
+    }
+
+    for state in ("single", "mixed", "unknown"):
+        item = operator_router._incident_item(incident, currency_state=state)
+        assert item.title == "CPL выше базы: GH_CR2"
+
+    mixed_summary = operator_router._incident_item(incident, currency_state="mixed").summary
+    unknown_summary = operator_router._incident_item(incident, currency_state="unknown").summary
+    assert mixed_summary != unknown_summary
+    assert "$" not in (mixed_summary or "")
+    assert "$" not in (unknown_summary or "")
+
+
+def _money_sections(now: datetime) -> tuple[OperatorSection, OperatorSection]:
+    economy = OperatorSection(
+        state=DataState.READY,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["meta"],
+        issues=[],
+        data=operator_router.OperatorEconomyData(
+            totals=OperatorEconomyTotals(
+                spend="10.00", base="20.00", stop="30.00", base_delta="-10.00"
+            ),
+            series=[],
+        ),
+    )
+    funnel = OperatorSection(
+        state=DataState.READY,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["tracker"],
+        issues=[],
+        data=operator_router.OperatorFunnelData(stages=[]),
+    )
+    return economy, funnel
+
+
+def test_fail_closed_snapshot_money_keeps_totals_for_confirmed_single_non_usd_currency() -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    economy, funnel = _money_sections(now)
+    currencies = operator_router.AccountCurrencyResolution(
+        account_ids=("1",),
+        currencies={"1": "EUR"},
+        observed_at_by_account={"1": now},
+        missing_account_ids=(),
+    )
+
+    redacted_economy, redacted_funnel = operator_router._fail_closed_snapshot_money(
+        economy=economy,
+        funnel=funnel,
+        currencies=currencies,
+    )
+
+    assert redacted_economy is economy
+    assert redacted_funnel is funnel
+    assert redacted_economy.data is not None
+    assert redacted_economy.data.totals.spend == "10.00"
+    assert redacted_economy.state == DataState.READY
+
+
+def test_fail_closed_snapshot_money_hides_totals_for_mixed_currency_scope() -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    economy, funnel = _money_sections(now)
+    currencies = operator_router.AccountCurrencyResolution(
+        account_ids=("1", "2"),
+        currencies={"1": "USD", "2": "EUR"},
+        observed_at_by_account={"1": now, "2": now},
+        missing_account_ids=(),
+    )
+
+    redacted_economy, redacted_funnel = operator_router._fail_closed_snapshot_money(
+        economy=economy,
+        funnel=funnel,
+        currencies=currencies,
+    )
+
+    assert redacted_economy.data is not None
+    assert redacted_economy.data.totals.spend is None
+    assert redacted_economy.state == DataState.PARTIAL
+    assert any(issue.code == "currency_mixed" for issue in redacted_economy.issues)
+    assert redacted_funnel.data is not None
 
 
 @pytest.mark.asyncio

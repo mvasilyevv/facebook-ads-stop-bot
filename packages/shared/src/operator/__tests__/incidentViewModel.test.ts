@@ -59,7 +59,7 @@ describe("operator incident view-model", () => {
     });
   });
 
-  it("suppresses monetary copy unless USD evidence is single and confirmed", () => {
+  it("suppresses the sum but never the title when currency isn't a confirmed single value", () => {
     const unknownScope = {
       ...makeOperatorScopeEvidence(),
       currency: null,
@@ -67,11 +67,38 @@ describe("operator incident view-model", () => {
       currency_observed_at: null,
       missing_currency_account_ids: ["123"],
     };
+    const mixedScope = {
+      ...makeOperatorScopeEvidence(),
+      currency: null,
+      currency_state: "mixed" as const,
+    };
 
+    // Issue 354: the title names which rule fired, not the sum — it is never
+    // replaced, and unknown vs mixed read as two different reasons.
     expect(operatorIncidentCopy(INCIDENT, unknownScope)).toEqual({
-      title: "Денежный сигнал требует проверки",
-      summary: "Валюта кабинета не подтверждена. Денежные детали скрыты.",
+      title: INCIDENT.title,
+      summary:
+        "Валюта кабинета не подтверждена. Обновите снимок — денежные детали скрыты.",
       reason: null,
+    });
+    expect(operatorIncidentCopy(INCIDENT, mixedScope)).toEqual({
+      title: INCIDENT.title,
+      summary:
+        "В выборке несколько валют. Сузьте до одного кабинета — денежные детали скрыты.",
+      reason: null,
+    });
+    // A single confirmed non-USD currency hides nothing — it is already
+    // denominated correctly server-side.
+    expect(
+      operatorIncidentCopy(INCIDENT, {
+        ...makeOperatorScopeEvidence(),
+        currency: "EUR",
+        currency_state: "single" as const,
+      }),
+    ).toEqual({
+      title: INCIDENT.title,
+      summary: INCIDENT.summary,
+      reason: INCIDENT.reason,
     });
     expect(operatorIncidentCopy(INCIDENT, makeOperatorScopeEvidence())).toEqual(
       {

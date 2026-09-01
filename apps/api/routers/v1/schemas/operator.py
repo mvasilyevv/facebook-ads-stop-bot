@@ -136,6 +136,23 @@ class OperatorAttentionItem(BaseModel):
 
 class OperatorAttentionData(BaseModel):
     items: list[OperatorAttentionItem]
+    # Число строк-кандидатов ленты «Решения» до среза лимитом (issue #355):
+    # без него оператор не может отличить «это все сигналы» от «показаны
+    # первые N из большего списка» — усечение было молчаливым.
+    total: int = Field(ge=0)
+    # True, когда `total > len(items)`: сервер оставил самые важные строки
+    # по тому же правилу, что и клиентский `compareDecisionRows`, но часть
+    # кандидатов не поместилась в лимит и видна только в журнале.
+    truncated: bool
+    # Число строк, которые попадут в ленту «Решения» по правилу отбора
+    # (`selectDecisionRows`): инциденты целиком, действия только в failed и
+    # unknown, источники с severity выше ok. Отдаём готовым числом, потому что
+    # его читает бейдж вкладки в мини-приложении: держать там копию правила
+    # значило бы разойтись с самой лентой при первой же правке отбора.
+    decisions_count: int = Field(ge=0)
+    # True, когда среди строк ленты есть критичная: бейдж вкладки красится
+    # по ней, и считать это на клиенте значило бы держать там второй перебор.
+    decisions_critical: bool
 
 
 class OperatorIncidentItem(BaseModel):
@@ -243,6 +260,51 @@ class OperatorFunnelData(BaseModel):
     stages: list[OperatorFunnelStage]
 
 
+class OperatorManualReviewObservation(StrEnum):
+    """Что оператор увидел в Ads Manager. Закрытый список, не свободный текст."""
+
+    STOPPED = "stopped"
+    ACTIVE = "active"
+    MISSING = "missing"
+
+
+class OperatorActionManualReview(BaseModel):
+    """Факт ручной сверки задачи: кто, когда и что именно увидел.
+
+    Отдельная ось от исхода. ``state`` задачи остаётся ``unknown`` и после
+    сверки: внешняя операция как была неизвестной, так и осталась — оператор
+    засвидетельствовал только фактическое состояние объекта.
+    """
+
+    observation: OperatorManualReviewObservation
+    at: datetime
+    by: str | None
+    question_closed: bool = Field(
+        description=(
+            "Whether the recorded observation closes the question. "
+            "An object observed still active never closes it."
+        ),
+    )
+
+
+class OperatorManualReviewRequest(BaseModel):
+    """Закрытие требует названного наблюдения, а не кнопки «ок»."""
+
+    observation: OperatorManualReviewObservation
+
+
+class OperatorManualReviewResponse(BaseModel):
+    task_id: int
+    public_id: str
+    # Исход внешней операции остаётся неизвестным — сверка его не подтверждает.
+    state: OperatorActionState
+    manual_review: OperatorActionManualReview
+    recorded: bool = Field(
+        description="False when the same observation was already recorded (idempotent replay).",
+    )
+    correlation_id: str
+
+
 class OperatorActionItem(BaseModel):
     id: str
     public_id: str
@@ -263,6 +325,23 @@ class OperatorActionItem(BaseModel):
     reason: str | None = Field(
         description=(
             "Recorded outcome reason in operator language; null when no reason was recorded."
+        ),
+    )
+    # Почему автоматика больше не пытается сверить исход. Без этого текста
+    # терминальный unknown выглядит как задача, которую кто-то ещё проверяет,
+    # и оператор ждёт вечно. null — «причина не записана».
+    automation_stopped_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why automatic reconciliation will not run again; null when nothing was recorded."
+        ),
+    )
+    manual_review: OperatorActionManualReview | None = None
+    manual_review_available: bool = Field(
+        default=False,
+        description=(
+            "Whether the operator may record a manual reconciliation for this task. "
+            "False while automation may still act on it."
         ),
     )
     correlation_id: str
