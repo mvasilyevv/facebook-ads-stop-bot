@@ -86,6 +86,13 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
         nullable=False,
         server_default=text("gen_random_uuid()"),
     )
+    # Ручная сверка терминального UNKNOWN (#360): отдельная ось поверх
+    # result.outcome, по образцу incidents.acknowledged_at/acknowledged_by.
+    manual_review_observation: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    manual_review_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    manual_review_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_task_queue_idempotency_key"),
@@ -107,6 +114,24 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
             "COALESCE(jsonb_typeof(payload->'ad_account_id') = 'string' "
             "AND payload->>'ad_account_id' ~ '^[0-9]+$', FALSE)",
             name=conv("ck_task_queue_meta_account_identity"),
+        ),
+        # Наблюдение — зафиксированный факт из трёх, а не свободный текст.
+        CheckConstraint(
+            "manual_review_observation IS NULL "
+            "OR manual_review_observation IN ('stopped', 'active', 'missing')",
+            name=conv("ck_task_queue_manual_review_observation"),
+        ),
+        # Кто и когда — не опциональная часть факта: сверка без автора и
+        # времени неотличима от стёртого баннера.
+        CheckConstraint(
+            "(manual_review_observation IS NULL "
+            "AND manual_review_at IS NULL "
+            "AND manual_review_by IS NULL) "
+            "OR "
+            "(manual_review_observation IS NOT NULL "
+            "AND manual_review_at IS NOT NULL "
+            "AND manual_review_by IS NOT NULL)",
+            name=conv("ck_task_queue_manual_review_complete"),
         ),
         Index(
             "ix_task_queue_runnable",
@@ -147,5 +172,13 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
             "created_by_chat_id",
             "status",
             postgresql_where=text("created_by_chat_id IS NOT NULL"),
+        ),
+        # Разбор «что ещё ждёт человека» не должен читать всю очередь.
+        Index(
+            "ix_task_queue_manual_review_pending",
+            text("updated_at DESC"),
+            postgresql_where=text(
+                "manual_review_observation IS NULL AND result->>'outcome' = 'UNKNOWN'"
+            ),
         ),
     )
